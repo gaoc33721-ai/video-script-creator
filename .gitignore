@@ -1,6 +1,12 @@
 # 环境与密钥文件（绝对不能提交到 GitHub！）
 .env
 
+# 业务数据缓存文件（绝对不能提交！）
+*.pkl
+*.xlsx
+*.xls
+cached_product_features.pkl
+
 # Python 缓存
 __pycache__/
 *.py[cod]

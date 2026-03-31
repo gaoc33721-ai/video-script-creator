@@ -8,26 +8,61 @@ from dotenv import load_dotenv
 # 加载 .env 文件中的环境变量
 load_dotenv()
 
-# 数据加载与缓存
-@st.cache_data
-def load_product_data():
-    file_path = r"C:\Users\gaochao8\Downloads\产品卖点库（内容中台导出0126）.xlsx"
-    try:
-        df = pd.read_excel(file_path)
-        # 只保留包含英文或全球通用版的卖点，以供海外视频使用
-        mask = df['language'].str.contains('英语|全球通用版', na=False)
-        df_filtered = df[mask].dropna(subset=['Feature Description', 'model', 'Category'])
-        return df_filtered
-    except Exception as e:
-        st.error(f"加载产品卖点库失败: {e}")
-        return pd.DataFrame()
+# 缓存文件路径（保存在云端服务器临时目录）
+CACHE_FILE_PATH = "cached_product_features.pkl"
 
-df_products = load_product_data()
+def get_product_data():
+    """从本地缓存文件读取数据"""
+    if os.path.exists(CACHE_FILE_PATH):
+        try:
+            return pd.read_pickle(CACHE_FILE_PATH)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
 
 st.set_page_config(page_title="跨境电商视频脚本生成器", page_icon="🎬", layout="wide")
 
 st.title("🎬 跨境电商视频脚本生成器")
 st.markdown("基于《电商产品种草视频知识库》规范，为您自动生成高转化率的短视频脚本。")
+
+# 检查是否已有缓存数据
+df_products = get_product_data()
+
+# 数据上传模块
+if df_products.empty:
+    st.info("👋 欢迎使用！首次使用请上传您的《产品卖点库》Excel 文件。数据仅在当前服务器安全暂存，不会泄露。")
+    uploaded_file = st.file_uploader("拖拽或点击上传 Excel 文件", type=["xlsx", "xls"])
+    if uploaded_file is not None:
+        with st.spinner("正在解析文件..."):
+            try:
+                df = pd.read_excel(uploaded_file)
+                # 过滤英文卖点
+                mask = df['language'].str.contains('英语|全球通用版', na=False)
+                df_filtered = df[mask].dropna(subset=['Feature Description', 'model', 'Category'])
+                
+                # 保存为本地缓存文件（Pickle 格式加载更快）
+                df_filtered.to_pickle(CACHE_FILE_PATH)
+                st.success("✅ 文件解析并安全缓存成功！正在重新加载界面...")
+                st.rerun()
+            except Exception as e:
+                st.error(f"解析文件失败: {e}")
+    # 强制停止渲染后面的组件，直到用户上传文件
+    st.stop()
+else:
+    # 允许用户更新题库
+    with st.expander("🔄 更新产品卖点库 (目前已加载数据)"):
+        uploaded_file = st.file_uploader("如果您有最新的 Excel，可以在此上传覆盖", type=["xlsx", "xls"])
+        if uploaded_file is not None:
+            with st.spinner("正在更新文件..."):
+                try:
+                    df = pd.read_excel(uploaded_file)
+                    mask = df['language'].str.contains('英语|全球通用版', na=False)
+                    df_filtered = df[mask].dropna(subset=['Feature Description', 'model', 'Category'])
+                    df_filtered.to_pickle(CACHE_FILE_PATH)
+                    st.success("✅ 数据库已更新！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"解析文件失败: {e}")
 
 with st.sidebar:
     st.header("⚙️ 基础配置")
