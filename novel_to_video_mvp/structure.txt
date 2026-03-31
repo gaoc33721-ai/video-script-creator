@@ -1,0 +1,14 @@
+
+novel_to_video_mvp/
+├── input/                  # Place your novel text files here
+├── output/                 # Generated videos will be saved here
+├── assets/                 # Intermediate files (images, audio)
+├── src/
+│   ├── __init__.py
+│   ├── script_generator.py # LLM logic to turn text into script & prompts
+│   ├── image_generator.py  # Image generation logic
+│   ├── audio_generator.py  # TTS logic
+│   └── video_editor.py     # Video assembly logic
+├── main.py                 # Entry point
+├── requirements.txt
+└── README.md

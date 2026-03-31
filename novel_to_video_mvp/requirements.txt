@@ -1,0 +1,7 @@
+openai
+moviepy
+edge-tts
+requests
+python-dotenv
+asyncio
+pydub

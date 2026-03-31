@@ -1,0 +1,20 @@
+# 环境与密钥文件（绝对不能提交到 GitHub！）
+.env
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+
+# IDE 与编辑器配置
+.vscode/
+.idea/
+
+# Streamlit 配置缓存
+.streamlit/
