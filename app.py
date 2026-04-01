@@ -4,6 +4,8 @@ import json
 import os
 import pandas as pd
 import datetime as dt
+import io
+import re
 
 try:
     from dotenv import load_dotenv
@@ -96,6 +98,114 @@ def get_upcoming_nodes(market_key, publish_date, limit=4):
         nodes.append(f"{name} ({d.strftime('%b %d')})")
     return nodes
 
+def _strip_code_fences(text):
+    if not text:
+        return ""
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            t = "\n".join(lines[1:])
+    if t.endswith("```"):
+        t = t[:-3]
+    return t.strip()
+
+def _split_variants(text, expected_count=None):
+    t = _strip_code_fences(text)
+    if not t:
+        return []
+    parts = re.split(r"(?:^|\n)\s*【\s*方案\s*(\d+)\s*】\s*(?:\n|$)", t)
+    if len(parts) <= 1:
+        return [{"name": "方案1", "content": t}]
+
+    variants = []
+    base = parts[0].strip()
+    if base:
+        variants.append({"name": "方案1", "content": base})
+
+    for i in range(1, len(parts), 2):
+        num = parts[i]
+        content = parts[i + 1] if i + 1 < len(parts) else ""
+        name = f"方案{num}"
+        variants.append({"name": name, "content": content.strip()})
+
+    seen = set()
+    deduped = []
+    for v in variants:
+        if v["name"] in seen:
+            continue
+        seen.add(v["name"])
+        deduped.append(v)
+
+    if expected_count and len(deduped) > expected_count:
+        return deduped[:expected_count]
+    return deduped
+
+def _extract_first_md_table(text):
+    if not text:
+        return [], ""
+    lines = text.splitlines()
+    table = []
+    started = False
+    end_idx = None
+    for idx, line in enumerate(lines):
+        s = line.strip()
+        if not started:
+            if s.startswith("|") and s.count("|") >= 2:
+                started = True
+                table.append(line)
+            continue
+        if started:
+            if s.startswith("|") and s.count("|") >= 2:
+                table.append(line)
+            else:
+                end_idx = idx
+                break
+    remainder = "\n".join(lines[end_idx:]).strip() if end_idx is not None else ""
+    return table, remainder
+
+def _parse_md_table_to_df(table_lines):
+    if not table_lines or len(table_lines) < 2:
+        return pd.DataFrame()
+    rows = []
+    for line in table_lines:
+        s = line.strip().strip("|")
+        cells = [c.strip() for c in s.split("|")]
+        rows.append(cells)
+    header = rows[0]
+    body = rows[2:] if len(rows) >= 3 else []
+    normalized = []
+    for r in body:
+        if len(r) < len(header):
+            r = r + [""] * (len(header) - len(r))
+        if len(r) > len(header):
+            r = r[:len(header)]
+        normalized.append(r)
+    return pd.DataFrame(normalized, columns=header)
+
+def _build_excel_bytes(variants, config_dict, product_category):
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        config_df = pd.DataFrame([config_dict])
+        config_df.to_excel(writer, sheet_name="配置", index=False)
+
+        prompts_rows = []
+        for idx, v in enumerate(variants, start=1):
+            table_lines, remainder = _extract_first_md_table(v.get("content", ""))
+            df = _parse_md_table_to_df(table_lines)
+            sheet_name = f"方案{idx}"
+            if df.empty:
+                pd.DataFrame([{"error": "未解析到表格，请检查输出格式"}]).to_excel(writer, sheet_name=sheet_name, index=False)
+            else:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+            prompts_rows.append({
+                "方案": sheet_name,
+                "表格后附加内容": remainder,
+                "竞品参考链接": build_reference_links_md(product_category).strip(),
+            })
+        pd.DataFrame(prompts_rows).to_excel(writer, sheet_name="附加信息", index=False)
+    return buf.getvalue()
+
 def build_reference_links_md(product_category):
     refs = []
     for k, items in COMPETITOR_VIDEO_REFERENCES.items():
@@ -182,6 +292,7 @@ with st.sidebar:
     video_type = st.multiselect("视频类型定位 (可多选)", 
                                 ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
                                 default=["问题解决/痛点挖掘型", "场景化/生活方式型"])
+    variant_count = st.selectbox("生成脚本套数", [2, 3], index=0)
     
 col1, col2 = st.columns(2)
 
@@ -206,35 +317,30 @@ with col1:
     model_key = f"{selected_category}::{selected_model}"
     if st.session_state.get("last_model_key") != model_key:
         st.session_state["last_model_key"] = model_key
-        st.session_state["selected_features"] = available_feature_names[:3]
-        st.session_state["feature1"] = st.session_state["selected_features"][0] if len(st.session_state["selected_features"]) > 0 else ""
-        st.session_state["feature2"] = st.session_state["selected_features"][1] if len(st.session_state["selected_features"]) > 1 else ""
-        st.session_state["feature3"] = st.session_state["selected_features"][2] if len(st.session_state["selected_features"]) > 2 else ""
+        st.session_state["feature_count"] = 3
+        for i in range(1, 11):
+            key = f"feature_{i}"
+            if key in st.session_state:
+                del st.session_state[key]
 
-    def _sync_feature_inputs():
-        sel = st.session_state.get("selected_features", [])
-        st.session_state["feature1"] = sel[0] if len(sel) > 0 else ""
-        st.session_state["feature2"] = sel[1] if len(sel) > 1 else ""
-        st.session_state["feature3"] = sel[2] if len(sel) > 2 else ""
+    max_feature_count = min(10, len(available_feature_names)) if available_feature_names else 10
+    current_feature_count = int(st.session_state.get("feature_count", 3))
+    current_feature_count = max(1, min(current_feature_count, max_feature_count))
+    st.session_state["feature_count"] = current_feature_count
+    feature_count = st.number_input("核心卖点数量", min_value=1, max_value=max_feature_count, value=current_feature_count, step=1)
+    st.session_state["feature_count"] = int(feature_count)
 
-    st.markdown("**核心卖点（可从该型号卖点库中选择，最多3个）**")
-    st.multiselect(
-        "从卖点库选择",
-        available_feature_names,
-        key="selected_features",
-        max_selections=3,
-        on_change=_sync_feature_inputs,
-        help="选择后会自动填充到下方的卖点输入框，您仍可手动微调文案（不要篡改卖点事实）。",
-    )
+    feature_options = [""] + available_feature_names
+    selected_features = []
+    for i in range(1, int(feature_count) + 1):
+        key = f"feature_{i}"
+        if key not in st.session_state:
+            st.session_state[key] = available_feature_names[i - 1] if i - 1 < len(available_feature_names) else ""
+        selected = st.selectbox(f"卖点 {i}", feature_options, key=key)
+        if selected:
+            selected_features.append(selected)
 
-    st.markdown("**核心卖点（用于生成脚本）**")
-    st.text_input("卖点 1", key="feature1")
-    st.text_input("卖点 2", key="feature2")
-    st.text_input("卖点 3", key="feature3")
-
-    feature1 = st.session_state.get("feature1", "")
-    feature2 = st.session_state.get("feature2", "")
-    feature3 = st.session_state.get("feature3", "")
+    st.caption(f"已选择 {len(selected_features)} 个卖点（用于生成脚本）")
 
 with col2:
     st.subheader("🎯 营销诉求")
@@ -334,6 +440,11 @@ def generate_script_minimax(api_key, user_prompt):
     except Exception as e:
         return f"API 调用失败: {str(e)}\n请检查 API Key 是否正确，或网络是否通畅。"
 
+if "generated_variants" not in st.session_state:
+    st.session_state["generated_variants"] = []
+if "generated_excel_bytes" not in st.session_state:
+    st.session_state["generated_excel_bytes"] = None
+
 if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True):
     api_key = get_api_key()
     
@@ -341,9 +452,30 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
         st.error("未找到 MiniMax API Key。请在 Streamlit Cloud 的 Secrets 或本地 .env 文件中配置 MINIMAX_API_KEY。")
     else:
         with st.spinner("正在调用大模型生成脚本..."):
-            # 构建用户 Prompt
+            core_features_md = "；".join([f"{i+1}. {v}" for i, v in enumerate(selected_features)]) if selected_features else ""
+            config_dict = {
+                "目标平台": platform,
+                "目标市场": target_market,
+                "视频类型定位": ", ".join(video_type),
+                "视频用途": video_usage,
+                "期望视频时长(秒)": expected_duration,
+                "项目类型": project_type,
+                "产品品类": selected_category,
+                "产品型号": selected_model,
+                "核心卖点": core_features_md,
+                "目标受众": target_audience if target_audience else "通用卖点（不指定具体人群）",
+                "用户痛点": pain_points,
+                "内容发布日期": str(publish_date),
+                "结合热点": festival_hotspot,
+                "生成脚本套数": variant_count,
+            }
+
             user_prompt = f"""
-            请帮我生成一个海外电商短视频脚本。
+            请帮我生成 {variant_count} 套不同的海外电商短视频脚本方案（用于业务选择）。
+            - 输出必须严格包含 {variant_count} 个方案，分别以标题行开头：【方案1】、【方案2】、【方案3】（如只需2套则只输出到【方案2】）。
+            - 每个方案都必须先输出一张符合系统要求的 Markdown 表格（5列，行内时长为秒，最后一行为总时长）。
+            - 表格后紧接着输出该方案对应的：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
+            - 各方案之间不要输出额外解释性文字。
             - 目标平台：{platform}
             - 目标市场：{target_market}
             - 建议视频类型：{', '.join(video_type)}
@@ -352,7 +484,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
             - 项目类型：{project_type}
             - 产品品类：{selected_category}
             - 产品型号：{selected_model}
-            - 核心卖点：1. {feature1} 2. {feature2} 3. {feature3}
+            - 核心卖点：{core_features_md}
             - 目标受众：{target_audience if target_audience else "通用卖点（不指定具体人群）"}
             - 用户痛点：{pain_points}
             - 内容发布日期：{publish_date if 'publish_date' in locals() else ""}
@@ -362,15 +494,28 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
             # 调用 API
             generated_content = generate_script_minimax(api_key, user_prompt)
             
-            # 过滤掉模型可能返回的 ```markdown 或 ``` 标记，防止前端渲染为代码块
-            if generated_content.startswith("```markdown"):
-                generated_content = generated_content[len("```markdown"):].strip()
-            elif generated_content.startswith("```"):
-                generated_content = generated_content[len("```"):].strip()
-            
-            if generated_content.endswith("```"):
-                generated_content = generated_content[:-len("```")].strip()
+            generated_content = _strip_code_fences(generated_content)
+            variants = _split_variants(generated_content, expected_count=variant_count)
             
             st.success("脚本生成成功！")
             st.markdown("### 📝 生成结果预览")
-            st.markdown(generated_content + build_reference_links_md(selected_category))
+            st.session_state["generated_variants"] = variants
+            st.session_state["generated_excel_bytes"] = _build_excel_bytes(variants, config_dict, selected_category)
+
+if st.session_state.get("generated_variants"):
+    variants = st.session_state["generated_variants"]
+    tabs = st.tabs([v.get("name", f"方案{i+1}") for i, v in enumerate(variants)])
+    for i, v in enumerate(variants):
+        with tabs[i]:
+            st.markdown(v.get("content", "").strip() + build_reference_links_md(selected_category))
+
+    excel_bytes = st.session_state.get("generated_excel_bytes")
+    if excel_bytes:
+        safe_model = re.sub(r"[^A-Za-z0-9_-]+", "_", str(selected_model))[:50] if selected_model else "model"
+        st.download_button(
+            "⬇️ 下载Excel（含多套方案）",
+            data=excel_bytes,
+            file_name=f"video_script_{safe_model}_{dt.date.today().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
