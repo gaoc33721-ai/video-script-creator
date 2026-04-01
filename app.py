@@ -135,6 +135,25 @@ SYSTEM_PROMPT = """##角色
 | 结构分段 | 画面描述(含AI Prompt) | 旁白/字幕(纯英文) | 音效 | 时长 |
 | :--- | :--- | :--- | :--- | :--- |"""
 
+# 在表格后追加整体 AI Prompt 的要求（不要影响表格渲染）
+SYSTEM_PROMPT += """
+
+## 额外输出（必须追加在表格之后）
+在表格输出完成后，请紧接着追加以下内容（同样不要使用 ``` 代码块）：
+
+整体AI视频生成Prompt（English）:
+- 以一段完整英文描述输出，概括整支视频的统一风格、镜头语言、光影、场景、人物（如有）、产品露出与品牌调性，确保与表格分镜一致。
+- 必须包含一致性约束：同一产品外观保持一致（颜色/材质/外观），同一厨房/家居风格保持一致，镜头节奏为短视频节奏（15-45秒）。
+- 必须包含摄影/画面关键词：4k, cinematic lighting, shallow depth of field, smooth camera movement。
+- 必须包含“品牌收尾”要求：最后镜头为产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
+
+Negative Prompt（English，选填）:
+- 输出一行即可，例如：no watermark, no subtitles baked into video, no extra logos, no deformed hands, no blurry frames
+
+Recommended Settings（选填）:
+- 输出一行即可，例如：16:9 or 9:16, 24fps, 4-6s clips per shot, realistic style
+"""
+
 def generate_script_minimax(api_key, user_prompt):
     url = "https://api.minimax.chat/v1/text/chatcompletion_v2"
     headers = {
