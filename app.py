@@ -13,6 +13,37 @@ except ModuleNotFoundError:
 # 缓存文件路径（保存在云端服务器临时目录）
 CACHE_FILE_PATH = "cached_product_features.pkl"
 
+COMPETITOR_VIDEO_REFERENCES = {
+    "空气炸锅": [
+        ("Ninja Air Fryers（官方播放列表）", "https://m.youtube.com/playlist?list=PL1w44a96ubQpHoqnij9hEg0_09UudwEfe"),
+        ("COSORI（官方频道）", "https://m.youtube.com/c/Cosori/videos"),
+        ("Philips Airfryer（设置与使用示例）", "https://m.youtube.com/watch?v=MOjKt3MfXNs"),
+        ("Instant Vortex ClearCook（产品演示示例）", "https://m.youtube.com/watch?v=NeN9yBfTVNo"),
+    ],
+    "微波炉": [
+        ("Panasonic Inverter Microwaves（产品视频示例）", "https://m.youtube.com/watch?v=k50Ckg_E4rU"),
+        ("LG NeoChef（Smart Inverter 卖点视频示例）", "https://m.youtube.com/watch?v=0RDCJqSF4dY"),
+    ],
+}
+
+def build_reference_links_md(product_category):
+    refs = []
+    for k, items in COMPETITOR_VIDEO_REFERENCES.items():
+        if k in (product_category or ""):
+            refs = items
+            break
+    if not refs:
+        refs = COMPETITOR_VIDEO_REFERENCES.get("空气炸锅", [])
+    lines = [
+        "",
+        "---",
+        "",
+        "竞品优秀宣传视频参考链接（仅供内部学习，不代表推荐/背书）：",
+    ]
+    for title, url in refs:
+        lines.append(f"- {title}：{url}")
+    return "\n".join(lines)
+
 def get_api_key():
     try:
         if "MINIMAX_API_KEY" in st.secrets:
@@ -216,4 +247,4 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
             
             st.success("脚本生成成功！")
             st.markdown("### 📝 生成结果预览")
-            st.markdown(generated_content)
+            st.markdown(generated_content + build_reference_links_md(selected_category))
