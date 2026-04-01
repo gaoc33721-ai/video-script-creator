@@ -18,14 +18,44 @@ CACHE_FILE_PATH = "cached_product_features.pkl"
 
 COMPETITOR_VIDEO_REFERENCES = {
     "空气炸锅": [
-        ("Ninja Air Fryers（产品宣传示例）", "https://www.youtube.com/watch?v=6TryhZRuZBs"),
-        ("COSORI（官方频道）", "https://m.youtube.com/c/Cosori/videos"),
-        ("Philips Airfryer（设置与使用示例）", "https://m.youtube.com/watch?v=MOjKt3MfXNs"),
-        ("Instant Vortex ClearCook（产品演示示例）", "https://m.youtube.com/watch?v=NeN9yBfTVNo"),
+        {
+            "brand": "Ninja",
+            "title": "Ninja Air Fryers（产品宣传示例）",
+            "url": "https://www.youtube.com/watch?v=6TryhZRuZBs",
+            "focus_points": ["空气炸技术/快速脆炸", "多功能模式", "家庭份量/大容量诉求"],
+        },
+        {
+            "brand": "COSORI",
+            "title": "COSORI（官方频道）",
+            "url": "https://m.youtube.com/c/Cosori/videos",
+            "focus_points": ["配方/菜单内容", "易上手操作", "外观与场景化内容"],
+        },
+        {
+            "brand": "Philips",
+            "title": "Philips Airfryer（设置与使用示例）",
+            "url": "https://m.youtube.com/watch?v=MOjKt3MfXNs",
+            "focus_points": ["使用方法/教程向", "健康少油定位", "稳定品质心智"],
+        },
+        {
+            "brand": "Instant",
+            "title": "Instant Vortex ClearCook（产品演示示例）",
+            "url": "https://m.youtube.com/watch?v=NeN9yBfTVNo",
+            "focus_points": ["可视化烹饪/可视窗口", "快速出餐节奏", "场景演示"],
+        },
     ],
     "微波炉": [
-        ("Panasonic Inverter Microwaves（产品视频示例）", "https://m.youtube.com/watch?v=k50Ckg_E4rU"),
-        ("LG NeoChef（Smart Inverter 卖点视频示例）", "https://m.youtube.com/watch?v=0RDCJqSF4dY"),
+        {
+            "brand": "Panasonic",
+            "title": "Panasonic Inverter Microwaves（产品视频示例）",
+            "url": "https://m.youtube.com/watch?v=k50Ckg_E4rU",
+            "focus_points": ["Inverter（变频）概念表达", "均匀加热/解冻体验", "操作与场景演示"],
+        },
+        {
+            "brand": "LG",
+            "title": "LG NeoChef（Smart Inverter 卖点视频示例）",
+            "url": "https://m.youtube.com/watch?v=0RDCJqSF4dY",
+            "focus_points": ["Smart Inverter（智能变频）概念", "控温/解冻体验", "外观与厨房场景"],
+        },
     ],
 }
 
@@ -220,8 +250,15 @@ def build_reference_links_md(product_category):
         "",
         "竞品优秀宣传视频参考链接（仅供内部学习，不代表推荐/背书）：",
     ]
-    for title, url in refs:
-        lines.append(f"- {title}：{url}")
+    for item in refs:
+        title = item.get("title", "")
+        url = item.get("url", "")
+        brand = item.get("brand", "")
+        focus = item.get("focus_points", []) or []
+        focus_text = " / ".join([x for x in focus if x])
+        suffix = f"（主打：{focus_text}）" if focus_text else ""
+        prefix = f"{brand} - " if brand else ""
+        lines.append(f"- {prefix}{title}：{url}{suffix}")
     return "\n".join(lines)
 
 def build_reference_links_inline(product_category):
@@ -232,7 +269,17 @@ def build_reference_links_inline(product_category):
             break
     if not refs:
         refs = COMPETITOR_VIDEO_REFERENCES.get("空气炸锅", [])
-    return " <br> ".join([f"{title}: {url}" for title, url in refs])
+    parts = []
+    for item in refs:
+        title = item.get("title", "")
+        url = item.get("url", "")
+        brand = item.get("brand", "")
+        focus = item.get("focus_points", []) or []
+        focus_text = " / ".join([x for x in focus if x])
+        suffix = f" (focus: {focus_text})" if focus_text else ""
+        prefix = f"{brand} - " if brand else ""
+        parts.append(f"{prefix}{title}: {url}{suffix}")
+    return " <br> ".join(parts)
 
 def get_api_key():
     try:
@@ -401,14 +448,15 @@ SYSTEM_PROMPT = """##角色
    - 面向国内制作团队的内容：表格中的**所有其他列**必须严格使用全中文进行描述，以便国内的拍摄和剪辑团队能无障碍阅读和执行。
    - 产品卖点：必须严格符合用户提供的信息，不可捏造。
 6. **竞品链接**：表格中必须包含“竞品链接”字段，至少在“总结/收尾”行填写 1-3 条可用链接（使用用户提供的链接清单，不要编造）。
-7. **AI Prompt**：如需 AI 视频生成 Prompt，请将其放入“表现手法/特色效果/运镜方式”等中文描述字段中，以括号附带英文（如：[AI Prompt: xxx]）。
-8. **整体要求**：必须遵循用户给定的“制作方式/风格/音乐/调性(色调)”整体要求，并在“意境表达/表现手法/特色效果/整体AI视频生成Prompt”中体现一致的视觉与剪辑风格。
+7. **竞品盖帽**：表格中必须新增“竞品盖帽”字段，用于一句话概括“本产品强于该竞品主打点的展示特点”。必须只基于本产品卖点写法，避免编造竞品参数/结论；可采用“对标点+本品优势”表达（例如：对标可视化/预设菜单/快速解冻，本品通过XX镜头更直观、更省事）。
+8. **AI Prompt**：如需 AI 视频生成 Prompt，请将其放入“表现手法/特色效果/运镜方式”等中文描述字段中，以括号附带英文（如：[AI Prompt: xxx]）。
+9. **整体要求**：必须遵循用户给定的“制作方式/风格/音乐/调性(色调)”整体要求，并在“意境表达/表现手法/特色效果/整体AI视频生成Prompt”中体现一致的视觉与剪辑风格。
 
 ## 格式要求
 必须以**标准的 Markdown 表格**形式输出，**请直接输出纯文本形式的表格，绝对不要将表格包裹在 ```markdown 或 ``` 代码块中！**
 请确保每一行都用 `|` 完整闭合，表格必须统一使用以下 12 列：
-| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 音效 | 时长 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"""
+| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"""
 
 # 在表格后追加整体 AI Prompt 的要求（不要影响表格渲染）
 SYSTEM_PROMPT += """
@@ -505,7 +553,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 "生成脚本套数": variant_count,
             }
 
-            table_header_line = "| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 音效 | 时长 |"
+            table_header_line = "| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |"
 
             variants = []
             progress = st.progress(0)
@@ -513,12 +561,12 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 progress.progress(int((i - 1) / int(variant_count) * 100))
                 variant_prompt = f"""
 请生成【方案{i}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
-- 必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
+- 必须先输出一张符合系统要求的 Markdown 表格（13列，行内时长为秒，最后一行为总时长）。
 - 表格必须包含并使用如下表头（逐字一致）：
 {table_header_line}
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
 - 与其他方案保持明显差异：开场hook、意境表达、表现手法至少两处不同。
-- 可用竞品链接（请从中选择填写到表格的“竞品链接”列，建议放在总结/收尾行）：{competitor_links_inline}
+- 可用竞品链接与主打点（请从中选择填写到表格的“竞品链接”列，并在“竞品盖帽”列用一句话写本品在展示上的强项）：{competitor_links_inline}
 
 输入参数：
 - 目标平台：{platform}
