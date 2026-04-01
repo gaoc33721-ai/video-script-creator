@@ -6,6 +6,7 @@ import pandas as pd
 import datetime as dt
 import io
 import re
+import xml.etree.ElementTree as ET
 
 try:
     from dotenv import load_dotenv
@@ -128,6 +129,55 @@ def get_upcoming_nodes(market_key, publish_date, limit=4):
         nodes.append(f"{name} ({d.strftime('%b %d')})")
     return nodes
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_trending_topics(platform, target_market, limit=30):
+    geo = "US"
+    if target_market and "欧洲" in target_market:
+        geo = "GB"
+    elif target_market and "东南亚" in target_market:
+        geo = "SG"
+    elif target_market and "北美" in target_market:
+        geo = "US"
+
+    url = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={geo}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10, verify=False)
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+        items = root.findall(".//item")
+        topics = []
+        for it in items:
+            title = (it.findtext("title") or "").strip()
+            traffic = (it.findtext("{http://trends.google.com/trends/trendingsearches}approx_traffic") or "").strip()
+            if not title:
+                continue
+            if traffic:
+                topics.append(f"{title} ({traffic})")
+            else:
+                topics.append(title)
+        topics = topics[:limit]
+        if topics:
+            return topics
+    except Exception:
+        pass
+
+    if platform and "TikTok" in platform:
+        return [
+            "POV / Day in my life",
+            "Before vs After",
+            "3-ingredient / Lazy Meals",
+            "Meal prep / 10-min recipe",
+            "ASMR cooking",
+        ]
+    return [
+        "New product launch",
+        "Quick tutorial",
+        "Before vs After",
+        "Time-saving hack",
+        "Family gathering",
+    ]
+
 def _strip_code_fences(text):
     if not text:
         return ""
@@ -139,6 +189,52 @@ def _strip_code_fences(text):
     if t.endswith("```"):
         t = t[:-3]
     return t.strip()
+
+def _has_cjk(text):
+    if not text:
+        return False
+    return re.search(r"[\u4e00-\u9fff]", str(text)) is not None
+
+def _has_url(text):
+    if not text:
+        return False
+    return re.search(r"https?://", str(text)) is not None
+
+def _validate_language_for_table(content):
+    table_lines, _ = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty:
+        return False, "missing_table"
+
+    english_cols = {"旁白（英文）", "字幕-显示卖点名及描述（英文）"}
+    allow_url_only_cols = {"竞品链接"}
+
+    violations = 0
+    checks = 0
+    for col in df.columns:
+        col_name = str(col).strip()
+        if col_name in english_cols:
+            continue
+        for v in df[col].tolist():
+            cell = "" if v is None else str(v).strip()
+            if not cell:
+                continue
+            checks += 1
+            if col_name in allow_url_only_cols:
+                if _has_url(cell) or _has_cjk(cell):
+                    continue
+                violations += 1
+            else:
+                if _has_cjk(cell):
+                    continue
+                violations += 1
+
+    if checks == 0:
+        return True, "no_checks"
+    if violations == 0:
+        return True, "ok"
+    ratio = violations / max(1, checks)
+    return ratio < 0.05, f"violations={violations}/{checks}"
 
 def _split_variants(text, expected_count=None):
     t = _strip_code_fences(text)
@@ -423,13 +519,21 @@ with col2:
         market_key = _market_key(target_market)
         upcoming_nodes = get_upcoming_nodes(market_key, publish_date, limit=4)
         selected_nodes = st.multiselect("近期开节点（可多选）", upcoming_nodes, default=upcoming_nodes[:2] if upcoming_nodes else [])
-        trend_keywords = st.text_input("热点/趋势关键词（可选）", "TikTok趋势: Girl Dinner / Lazy Meals")
+        auto_topics = fetch_trending_topics(platform, target_market, limit=30)
+        selected_topics = st.multiselect(
+            "近期热点/趋势（自动获取，可搜索多选）",
+            auto_topics,
+            default=auto_topics[:3] if auto_topics else [],
+        )
+        extra_topic = st.text_input("补充热点（可选）", "")
 
     festival_hotspot_parts = []
     if selected_nodes:
         festival_hotspot_parts.append("节日节点: " + " / ".join(selected_nodes))
-    if trend_keywords and trend_keywords.strip():
-        festival_hotspot_parts.append(trend_keywords.strip())
+    if selected_topics:
+        festival_hotspot_parts.append("热点趋势: " + " / ".join(selected_topics))
+    if extra_topic and extra_topic.strip():
+        festival_hotspot_parts.append("补充热点: " + extra_topic.strip())
     festival_hotspot = "；".join(festival_hotspot_parts)
 
 st.markdown("---")
@@ -445,7 +549,7 @@ SYSTEM_PROMPT = """##角色
 4. **品牌 Slogan 收尾**：脚本的最后一段（总结）必须是固定的格式：产品静置全景特写 + 海信品牌 Slogan（"Hisense Designed to Ease, Crafted to Cheer."）。
 5. **语言规范（极其重要）**：
    - 面向海外观众的内容：**【旁白（英文）】列与【字幕-显示卖点名及描述（英文）】列必须完全使用纯英文**（或对应的海外市场语言，绝对不要写中文翻译）。
-   - 面向国内制作团队的内容：表格中的**所有其他列**必须严格使用全中文进行描述，以便国内的拍摄和剪辑团队能无障碍阅读和执行。
+   - 面向国内制作团队的内容：表格中的**所有其他列**必须严格使用全中文进行描述，以便国内的拍摄和剪辑团队能无障碍阅读和执行。禁止出现整句英文；如必须出现英文术语，只能作为中文句子中的少量术语/缩写出现。
    - 产品卖点：必须严格符合用户提供的信息，不可捏造。
 6. **竞品链接**：表格中必须包含“竞品链接”字段，至少在“总结/收尾”行填写 1-3 条可用链接（使用用户提供的链接清单，不要编造）。
 7. **竞品盖帽**：表格中必须新增“竞品盖帽”字段，用于一句话概括“本产品强于该竞品主打点的展示特点”。必须只基于本产品卖点写法，避免编造竞品参数/结论；可采用“对标点+本品优势”表达（例如：对标可视化/预设菜单/快速解冻，本品通过XX镜头更直观、更省事）。
@@ -454,7 +558,7 @@ SYSTEM_PROMPT = """##角色
 
 ## 格式要求
 必须以**标准的 Markdown 表格**形式输出，**请直接输出纯文本形式的表格，绝对不要将表格包裹在 ```markdown 或 ``` 代码块中！**
-请确保每一行都用 `|` 完整闭合，表格必须统一使用以下 12 列：
+请确保每一行都用 `|` 完整闭合，表格必须统一使用以下 13 列：
 | 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"""
 
@@ -567,6 +671,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
 - 与其他方案保持明显差异：开场hook、意境表达、表现手法至少两处不同。
 - 可用竞品链接与主打点（请从中选择填写到表格的“竞品链接”列，并在“竞品盖帽”列用一句话写本品在展示上的强项）：{competitor_links_inline}
+- 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余所有列必须用中文完整表达，不要整句英文。
 
 输入参数：
 - 目标平台：{platform}
@@ -596,6 +701,24 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                     content_retry = _strip_code_fences(content_retry)
                     if (table_header_line in content_retry) and ("总时长" in content_retry):
                         content = content_retry
+
+                ok_lang, _ = _validate_language_for_table(content)
+                if not ok_lang:
+                    fix_prompt = f"""
+请将下面脚本中的 Markdown 表格按以下规则“修复语言”并输出修复后的完整内容：
+1) 保持表格列数/表头/行数/时长数字不变；
+2) 仅【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列保留英文；
+3) 表格中其他所有列必须改写为中文（禁止整句英文，允许极少量英文术语作为中文句子的一部分）；
+4) 不要添加额外解释性文字，直接输出修复后的脚本（表格+表格后附加内容）。
+
+原内容：
+{content}
+""".strip()
+                    fixed = generate_script_minimax(api_key, fix_prompt)
+                    fixed = _strip_code_fences(fixed)
+                    ok_lang2, _ = _validate_language_for_table(fixed)
+                    if ok_lang2:
+                        content = fixed
 
                 variants.append({"name": f"方案{i}", "content": content})
 
