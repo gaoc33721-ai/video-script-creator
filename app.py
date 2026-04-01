@@ -3,13 +3,23 @@ import requests
 import json
 import os
 import pandas as pd
-from dotenv import load_dotenv
 
-# 加载 .env 文件中的环境变量
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ModuleNotFoundError:
+    load_dotenv = None
 
 # 缓存文件路径（保存在云端服务器临时目录）
 CACHE_FILE_PATH = "cached_product_features.pkl"
+
+def get_api_key():
+    try:
+        if "MINIMAX_API_KEY" in st.secrets:
+            return st.secrets["MINIMAX_API_KEY"]
+    except Exception:
+        pass
+    return os.getenv("MINIMAX_API_KEY", "")
 
 def get_product_data():
     """从本地缓存文件读取数据"""
@@ -160,11 +170,10 @@ def generate_script_minimax(api_key, user_prompt):
         return f"API 调用失败: {str(e)}\n请检查 API Key 是否正确，或网络是否通畅。"
 
 if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True):
-    # 从环境变量中获取 API Key
-    api_key = os.getenv("MINIMAX_API_KEY")
+    api_key = get_api_key()
     
     if not api_key:
-        st.error("未找到 MiniMax API Key。请在项目根目录的 .env 文件中配置 MINIMAX_API_KEY。")
+        st.error("未找到 MiniMax API Key。请在 Streamlit Cloud 的 Secrets 或本地 .env 文件中配置 MINIMAX_API_KEY。")
     else:
         with st.spinner("正在调用大模型生成脚本..."):
             # 构建用户 Prompt
