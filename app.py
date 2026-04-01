@@ -224,6 +224,16 @@ def build_reference_links_md(product_category):
         lines.append(f"- {title}：{url}")
     return "\n".join(lines)
 
+def build_reference_links_inline(product_category):
+    refs = []
+    for k, items in COMPETITOR_VIDEO_REFERENCES.items():
+        if k in (product_category or ""):
+            refs = items
+            break
+    if not refs:
+        refs = COMPETITOR_VIDEO_REFERENCES.get("空气炸锅", [])
+    return " <br> ".join([f"{title}: {url}" for title, url in refs])
+
 def get_api_key():
     try:
         if "MINIMAX_API_KEY" in st.secrets:
@@ -380,19 +390,20 @@ SYSTEM_PROMPT = """##角色
 ##限制与优化规范
 1. **时长精确控制**：脚本总时长需严格控制在 15-45 秒以内，并尽量贴近用户给定的“期望视频时长(秒)”。表格的“时长”列必须给出**确切的秒数**（如：5秒），并在表格最后一行增加“总时长”统计。
 2. **结构模块化与落地**：对于产品展示和操作类视频，采用“步骤拆解式”的结构分段（如：开箱检查、安装放置、功能A演示、对比实验等），逻辑务实清晰。
-3. **强调交互与对比镜头**：在“画面描述”中，必须包含**UI面板/按键的特写、操作反馈（如LED屏幕显示、滴滴声）**，并尽量设计**使用前后的对比实验镜头**（如：传统解冻 vs 微波炉解冻）以直观展示卖点。
+3. **强调交互与对比镜头**：在“表现手法/拍摄角度/运镜方式”等字段中，必须包含**UI面板/按键的特写、操作反馈（如LED屏幕显示、滴滴声）**，并尽量设计**使用前后的对比实验镜头**（如：传统解冻 vs 微波炉解冻）以直观展示卖点。
 4. **品牌 Slogan 收尾**：脚本的最后一段（总结）必须是固定的格式：产品静置全景特写 + 海信品牌 Slogan（"Hisense Designed to Ease, Crafted to Cheer."）。
 5. **语言规范（极其重要）**：
-   - 面向海外观众的内容：**【旁白/字幕】列必须完全使用纯英文**（或对应的海外市场语言，绝对不要写中文翻译）。
-   - 面向国内制作团队的内容：表格中的**所有其他列（如：结构分段、画面描述、音效、时长等）必须严格使用全中文**进行描述，以便国内的拍摄和剪辑团队能无障碍阅读和执行。
+   - 面向海外观众的内容：**【旁白（英文）】列与【字幕-显示卖点名及描述（英文）】列必须完全使用纯英文**（或对应的海外市场语言，绝对不要写中文翻译）。
+   - 面向国内制作团队的内容：表格中的**所有其他列**必须严格使用全中文进行描述，以便国内的拍摄和剪辑团队能无障碍阅读和执行。
    - 产品卖点：必须严格符合用户提供的信息，不可捏造。
-6. **AI Prompt**：仅在“画面描述”列的中文描述之后，附带一段括号包裹的英文 Prompt，专门用于 AI 视频生成（如：[AI Prompt: xxx]）。
+6. **竞品链接**：表格中必须包含“竞品链接”字段，至少在“总结/收尾”行填写 1-3 条可用链接（使用用户提供的链接清单，不要编造）。
+7. **AI Prompt**：如需 AI 视频生成 Prompt，请将其放入“表现手法/特色效果/运镜方式”等中文描述字段中，以括号附带英文（如：[AI Prompt: xxx]）。
 
 ## 格式要求
 必须以**标准的 Markdown 表格**形式输出，**请直接输出纯文本形式的表格，绝对不要将表格包裹在 ```markdown 或 ``` 代码块中！**
 请确保每一行都用 `|` 完整闭合，表格必须统一使用以下 5 列：
-| 结构分段 | 画面描述(含AI Prompt) | 旁白/字幕(纯英文) | 音效 | 时长 |
-| :--- | :--- | :--- | :--- | :--- |"""
+| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 音效 | 时长 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"""
 
 # 在表格后追加整体 AI Prompt 的要求（不要影响表格渲染）
 SYSTEM_PROMPT += """
@@ -452,7 +463,21 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
         st.error("未找到 MiniMax API Key。请在 Streamlit Cloud 的 Secrets 或本地 .env 文件中配置 MINIMAX_API_KEY。")
     else:
         with st.spinner("正在调用大模型生成脚本..."):
-            core_features_md = "；".join([f"{i+1}. {v}" for i, v in enumerate(selected_features)]) if selected_features else ""
+            feature_details = []
+            for v in selected_features:
+                desc = ""
+                if not model_features.empty and "Feature Description" in model_features.columns:
+                    matches = model_features[model_features["Feature Name"] == v]
+                    if not matches.empty:
+                        desc_val = matches.iloc[0].get("Feature Description", "")
+                        desc = str(desc_val).strip() if desc_val is not None else ""
+                feature_details.append({"name": v, "description": desc})
+
+            core_features_md = "；".join([
+                f"{i+1}. {x['name']}{(' — ' + x['description']) if x.get('description') else ''}"
+                for i, x in enumerate(feature_details)
+            ]) if feature_details else ""
+            competitor_links_inline = build_reference_links_inline(selected_category)
             config_dict = {
                 "目标平台": platform,
                 "目标市场": target_market,
@@ -473,9 +498,10 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
             user_prompt = f"""
             请帮我生成 {variant_count} 套不同的海外电商短视频脚本方案（用于业务选择）。
             - 输出必须严格包含 {variant_count} 个方案，分别以标题行开头：【方案1】、【方案2】、【方案3】（如只需2套则只输出到【方案2】）。
-            - 每个方案都必须先输出一张符合系统要求的 Markdown 表格（5列，行内时长为秒，最后一行为总时长）。
+            - 每个方案都必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
             - 表格后紧接着输出该方案对应的：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
             - 各方案之间不要输出额外解释性文字。
+            - 可用竞品链接（请从中选择填写到表格的“竞品链接”列，建议放在总结/收尾行）：{competitor_links_inline}
             - 目标平台：{platform}
             - 目标市场：{target_market}
             - 建议视频类型：{', '.join(video_type)}
