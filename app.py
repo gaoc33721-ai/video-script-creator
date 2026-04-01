@@ -303,6 +303,10 @@ with st.sidebar:
                                 ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
                                 default=["问题解决/痛点挖掘型", "场景化/生活方式型"])
     variant_count = st.selectbox("生成脚本套数", [2, 3], index=0)
+    production_method = st.selectbox("制作方式", ["实拍", "渲染"])
+    overall_style = st.selectbox("风格", ["科技", "时尚", "温馨家居", "高端奢华"])
+    music_style = st.selectbox("音乐", ["舒缓", "日系"])
+    tone_color = st.selectbox("调性/色调", ["暖色", "冷色", "日系"])
     
 col1, col2 = st.columns(2)
 
@@ -357,10 +361,6 @@ with col2:
     video_usage = st.selectbox("视频用途", ["站外种草", "站内首推", "内部培训", "其他"])
     expected_duration = st.slider("期望视频时长(秒)", 15, 45, 30, 1)
     project_type = st.selectbox("项目类型(可选)", ["常规上新", "新品上市", "大促活动", "教程培训", "其他"])
-    production_method = st.selectbox("制作方式", ["实拍", "渲染"])
-    overall_style = st.selectbox("风格", ["科技", "时尚", "温馨家居", "高端奢华"])
-    music_style = st.selectbox("音乐", ["舒缓", "日系"])
-    tone_color = st.selectbox("调性/色调", ["暖色", "冷色", "日系"])
     general_audience_mode = st.checkbox("不指定目标受众（通用卖点）", value=False)
     target_audience = st.text_input(
         "目标受众",
@@ -445,7 +445,7 @@ def generate_script_minimax(api_key, user_prompt):
         ],
         "temperature": 0.7,
         "top_p": 0.9,
-        "max_tokens": 2048  # 增加 max_tokens 确保长表格不会被截断
+        "max_tokens": 3072
     }
     
     try:
@@ -505,37 +505,53 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 "生成脚本套数": variant_count,
             }
 
-            user_prompt = f"""
-            请帮我生成 {variant_count} 套不同的海外电商短视频脚本方案（用于业务选择）。
-            - 输出必须严格包含 {variant_count} 个方案，分别以标题行开头：【方案1】、【方案2】、【方案3】（如只需2套则只输出到【方案2】）。
-            - 每个方案都必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
-            - 表格后紧接着输出该方案对应的：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
-            - 各方案之间不要输出额外解释性文字。
-            - 可用竞品链接（请从中选择填写到表格的“竞品链接”列，建议放在总结/收尾行）：{competitor_links_inline}
-            - 目标平台：{platform}
-            - 目标市场：{target_market}
-            - 建议视频类型：{', '.join(video_type)}
-            - 视频用途：{video_usage}
-            - 期望视频时长(秒)：{expected_duration}
-            - 项目类型：{project_type}
-            - 制作方式：{production_method}
-            - 风格：{overall_style}
-            - 音乐：{music_style}
-            - 调性/色调：{tone_color}
-            - 产品品类：{selected_category}
-            - 产品型号：{selected_model}
-            - 核心卖点：{core_features_md}
-            - 目标受众：{target_audience if target_audience else "通用卖点（不指定具体人群）"}
-            - 用户痛点：{pain_points}
-            - 内容发布日期：{publish_date if 'publish_date' in locals() else ""}
-            - 结合热点：{festival_hotspot}
-            """
-            
-            # 调用 API
-            generated_content = generate_script_minimax(api_key, user_prompt)
-            
-            generated_content = _strip_code_fences(generated_content)
-            variants = _split_variants(generated_content, expected_count=variant_count)
+            table_header_line = "| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 音效 | 时长 |"
+
+            variants = []
+            progress = st.progress(0)
+            for i in range(1, int(variant_count) + 1):
+                progress.progress(int((i - 1) / int(variant_count) * 100))
+                variant_prompt = f"""
+请生成【方案{i}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
+- 必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
+- 表格必须包含并使用如下表头（逐字一致）：
+{table_header_line}
+- 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
+- 与其他方案保持明显差异：开场hook、意境表达、表现手法至少两处不同。
+- 可用竞品链接（请从中选择填写到表格的“竞品链接”列，建议放在总结/收尾行）：{competitor_links_inline}
+
+输入参数：
+- 目标平台：{platform}
+- 目标市场：{target_market}
+- 建议视频类型：{', '.join(video_type)}
+- 视频用途：{video_usage}
+- 期望视频时长(秒)：{expected_duration}
+- 项目类型：{project_type}
+- 制作方式：{production_method}
+- 风格：{overall_style}
+- 音乐：{music_style}
+- 调性/色调：{tone_color}
+- 产品品类：{selected_category}
+- 产品型号：{selected_model}
+- 核心卖点：{core_features_md}
+- 目标受众：{target_audience if target_audience else "通用卖点（不指定具体人群）"}
+- 用户痛点：{pain_points}
+- 内容发布日期：{publish_date if 'publish_date' in locals() else ""}
+- 结合热点：{festival_hotspot}
+""".strip()
+
+                content = generate_script_minimax(api_key, variant_prompt)
+                content = _strip_code_fences(content)
+                if (table_header_line not in content) or ("总时长" not in content):
+                    retry_prompt = variant_prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
+                    content_retry = generate_script_minimax(api_key, retry_prompt)
+                    content_retry = _strip_code_fences(content_retry)
+                    if (table_header_line in content_retry) and ("总时长" in content_retry):
+                        content = content_retry
+
+                variants.append({"name": f"方案{i}", "content": content})
+
+            progress.progress(100)
             
             st.success("脚本生成成功！")
             st.markdown("### 📝 生成结果预览")
