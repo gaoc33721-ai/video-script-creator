@@ -15,7 +15,7 @@ CACHE_FILE_PATH = "cached_product_features.pkl"
 
 COMPETITOR_VIDEO_REFERENCES = {
     "空气炸锅": [
-        ("Ninja Air Fryers（官方播放列表）", "https://m.youtube.com/playlist?list=PL1w44a96ubQpHoqnij9hEg0_09UudwEfe"),
+        ("Ninja Air Fryers（产品宣传示例）", "https://www.youtube.com/watch?v=6TryhZRuZBs"),
         ("COSORI（官方频道）", "https://m.youtube.com/c/Cosori/videos"),
         ("Philips Airfryer（设置与使用示例）", "https://m.youtube.com/watch?v=MOjKt3MfXNs"),
         ("Instant Vortex ClearCook（产品演示示例）", "https://m.youtube.com/watch?v=NeN9yBfTVNo"),
