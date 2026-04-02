@@ -305,6 +305,40 @@ def _sanitize_competitor_fields(content, allowed_urls):
         return md_table + "\n\n" + remainder
     return md_table
 
+def _sanitize_english_cell(text):
+    if text is None:
+        return ""
+    s = str(text).strip()
+    s = re.sub(r"^\s*(?:【[^】]{0,30}】|\[[^\]]{0,30}\]|\([^\)]{0,30}\)|（[^）]{0,30}）)\s*", "", s)
+    s = re.sub(r"^\s*(?:旁白|字幕|字幕-显示卖点名及描述)\s*[:：]\s*", "", s)
+    s = re.sub(r"^\s*(?:voiceover|vo|subtitle|subtitles)\s*[:：]\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^\s*-\s*", "", s)
+    return s.strip()
+
+def _sanitize_english_columns(content):
+    table_lines, remainder = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty:
+        return content
+    changed = False
+    for col in ["旁白（英文）", "字幕-显示卖点名及描述（英文）"]:
+        if col not in df.columns:
+            continue
+        for idx in df.index:
+            raw = df.at[idx, col]
+            fixed = _sanitize_english_cell(raw)
+            if (raw is None and fixed) or (raw is not None and str(raw).strip() != fixed):
+                df.at[idx, col] = fixed
+                changed = True
+    if not changed:
+        return content
+    md_table = _df_to_md_table(df)
+    if not md_table:
+        return content
+    if remainder:
+        return md_table + "\n\n" + remainder
+    return md_table
+
 def _has_cjk(text):
     if not text:
         return False
@@ -680,6 +714,7 @@ SYSTEM_PROMPT = """##角色
 4. **品牌 Slogan 收尾**：脚本的最后一段（总结）必须是固定的格式：产品静置全景特写 + 海信品牌 Slogan（"Hisense Designed to Ease, Crafted to Cheer."）。
 5. **语言规范（极其重要）**：
    - 面向海外观众的内容：**【旁白（英文）】列与【字幕-显示卖点名及描述（英文）】列必须完全使用纯英文**（或对应的海外市场语言，绝对不要写中文翻译）。
+   - 英文列严禁带字段名：以上两列的单元格内容不得包含“旁白/字幕/字段名/括号标签”等前缀（例如不要输出“【旁白（英文）】...”或“字幕：...”），必须直接输出纯英文内容。
    - 面向国内制作团队的内容：表格中的**所有其他列**必须严格使用全中文进行描述，以便国内的拍摄和剪辑团队能无障碍阅读和执行。禁止出现整句英文；如必须出现英文术语，只能作为中文句子中的少量术语/缩写出现。
    - 产品卖点：必须严格符合用户提供的信息，不可捏造。
 6. **竞品链接**：表格中必须包含“竞品链接”字段，至少在“总结/收尾”行填写 1-3 条可用链接（使用用户提供的链接清单，不要编造）。
@@ -819,6 +854,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 - 可用竞品链接与主打点（请从中选择填写到表格的“竞品链接”列，并在“竞品盖帽”列用一句话写本品在展示上的强项）：{competitor_links_inline}
 - 若可用竞品链接为“无（请留空，不要编造）”，则表格中的“竞品链接/竞品盖帽”两列必须留空。
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列（结构分段/功能点/意境表达/表现手法/特色效果/拍摄角度/运镜方式/竞品盖帽/音效/时长）必须以中文为主；允许出现极少量大写缩写（如 UI/LED/4K）。
+- 英文列格式强约束：两列英文内容不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 
 输入参数：
 - 目标平台：{platform}
@@ -856,7 +892,8 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 1) 保持表格列数/表头/行数/时长数字不变；
 2) 仅【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列保留英文；
 3) 表格中其他所有列必须改写为中文（禁止整句英文，允许极少量大写缩写如 UI/LED/4K 作为中文句子的一部分）；
-4) 不要添加额外解释性文字，直接输出修复后的脚本（表格+表格后附加内容）。
+4) 旁白/字幕两列不得带任何字段名/标签/括号前缀（不要输出“【旁白】...”或“字幕：...”），必须直接输出纯英文内容；
+5) 不要添加额外解释性文字，直接输出修复后的脚本（表格+表格后附加内容）。
 
 原内容：
 {content}
@@ -868,6 +905,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                         content = fixed
 
                 content = _sanitize_competitor_fields(content, allowed_competitor_urls)
+                content = _sanitize_english_columns(content)
 
                 variants.append({"name": f"方案{i}", "content": content})
 
