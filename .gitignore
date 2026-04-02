@@ -6,6 +6,8 @@
 *.xlsx
 *.xls
 cached_product_features.pkl
+competitor_config_*.json
+competitor_candidates_*.json
 
 # Python 缓存
 __pycache__/

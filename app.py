@@ -18,6 +18,28 @@ except ModuleNotFoundError:
 # 缓存文件路径（保存在云端服务器临时目录）
 CACHE_FILE_PATH = "cached_product_features.pkl"
 
+COMPETITOR_BRAND_POOL = {
+    "空气炸锅": ["Ninja", "COSORI", "Philips", "Instant", "Breville"],
+    "微波炉": ["Panasonic", "LG", "Samsung", "Toshiba", "Sharp"],
+    "冰箱": ["Samsung", "LG", "Whirlpool", "GE", "Haier", "Bosch"],
+    "洗衣机": ["LG", "Samsung", "Whirlpool", "GE", "Bosch"],
+    "洗碗机": ["Bosch", "Whirlpool", "GE", "LG", "Samsung"],
+    "烤箱": ["Bosch", "Samsung", "LG", "Whirlpool", "Breville"],
+    "空调": ["Daikin", "Mitsubishi Electric", "LG", "Samsung", "Gree", "Midea"],
+    "电视": ["Samsung", "LG", "Sony", "TCL", "Hisense"],
+}
+
+CATEGORY_QUERY_TERMS = {
+    "空气炸锅": ["air fryer", "airfryer"],
+    "微波炉": ["microwave", "inverter microwave"],
+    "冰箱": ["refrigerator", "fridge", "french door refrigerator", "side by side refrigerator"],
+    "洗衣机": ["washing machine", "washer", "laundry"],
+    "洗碗机": ["dishwasher"],
+    "烤箱": ["oven", "electric oven"],
+    "空调": ["air conditioner", "AC"],
+    "电视": ["TV", "television"],
+}
+
 COMPETITOR_VIDEO_REFERENCES = {
     "空气炸锅": [
         {
@@ -191,55 +213,131 @@ def _strip_code_fences(text):
         t = t[:-3]
     return t.strip()
 
+def _safe_slug(text):
+    if not text:
+        return "unknown"
+    s = re.sub(r"\s+", "_", str(text).strip())
+    s = re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff-]+", "_", s)
+    return s[:60] if s else "unknown"
+
+def _category_key(product_category):
+    if not product_category:
+        return ""
+    s = str(product_category)
+    for k in COMPETITOR_BRAND_POOL.keys():
+        if k and k in s:
+            return k
+    for k in COMPETITOR_VIDEO_REFERENCES.keys():
+        if k and k in s:
+            return k
+    return s
+
+def _competitor_config_path(category_key):
+    return f"competitor_config_{_safe_slug(category_key)}.json"
+
+def load_competitor_config(category_key):
+    path = _competitor_config_path(category_key)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {"brands": COMPETITOR_BRAND_POOL.get(category_key, []), "selected_urls": [], "manual_urls": []}
+
+def save_competitor_config(category_key, config):
+    path = _competitor_config_path(category_key)
+    payload = {
+        "brands": config.get("brands", []) if isinstance(config.get("brands", []), list) else [],
+        "selected_urls": config.get("selected_urls", []) if isinstance(config.get("selected_urls", []), list) else [],
+        "manual_urls": config.get("manual_urls", []) if isinstance(config.get("manual_urls", []), list) else [],
+        "updated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        return False
+    return True
+
+def _category_terms(product_category):
+    key = _category_key(product_category)
+    terms = [str(product_category)] if product_category else []
+    for t in CATEGORY_QUERY_TERMS.get(key, []):
+        if t not in terms:
+            terms.append(t)
+    return terms
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_competitor_videos_web(product_category, target_market, limit=6):
-    q = f"site:youtube.com {product_category} official product video"
+def fetch_competitor_videos_web(product_category, target_market, brands, limit=8):
+    terms = _category_terms(product_category)
+    brands = [b for b in (brands or []) if b]
     if target_market and "欧洲" in target_market:
-        q += " UK"
+        region = "UK"
     elif target_market and "东南亚" in target_market:
-        q += " SEA"
+        region = "SEA"
     elif target_market and "北美" in target_market:
-        q += " US"
+        region = "US"
+    else:
+        region = ""
+
+    queries = []
+    for term in terms[:3]:
+        if region:
+            queries.append(f'site:youtube.com {term} product video {region}')
+        queries.append(f'site:youtube.com {term} product demo')
+    for brand in brands[:6]:
+        for term in terms[:2]:
+            if region:
+                queries.append(f'site:youtube.com {brand} {term} official {region}')
+            queries.append(f'site:youtube.com {brand} {term} official')
+            queries.append(f'site:youtube.com {brand} {term} demo')
 
     url = "https://duckduckgo.com/html/"
-    params = {"q": q}
     headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=10, verify=False)
-        resp.raise_for_status()
-        html = resp.text
-        urls = []
-        for m in re.finditer(r'href="https://duckduckgo\.com/l/\?uddg=([^"&]+)', html):
-            u = urllib.parse.unquote(m.group(1))
-            if "youtube.com/" not in u and "youtu.be/" not in u:
-                continue
-            if "/watch" not in u and "youtu.be/" not in u and "/channel/" not in u and "/@" not in u and "/c/" not in u and "/playlist" not in u:
-                continue
-            if u not in urls:
-                urls.append(u)
+    urls = []
+    for q in queries:
+        try:
+            resp = requests.get(url, params={"q": q}, headers=headers, timeout=10, verify=False)
+            resp.raise_for_status()
+            html = resp.text
+            for m in re.finditer(r'href="https://duckduckgo\.com/l/\?uddg=([^"&]+)', html):
+                u = urllib.parse.unquote(m.group(1))
+                if "youtube.com/" not in u and "youtu.be/" not in u:
+                    continue
+                if "/watch" not in u and "youtu.be/" not in u and "/channel/" not in u and "/@" not in u and "/c/" not in u and "/playlist" not in u:
+                    continue
+                if u not in urls:
+                    urls.append(u)
+                if len(urls) >= limit:
+                    break
             if len(urls) >= limit:
                 break
-        items = []
-        for u in urls:
-            items.append({"brand": "", "title": "全网检索结果", "url": u, "focus_points": []})
-        return items
-    except Exception:
-        return []
+        except Exception:
+            continue
 
-def _match_competitor_key(product_category):
-    if not product_category:
-        return None
-    for k in COMPETITOR_VIDEO_REFERENCES.keys():
-        if k and k in product_category:
-            return k
-    return None
+    items = [{"brand": "", "title": "全网检索结果", "url": u, "focus_points": []} for u in urls]
+    return items
 
 def get_competitor_items(product_category, platform, target_market):
-    key = _match_competitor_key(product_category)
+    key = _category_key(product_category)
+    config = load_competitor_config(key)
+    brands = config.get("brands", []) if isinstance(config.get("brands", []), list) else []
+    if not brands:
+        brands = COMPETITOR_BRAND_POOL.get(key, [])
+
     items = []
-    if key:
+    if key in COMPETITOR_VIDEO_REFERENCES:
         items.extend(COMPETITOR_VIDEO_REFERENCES.get(key, []))
-    web_items = fetch_competitor_videos_web(product_category, target_market, limit=6)
+
+    for u in (config.get("selected_urls", []) or []):
+        items.append({"brand": "", "title": "品类私有配置", "url": u, "focus_points": []})
+    for u in (config.get("manual_urls", []) or []):
+        items.append({"brand": "", "title": "手动新增", "url": u, "focus_points": []})
+
+    web_items = fetch_competitor_videos_web(key, target_market, tuple(brands), limit=8)
     seen = set()
     merged = []
     for it in items + web_items:
@@ -663,6 +761,65 @@ with col1:
             selected_features.append(selected)
 
     st.caption(f"已选择 {len(selected_features)} 个卖点（用于生成脚本）")
+
+    with st.expander("🏷️ 竞品素材配置（按品类缓存）", expanded=False):
+        category_key = _category_key(selected_category)
+        cfg = load_competitor_config(category_key)
+
+        default_brands = COMPETITOR_BRAND_POOL.get(category_key, [])
+        brand_options = sorted(list(dict.fromkeys((default_brands or []) + (cfg.get("brands", []) or []))))
+        brands = st.multiselect("品类竞品品牌池", brand_options, default=[b for b in (cfg.get("brands", []) or []) if b in brand_options])
+        extra_brands = st.text_input("补充品牌（可选，逗号分隔）", "")
+        if extra_brands.strip():
+            for b in [x.strip() for x in extra_brands.split(",") if x.strip()]:
+                if b not in brands:
+                    brands.append(b)
+
+        candidate_items = get_competitor_items(selected_category, platform, target_market)
+        candidate_urls = []
+        labels = {}
+        for it in candidate_items:
+            u = (it or {}).get("url", "")
+            if not u:
+                continue
+            if u not in candidate_urls:
+                candidate_urls.append(u)
+            brand = (it or {}).get("brand", "")
+            title = (it or {}).get("title", "")
+            focus = (it or {}).get("focus_points", []) or []
+            focus_text = " / ".join([x for x in focus if x])
+            labels[u] = f"{brand + ' - ' if brand else ''}{title}{('（' + focus_text + '）') if focus_text else ''}"
+
+        selected_urls = st.multiselect(
+            "候选竞品链接（可搜索多选）",
+            candidate_urls,
+            default=[u for u in (cfg.get("selected_urls", []) or []) if u in candidate_urls],
+            format_func=lambda u: f"{labels.get(u, '')} {u}".strip(),
+        )
+        manual_urls_text = st.text_area(
+            "手动新增竞品链接（可选，一行一个；仅支持 YouTube）",
+            "\n".join(cfg.get("manual_urls", []) or []),
+            height=120,
+        )
+        manual_urls = []
+        for line in (manual_urls_text or "").splitlines():
+            u = line.strip()
+            if not u:
+                continue
+            if ("youtube.com" in u) or ("youtu.be" in u):
+                manual_urls.append(u)
+
+        col_save, col_hint = st.columns([1, 3])
+        with col_save:
+            if st.button("💾 保存该品类配置", use_container_width=True):
+                ok = save_competitor_config(category_key, {"brands": brands, "selected_urls": selected_urls, "manual_urls": manual_urls})
+                if ok:
+                    st.success("已保存（该品类配置会缓存在云端服务器文件中）")
+                    st.rerun()
+                else:
+                    st.error("保存失败，请稍后重试")
+        with col_hint:
+            st.caption("说明：该配置按“品类”写入云端服务器本地文件，属于应用内部配置；未匹配到链接时会留空，避免乱填。")
 
 with col2:
     st.subheader("🎯 营销诉求")
