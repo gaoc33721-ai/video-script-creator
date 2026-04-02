@@ -57,6 +57,17 @@ CATEGORY_ALIASES = [
     ("ac", "空调"),
 ]
 
+DEFAULT_PAIN_POINTS = {
+    "空气炸锅": "想吃炸物但担心高油高脂；忙碌时不想开火做饭；清洁麻烦、油烟大；一次做不够家人/聚会份量",
+    "微波炉": "解冻不均匀、外热内冷；加热后食物发干口感差；操作复杂、火力档位不清晰；空间占用大、不好清洁",
+    "冰箱": "食材存放易串味；保鲜时间短、蔬果易蔫；容量不够、分区不合理；噪音大、能耗高；开门找东西麻烦",
+    "洗衣机": "洗不干净顽固污渍；大件衣物/被子不好洗；衣物易缠绕、易损伤；噪音/震动大；烘干不透、容易返潮",
+    "洗碗机": "手洗费时费水、油污难洗；担心洗不干净/有残留；锅具大件难摆放；烘干不彻底有水渍；安装/维护麻烦",
+    "烤箱": "温度不准导致烤不均匀；预热慢、时间不好掌握；容量不足一次烤不够；油污难清洁；新手不懂模式选择",
+    "空调": "制冷/制热慢；温差大吹着不舒服；噪音影响睡眠；耗电高；异味/清洁维护麻烦；不同房间覆盖不均",
+    "电视": "画面不够清晰/拖影影响观影和游戏；音效不够沉浸；反光严重白天看不清；接口不够/连接麻烦；系统卡顿广告多",
+}
+
 COMPETITOR_VIDEO_REFERENCES = {
     "空气炸锅": [
         {
@@ -946,7 +957,11 @@ with col2:
     )
     if general_audience_mode:
         target_audience = ""
-    pain_points = st.text_area("用户痛点", "想吃油炸食品但怕胖；聚会时做饭太麻烦")
+    _pain_key = _category_key(selected_category)
+    if st.session_state.get("last_pain_category") != _pain_key:
+        st.session_state["last_pain_category"] = _pain_key
+        st.session_state["pain_points"] = DEFAULT_PAIN_POINTS.get(_pain_key, "省时省力；提升体验；减少清洁与维护成本；更适合家庭/小户型使用场景")
+    pain_points = st.text_area("用户痛点", key="pain_points")
 
     with st.expander("📅 节日/热点推荐（可选）", expanded=False):
         publish_date = st.date_input("内容发布日期", value=dt.date.today())
