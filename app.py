@@ -40,6 +40,23 @@ CATEGORY_QUERY_TERMS = {
     "电视": ["TV", "television"],
 }
 
+CATEGORY_ALIASES = [
+    ("refrigerator", "冰箱"),
+    ("fridge", "冰箱"),
+    ("tv", "电视"),
+    ("television", "电视"),
+    ("washing machine", "洗衣机"),
+    ("washer", "洗衣机"),
+    ("laundry", "洗衣机"),
+    ("dishwasher", "洗碗机"),
+    ("air fryer", "空气炸锅"),
+    ("airfryer", "空气炸锅"),
+    ("microwave", "微波炉"),
+    ("oven", "烤箱"),
+    ("air conditioner", "空调"),
+    ("ac", "空调"),
+]
+
 COMPETITOR_VIDEO_REFERENCES = {
     "空气炸锅": [
         {
@@ -230,6 +247,10 @@ def _category_key(product_category):
     for k in COMPETITOR_VIDEO_REFERENCES.keys():
         if k and k in s:
             return k
+    s_lower = s.lower()
+    for kw, mapped in CATEGORY_ALIASES:
+        if kw in s_lower:
+            return mapped
     return s
 
 def _competitor_config_path(category_key):
@@ -261,6 +282,25 @@ def save_competitor_config(category_key, config):
     except Exception:
         return False
     return True
+
+def _get_runtime_competitor_config(category_key):
+    try:
+        cfg_map = st.session_state.get("__competitor_runtime_config", {})
+        if isinstance(cfg_map, dict):
+            v = cfg_map.get(category_key)
+            if isinstance(v, dict):
+                return v
+    except Exception:
+        pass
+    return None
+
+def _set_runtime_competitor_config(category_key, config):
+    try:
+        if "__competitor_runtime_config" not in st.session_state or not isinstance(st.session_state.get("__competitor_runtime_config"), dict):
+            st.session_state["__competitor_runtime_config"] = {}
+        st.session_state["__competitor_runtime_config"][category_key] = config
+    except Exception:
+        pass
 
 def _category_terms(product_category):
     key = _category_key(product_category)
@@ -324,6 +364,14 @@ def fetch_competitor_videos_web(product_category, target_market, brands, limit=8
 def get_competitor_items(product_category, platform, target_market):
     key = _category_key(product_category)
     config = load_competitor_config(key)
+    runtime_cfg = _get_runtime_competitor_config(key)
+    if isinstance(runtime_cfg, dict):
+        merged = {
+            "brands": runtime_cfg.get("brands", config.get("brands", [])),
+            "selected_urls": runtime_cfg.get("selected_urls", config.get("selected_urls", [])),
+            "manual_urls": runtime_cfg.get("manual_urls", config.get("manual_urls", [])),
+        }
+        config = merged
     brands = config.get("brands", []) if isinstance(config.get("brands", []), list) else []
     if not brands:
         brands = COMPETITOR_BRAND_POOL.get(key, [])
@@ -640,7 +688,7 @@ def _parse_md_table_to_df(table_lines):
         normalized.append(r)
     return pd.DataFrame(normalized, columns=header)
 
-def _build_excel_bytes(variants, config_dict, product_category):
+def _build_excel_bytes(variants, config_dict, product_category, competitor_items=None):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         config_df = pd.DataFrame([config_dict])
@@ -658,17 +706,15 @@ def _build_excel_bytes(variants, config_dict, product_category):
             prompts_rows.append({
                 "方案": sheet_name,
                 "表格后附加内容": remainder,
-                "竞品参考链接": build_reference_links_md(product_category).strip(),
+                "竞品参考链接": build_reference_links_md(product_category, competitor_items=competitor_items).strip(),
             })
         pd.DataFrame(prompts_rows).to_excel(writer, sheet_name="附加信息", index=False)
     return buf.getvalue()
 
-def build_reference_links_md(product_category):
-    refs = []
-    for k, items in COMPETITOR_VIDEO_REFERENCES.items():
-        if k in (product_category or ""):
-            refs = items
-            break
+def build_reference_links_md(product_category, competitor_items=None):
+    refs = competitor_items if isinstance(competitor_items, list) else []
+    if not refs:
+        refs = get_competitor_items(product_category, "", "")
     lines = [
         "",
         "---",
@@ -838,6 +884,7 @@ with col1:
                 if b not in brands:
                     brands.append(b)
 
+        _set_runtime_competitor_config(category_key, {"brands": brands, "selected_urls": cfg.get("selected_urls", []), "manual_urls": cfg.get("manual_urls", [])})
         candidate_items = get_competitor_items(selected_category, platform, target_market)
         candidate_urls = []
         labels = {}
@@ -871,6 +918,8 @@ with col1:
                 continue
             if ("youtube.com" in u) or ("youtu.be" in u):
                 manual_urls.append(u)
+
+        _set_runtime_competitor_config(category_key, {"brands": brands, "selected_urls": selected_urls, "manual_urls": manual_urls})
 
         col_save, col_hint = st.columns([1, 3])
         with col_save:
@@ -1037,6 +1086,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 competitor_links_inline = " <br> ".join(parts)
             else:
                 competitor_links_inline = "无（请留空，不要编造）"
+            st.session_state["last_competitor_items"] = competitor_items
             config_dict = {
                 "目标平台": platform,
                 "目标市场": target_market,
@@ -1143,7 +1193,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
             st.success("脚本生成成功！")
             st.markdown("### 📝 生成结果预览")
             st.session_state["generated_variants"] = variants
-            st.session_state["generated_excel_bytes"] = _build_excel_bytes(variants, config_dict, selected_category)
+            st.session_state["generated_excel_bytes"] = _build_excel_bytes(variants, config_dict, selected_category, competitor_items=st.session_state.get("last_competitor_items"))
 
 if st.session_state.get("generated_variants"):
     variants = st.session_state["generated_variants"]
