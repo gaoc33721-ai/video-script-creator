@@ -437,6 +437,69 @@ def _sanitize_english_columns(content):
         return md_table + "\n\n" + remainder
     return md_table
 
+def _ensure_duration_cn(text):
+    if text is None:
+        return ""
+    s = str(text).strip()
+    m = re.match(r"^(\d{1,3})\s*(?:s|sec|secs|second|seconds)$", s, flags=re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}秒"
+    m2 = re.match(r"^(\d{1,3})$", s)
+    if m2:
+        return f"{m2.group(1)}秒"
+    return s
+
+def _fallback_cn_cell(col_name):
+    mapping = {
+        "结构分段": "结构段落",
+        "功能点": "功能演示",
+        "意境表达": "温馨生活氛围",
+        "表现手法": "产品特写 + 场景化对比",
+        "特色效果": "关键卖点文字点亮 + 氛围光",
+        "拍摄角度": "侧面中景 + 手部特写",
+        "运镜方式": "慢推 + 平移",
+        "竞品盖帽": "对标竞品主打点，本品用更直观镜头更快讲清卖点",
+        "音效": "舒缓背景音乐 + 关键提示音",
+    }
+    return mapping.get(col_name, "（待补充）")
+
+def _force_non_english_columns_to_cn(content):
+    table_lines, remainder = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty:
+        return content
+    english_cols = {"旁白（英文）", "字幕-显示卖点名及描述（英文）"}
+    allow_url_only_cols = {"竞品链接"}
+    changed = False
+    for col in df.columns:
+        col_name = str(col).strip()
+        if col_name in english_cols:
+            continue
+        for idx in df.index:
+            raw = df.at[idx, col]
+            cell = "" if raw is None else str(raw).strip()
+            if not cell:
+                continue
+            if col_name == "时长":
+                fixed = _ensure_duration_cn(cell)
+                if fixed != cell:
+                    df.at[idx, col] = fixed
+                    changed = True
+                continue
+            if col_name in allow_url_only_cols:
+                continue
+            if not _is_mostly_chinese(cell):
+                df.at[idx, col] = _fallback_cn_cell(col_name)
+                changed = True
+    if not changed:
+        return content
+    md_table = _df_to_md_table(df)
+    if not md_table:
+        return content
+    if remainder:
+        return md_table + "\n\n" + remainder
+    return md_table
+
 def _has_cjk(text):
     if not text:
         return False
@@ -905,7 +968,7 @@ Recommended Settings（选填）:
 - 输出一行即可，例如：16:9 or 9:16, 24fps, 4-6s clips per shot, realistic style
 """
 
-def generate_script_minimax(api_key, user_prompt):
+def generate_script_minimax(api_key, user_prompt, temperature=0.7, top_p=0.9, max_tokens=3072):
     url = "https://api.minimax.chat/v1/text/chatcompletion_v2"
     headers = {
         "Content-Type": "application/json",
@@ -918,9 +981,9 @@ def generate_script_minimax(api_key, user_prompt):
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
         ],
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "max_tokens": 3072
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens
     }
     
     try:
@@ -1037,7 +1100,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 content = _strip_code_fences(content)
                 if (table_header_line not in content) or ("总时长" not in content):
                     retry_prompt = variant_prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
-                    content_retry = generate_script_minimax(api_key, retry_prompt)
+                    content_retry = generate_script_minimax(api_key, retry_prompt, temperature=0.3, top_p=0.8)
                     content_retry = _strip_code_fences(content_retry)
                     if (table_header_line in content_retry) and ("总时长" in content_retry):
                         content = content_retry
@@ -1055,11 +1118,20 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 原内容：
 {content}
 """.strip()
-                    fixed = generate_script_minimax(api_key, fix_prompt)
-                    fixed = _strip_code_fences(fixed)
-                    ok_lang2, _ = _validate_language_for_table(fixed)
-                    if ok_lang2:
-                        content = fixed
+                    fixed = content
+                    for _ in range(2):
+                        fixed_try = generate_script_minimax(api_key, fix_prompt, temperature=0.2, top_p=0.7)
+                        fixed_try = _strip_code_fences(fixed_try)
+                        ok_lang2, _ = _validate_language_for_table(fixed_try)
+                        if ok_lang2:
+                            fixed = fixed_try
+                            break
+                        fixed = fixed_try
+                    content = fixed
+
+                ok_lang3, _ = _validate_language_for_table(content)
+                if not ok_lang3:
+                    content = _force_non_english_columns_to_cn(content)
 
                 content = _sanitize_competitor_fields(content, allowed_competitor_urls)
                 content = _sanitize_english_columns(content)
