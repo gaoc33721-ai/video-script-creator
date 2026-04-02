@@ -200,6 +200,27 @@ def _has_url(text):
         return False
     return re.search(r"https?://", str(text)) is not None
 
+def _lang_mix_counts(text):
+    if not text:
+        return 0, 0
+    s = str(text)
+    s = re.sub(r"https?://\S+", "", s)
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", s))
+    latin = 0
+    for tok in re.findall(r"[A-Za-z]+", s):
+        if tok.isupper() and len(tok) <= 4:
+            continue
+        latin += len(tok)
+    return cjk, latin
+
+def _is_mostly_chinese(text):
+    cjk, latin = _lang_mix_counts(text)
+    if (cjk == 0) and (latin == 0):
+        return True
+    if cjk < 2:
+        return False
+    return cjk >= latin
+
 def _validate_language_for_table(content):
     table_lines, _ = _extract_first_md_table(content)
     df = _parse_md_table_to_df(table_lines)
@@ -225,7 +246,7 @@ def _validate_language_for_table(content):
                     continue
                 violations += 1
             else:
-                if _has_cjk(cell):
+                if _is_mostly_chinese(cell):
                     continue
                 violations += 1
 
@@ -671,7 +692,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
 - 与其他方案保持明显差异：开场hook、意境表达、表现手法至少两处不同。
 - 可用竞品链接与主打点（请从中选择填写到表格的“竞品链接”列，并在“竞品盖帽”列用一句话写本品在展示上的强项）：{competitor_links_inline}
-- 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余所有列必须用中文完整表达，不要整句英文。
+- 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列（结构分段/功能点/意境表达/表现手法/特色效果/拍摄角度/运镜方式/竞品盖帽/音效/时长）必须以中文为主；允许出现极少量大写缩写（如 UI/LED/4K）。
 
 输入参数：
 - 目标平台：{platform}
@@ -708,7 +729,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 请将下面脚本中的 Markdown 表格按以下规则“修复语言”并输出修复后的完整内容：
 1) 保持表格列数/表头/行数/时长数字不变；
 2) 仅【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列保留英文；
-3) 表格中其他所有列必须改写为中文（禁止整句英文，允许极少量英文术语作为中文句子的一部分）；
+3) 表格中其他所有列必须改写为中文（禁止整句英文，允许极少量大写缩写如 UI/LED/4K 作为中文句子的一部分）；
 4) 不要添加额外解释性文字，直接输出修复后的脚本（表格+表格后附加内容）。
 
 原内容：
