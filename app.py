@@ -7,6 +7,7 @@ import datetime as dt
 import io
 import re
 import xml.etree.ElementTree as ET
+import urllib.parse
 
 try:
     from dotenv import load_dotenv
@@ -190,6 +191,120 @@ def _strip_code_fences(text):
         t = t[:-3]
     return t.strip()
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_competitor_videos_web(product_category, target_market, limit=6):
+    q = f"site:youtube.com {product_category} official product video"
+    if target_market and "欧洲" in target_market:
+        q += " UK"
+    elif target_market and "东南亚" in target_market:
+        q += " SEA"
+    elif target_market and "北美" in target_market:
+        q += " US"
+
+    url = "https://duckduckgo.com/html/"
+    params = {"q": q}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=10, verify=False)
+        resp.raise_for_status()
+        html = resp.text
+        urls = []
+        for m in re.finditer(r'href="https://duckduckgo\.com/l/\?uddg=([^"&]+)', html):
+            u = urllib.parse.unquote(m.group(1))
+            if "youtube.com/" not in u and "youtu.be/" not in u:
+                continue
+            if "/watch" not in u and "youtu.be/" not in u and "/channel/" not in u and "/@" not in u and "/c/" not in u and "/playlist" not in u:
+                continue
+            if u not in urls:
+                urls.append(u)
+            if len(urls) >= limit:
+                break
+        items = []
+        for u in urls:
+            items.append({"brand": "", "title": "全网检索结果", "url": u, "focus_points": []})
+        return items
+    except Exception:
+        return []
+
+def _match_competitor_key(product_category):
+    if not product_category:
+        return None
+    for k in COMPETITOR_VIDEO_REFERENCES.keys():
+        if k and k in product_category:
+            return k
+    return None
+
+def get_competitor_items(product_category, platform, target_market):
+    key = _match_competitor_key(product_category)
+    items = []
+    if key:
+        items.extend(COMPETITOR_VIDEO_REFERENCES.get(key, []))
+    web_items = fetch_competitor_videos_web(product_category, target_market, limit=6)
+    seen = set()
+    merged = []
+    for it in items + web_items:
+        u = (it or {}).get("url", "")
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        merged.append(it)
+    return merged
+
+def _escape_md_cell(v):
+    if v is None:
+        return ""
+    s = str(v)
+    s = s.replace("|", "｜")
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = s.replace("\n", "<br>")
+    return s.strip()
+
+def _df_to_md_table(df):
+    if df is None or df.empty:
+        return ""
+    cols = [str(c).strip() for c in df.columns.tolist()]
+    header = "| " + " | ".join(cols) + " |"
+    align = "| " + " | ".join([":---"] * len(cols)) + " |"
+    rows = []
+    for _, row in df.iterrows():
+        cells = [_escape_md_cell(row.get(c, "")) for c in df.columns]
+        rows.append("| " + " | ".join(cells) + " |")
+    return "\n".join([header, align] + rows)
+
+def _sanitize_competitor_fields(content, allowed_urls):
+    table_lines, remainder = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty:
+        return content
+    if "竞品链接" not in df.columns:
+        return content
+
+    allow = set([u for u in (allowed_urls or []) if u])
+    url_re = re.compile(r"https?://\S+")
+
+    def _filter_urls(text):
+        urls = url_re.findall(text or "")
+        kept = [u for u in urls if u in allow]
+        return " / ".join(kept)
+
+    for idx in df.index:
+        raw = "" if df.at[idx, "竞品链接"] is None else str(df.at[idx, "竞品链接"]).strip()
+        if not allow:
+            df.at[idx, "竞品链接"] = ""
+        else:
+            df.at[idx, "竞品链接"] = _filter_urls(raw)
+        if "竞品盖帽" in df.columns:
+            link_val = "" if df.at[idx, "竞品链接"] is None else str(df.at[idx, "竞品链接"]).strip()
+            if not link_val:
+                df.at[idx, "竞品盖帽"] = ""
+
+    md_table = _df_to_md_table(df)
+    if not md_table:
+        return content
+    if remainder:
+        return md_table + "\n\n" + remainder
+    return md_table
+
 def _has_cjk(text):
     if not text:
         return False
@@ -359,14 +474,15 @@ def build_reference_links_md(product_category):
         if k in (product_category or ""):
             refs = items
             break
-    if not refs:
-        refs = COMPETITOR_VIDEO_REFERENCES.get("空气炸锅", [])
     lines = [
         "",
         "---",
         "",
         "竞品优秀宣传视频参考链接（仅供内部学习，不代表推荐/背书）：",
     ]
+    if not refs:
+        lines.append("- （无可用竞品链接，留空）")
+        return "\n".join(lines)
     for item in refs:
         title = item.get("title", "")
         url = item.get("url", "")
@@ -384,8 +500,6 @@ def build_reference_links_inline(product_category):
         if k in (product_category or ""):
             refs = items
             break
-    if not refs:
-        refs = COMPETITOR_VIDEO_REFERENCES.get("空气炸锅", [])
     parts = []
     for item in refs:
         title = item.get("title", "")
@@ -652,7 +766,22 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 f"{i+1}. {x['name']}{(' — ' + x['description']) if x.get('description') else ''}"
                 for i, x in enumerate(feature_details)
             ]) if feature_details else ""
-            competitor_links_inline = build_reference_links_inline(selected_category)
+            competitor_items = get_competitor_items(selected_category, platform, target_market)
+            allowed_competitor_urls = [it.get("url", "") for it in competitor_items if (it or {}).get("url")]
+            if competitor_items:
+                parts = []
+                for it in competitor_items:
+                    title = (it or {}).get("title", "").strip()
+                    url = (it or {}).get("url", "").strip()
+                    brand = (it or {}).get("brand", "").strip()
+                    focus = (it or {}).get("focus_points", []) or []
+                    focus_text = " / ".join([x for x in focus if x])
+                    suffix = f" (focus: {focus_text})" if focus_text else ""
+                    prefix = f"{brand} - " if brand else ""
+                    parts.append(f"{prefix}{title}: {url}{suffix}")
+                competitor_links_inline = " <br> ".join(parts)
+            else:
+                competitor_links_inline = "无（请留空，不要编造）"
             config_dict = {
                 "目标平台": platform,
                 "目标市场": target_market,
@@ -688,6 +817,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
 - 与其他方案保持明显差异：开场hook、意境表达、表现手法至少两处不同。
 - 可用竞品链接与主打点（请从中选择填写到表格的“竞品链接”列，并在“竞品盖帽”列用一句话写本品在展示上的强项）：{competitor_links_inline}
+- 若可用竞品链接为“无（请留空，不要编造）”，则表格中的“竞品链接/竞品盖帽”两列必须留空。
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列（结构分段/功能点/意境表达/表现手法/特色效果/拍摄角度/运镜方式/竞品盖帽/音效/时长）必须以中文为主；允许出现极少量大写缩写（如 UI/LED/4K）。
 
 输入参数：
@@ -736,6 +866,8 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                     ok_lang2, _ = _validate_language_for_table(fixed)
                     if ok_lang2:
                         content = fixed
+
+                content = _sanitize_competitor_fields(content, allowed_competitor_urls)
 
                 variants.append({"name": f"方案{i}", "content": content})
 
