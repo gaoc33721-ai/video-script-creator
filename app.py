@@ -17,6 +17,9 @@ except ModuleNotFoundError:
 
 # 缓存文件路径（保存在云端服务器临时目录）
 CACHE_FILE_PATH = "cached_product_features.pkl"
+CACHE_META_PATH = "cache_meta.json"
+HISTORY_PATH = "script_history.json"
+FEEDBACK_PATH = "trial_feedback.json"
 
 COMPETITOR_BRAND_POOL = {
     "空气炸锅": ["Ninja", "COSORI", "Philips", "Instant", "Breville"],
@@ -110,6 +113,55 @@ COMPETITOR_VIDEO_REFERENCES = {
         },
     ],
 }
+
+def _safe_read_json(path, default_value):
+    if not os.path.exists(path):
+        return default_value
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except Exception:
+        return default_value
+
+def _safe_write_json(path, payload):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+def load_cache_meta():
+    return _safe_read_json(CACHE_META_PATH, {})
+
+def save_cache_meta(file_name, df):
+    payload = {
+        "file_name": file_name,
+        "row_count": int(len(df)) if df is not None else 0,
+        "model_count": int(df["model"].nunique()) if (df is not None and "model" in df.columns) else 0,
+        "category_count": int(df["Category"].nunique()) if (df is not None and "Category" in df.columns) else 0,
+        "updated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    return _safe_write_json(CACHE_META_PATH, payload)
+
+def load_history_records():
+    data = _safe_read_json(HISTORY_PATH, [])
+    return data if isinstance(data, list) else []
+
+def append_history_record(record, limit=12):
+    records = load_history_records()
+    records.insert(0, record)
+    records = records[:limit]
+    return _safe_write_json(HISTORY_PATH, records)
+
+def save_feedback_record(record, limit=200):
+    records = _safe_read_json(FEEDBACK_PATH, [])
+    if not isinstance(records, list):
+        records = []
+    records.insert(0, record)
+    records = records[:limit]
+    return _safe_write_json(FEEDBACK_PATH, records)
 
 def _nth_weekday_of_month(year, month, weekday, n):
     first = dt.date(year, month, 1)
@@ -716,11 +768,30 @@ def _build_excel_bytes(variants, config_dict, product_category, competitor_items
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
             prompts_rows.append({
                 "方案": sheet_name,
+                "方案标签": v.get("label", ""),
                 "表格后附加内容": remainder,
                 "竞品参考链接": build_reference_links_md(product_category, competitor_items=competitor_items).strip(),
             })
         pd.DataFrame(prompts_rows).to_excel(writer, sheet_name="附加信息", index=False)
+        if competitor_items:
+            pd.DataFrame([
+                {
+                    "品牌": (item or {}).get("brand", ""),
+                    "标题": (item or {}).get("title", ""),
+                    "链接": (item or {}).get("url", ""),
+                    "主打点": " / ".join((item or {}).get("focus_points", []) or []),
+                }
+                for item in competitor_items
+            ]).to_excel(writer, sheet_name="竞品候选", index=False)
     return buf.getvalue()
+
+def infer_variant_label(content):
+    text = str(content or "")
+    if re.search(r"痛点|烦恼|麻烦|困扰|对比|前后", text, flags=re.IGNORECASE):
+        return "偏痛点转化"
+    if re.search(r"场景|氛围|晨间|夜晚|家庭|厨房|生活方式", text, flags=re.IGNORECASE):
+        return "偏氛围种草"
+    return "偏功能展示"
 
 def build_reference_links_md(product_category, competitor_items=None):
     refs = competitor_items if isinstance(competitor_items, list) else []
@@ -801,6 +872,7 @@ with st.sidebar:
     
 # 检查是否已有缓存数据
 df_products = get_product_data()
+cache_meta = load_cache_meta()
 
 # 数据上传模块
 if df_products.empty:
@@ -814,12 +886,20 @@ if df_products.empty:
                 mask = df['language'].str.contains('英语|全球通用版', na=False)
                 df_filtered = df[mask].dropna(subset=['Feature Description', 'model', 'Category'])
                 df_filtered.to_pickle(CACHE_FILE_PATH)
+                save_cache_meta(uploaded_file.name, df_filtered)
                 st.success("✅ 文件解析并安全缓存成功！正在重新加载界面...")
                 st.rerun()
             except Exception as e:
                 st.error(f"解析文件失败: {e}")
     st.stop()
 else:
+    status_cols = st.columns(4)
+    status_cols[0].metric("当前品类数", int(df_products["Category"].nunique()) if "Category" in df_products.columns else 0)
+    status_cols[1].metric("当前型号数", int(df_products["model"].nunique()) if "model" in df_products.columns else 0)
+    status_cols[2].metric("当前卖点行数", int(len(df_products)))
+    status_cols[3].metric("缓存状态", "已加载")
+    if cache_meta:
+        st.caption(f"当前已加载文件：{cache_meta.get('file_name', '未知文件')}｜最近更新时间：{cache_meta.get('updated_at', '未知')}｜缓存仅保存在当前云端实例中。")
     with st.expander("🔄 更新产品卖点库 (目前已加载数据)"):
         uploaded_file = st.file_uploader("如果您有最新的 Excel，可以在此上传覆盖", type=["xlsx", "xls"])
         if uploaded_file is not None:
@@ -829,10 +909,40 @@ else:
                     mask = df['language'].str.contains('英语|全球通用版', na=False)
                     df_filtered = df[mask].dropna(subset=['Feature Description', 'model', 'Category'])
                     df_filtered.to_pickle(CACHE_FILE_PATH)
+                    save_cache_meta(uploaded_file.name, df_filtered)
                     st.success("✅ 数据库已更新！")
                     st.rerun()
                 except Exception as e:
                     st.error(f"解析文件失败: {e}")
+
+    history_records = load_history_records()
+    with st.expander("🕘 最近生成记录", expanded=False):
+        if not history_records:
+            st.caption("暂无历史记录。生成脚本后会自动保存最近 12 次记录，便于再次查看。")
+        else:
+            history_options = [
+                f"{r.get('created_at', '')}｜{r.get('category', '')}｜{r.get('model', '')}｜{r.get('platform', '')}"
+                for r in history_records
+            ]
+            history_idx = st.selectbox("选择历史记录", range(len(history_options)), format_func=lambda i: history_options[i])
+            selected_history = history_records[history_idx]
+            st.caption(f"历史标签：{' / '.join(selected_history.get('labels', [])) if selected_history.get('labels') else '无'}")
+            if st.button("📂 载入该次结果", use_container_width=True):
+                st.session_state["generated_variants"] = selected_history.get("variants", [])
+                history_category = selected_history.get("category", "")
+                history_competitors = get_competitor_items(history_category, "", selected_history.get("market", ""))
+                st.session_state["last_competitor_items"] = history_competitors
+                st.session_state["generated_excel_bytes"] = _build_excel_bytes(
+                    selected_history.get("variants", []),
+                    selected_history.get("config", {}),
+                    history_category,
+                    competitor_items=history_competitors,
+                )
+                st.session_state["history_loaded_note"] = f"已载入历史记录：{history_options[history_idx]}"
+                st.rerun()
+
+if st.session_state.get("history_loaded_note"):
+    st.info(st.session_state.get("history_loaded_note"))
 
 col1, col2 = st.columns(2)
 
@@ -899,12 +1009,22 @@ with col1:
         candidate_items = get_competitor_items(selected_category, platform, target_market)
         candidate_urls = []
         labels = {}
+        source_counter = {"内置参考": 0, "已勾选私有配置": 0, "手动新增": 0, "全网检索": 0}
         for it in candidate_items:
             u = (it or {}).get("url", "")
             if not u:
                 continue
             if u not in candidate_urls:
                 candidate_urls.append(u)
+            title_text = (it or {}).get("title", "")
+            if "品类私有配置" in title_text:
+                source_counter["已勾选私有配置"] += 1
+            elif "手动新增" in title_text:
+                source_counter["手动新增"] += 1
+            elif "全网检索结果" in title_text:
+                source_counter["全网检索"] += 1
+            else:
+                source_counter["内置参考"] += 1
             brand = (it or {}).get("brand", "")
             title = (it or {}).get("title", "")
             focus = (it or {}).get("focus_points", []) or []
@@ -931,6 +1051,9 @@ with col1:
                 manual_urls.append(u)
 
         _set_runtime_competitor_config(category_key, {"brands": brands, "selected_urls": selected_urls, "manual_urls": manual_urls})
+        st.caption(
+            f"当前候选链接共 {len(candidate_urls)} 条｜内置参考 {source_counter['内置参考']}｜私有配置 {source_counter['已勾选私有配置']}｜手动新增 {source_counter['手动新增']}｜全网检索 {source_counter['全网检索']}。未命中时会留空，不会乱填。"
+        )
 
         col_save, col_hint = st.columns([1, 3])
         with col_save:
@@ -975,6 +1098,7 @@ with col2:
             default=auto_topics[:3] if auto_topics else [],
         )
         extra_topic = st.text_input("补充热点（可选）", "")
+        st.caption("热点来源说明：优先自动抓取公开趋势数据；若抓取失败则展示系统兜底候选，仅供参考。")
 
     festival_hotspot_parts = []
     if selected_nodes:
@@ -1201,7 +1325,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 content = _sanitize_competitor_fields(content, allowed_competitor_urls)
                 content = _sanitize_english_columns(content)
 
-                variants.append({"name": f"方案{i}", "content": content})
+                variants.append({"name": f"方案{i}", "label": infer_variant_label(content), "content": content})
 
             progress.progress(100)
             
@@ -1209,13 +1333,25 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
             st.markdown("### 📝 生成结果预览")
             st.session_state["generated_variants"] = variants
             st.session_state["generated_excel_bytes"] = _build_excel_bytes(variants, config_dict, selected_category, competitor_items=st.session_state.get("last_competitor_items"))
+            append_history_record({
+                "created_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "category": selected_category,
+                "model": selected_model,
+                "platform": platform,
+                "market": target_market,
+                "labels": [v.get("label", "") for v in variants],
+                "variants": variants,
+                "config": config_dict,
+            })
 
 if st.session_state.get("generated_variants"):
     variants = st.session_state["generated_variants"]
     tabs = st.tabs([v.get("name", f"方案{i+1}") for i, v in enumerate(variants)])
     for i, v in enumerate(variants):
         with tabs[i]:
-            st.markdown(v.get("content", "").strip() + build_reference_links_md(selected_category))
+            if v.get("label"):
+                st.caption(f"方案定位：{v.get('label')}")
+            st.markdown(v.get("content", "").strip() + build_reference_links_md(selected_category, competitor_items=st.session_state.get("last_competitor_items")))
 
     excel_bytes = st.session_state.get("generated_excel_bytes")
     if excel_bytes:
@@ -1227,3 +1363,24 @@ if st.session_state.get("generated_variants"):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+
+    with st.expander("📝 试用反馈收集", expanded=False):
+        feedback_score = st.radio("本次生成结果可用性", ["好用", "一般", "不可用"], horizontal=True)
+        feedback_issue = st.multiselect("主要问题类型（可多选）", ["语言不合规", "表格格式", "竞品链接", "热点趋势", "脚本创意", "导出体验", "其他"])
+        feedback_note = st.text_area("补充说明（可选）", "")
+        if st.button("📮 提交试用反馈", use_container_width=True):
+            ok = save_feedback_record({
+                "created_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "category": selected_category,
+                "model": selected_model,
+                "platform": platform,
+                "market": target_market,
+                "score": feedback_score,
+                "issues": feedback_issue,
+                "note": feedback_note.strip(),
+                "labels": [v.get("label", "") for v in variants],
+            })
+            if ok:
+                st.success("反馈已记录，后续会用于试用期优化。")
+            else:
+                st.error("反馈保存失败，请稍后重试。")

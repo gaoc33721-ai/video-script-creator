@@ -8,6 +8,9 @@
 cached_product_features.pkl
 competitor_config_*.json
 competitor_candidates_*.json
+cache_meta.json
+script_history.json
+trial_feedback.json
 
 # Python 缓存
 __pycache__/
