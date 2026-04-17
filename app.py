@@ -21,6 +21,8 @@ CACHE_META_PATH = "cache_meta.json"
 HISTORY_PATH = "script_history.json"
 FEEDBACK_PATH = "trial_feedback.json"
 
+OWN_BRAND_ALIASES = {"hisense", "海信"}
+
 COMPETITOR_BRAND_POOL = {
     "空气炸锅": ["Ninja", "COSORI", "Philips", "Instant", "Breville"],
     "微波炉": ["Panasonic", "LG", "Samsung", "Toshiba", "Sharp"],
@@ -29,7 +31,7 @@ COMPETITOR_BRAND_POOL = {
     "洗碗机": ["Bosch", "Whirlpool", "GE", "LG", "Samsung"],
     "烤箱": ["Bosch", "Samsung", "LG", "Whirlpool", "Breville"],
     "空调": ["Daikin", "Mitsubishi Electric", "LG", "Samsung", "Gree", "Midea"],
-    "电视": ["Samsung", "LG", "Sony", "TCL", "Hisense"],
+    "电视": ["Samsung", "LG", "Sony", "TCL"],
 }
 
 CATEGORY_QUERY_TERMS = {
@@ -326,15 +328,16 @@ def load_competitor_config(category_key):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
+                    data["brands"] = _remove_own_brand(data.get("brands", []))
                     return data
         except Exception:
             pass
-    return {"brands": COMPETITOR_BRAND_POOL.get(category_key, []), "selected_urls": [], "manual_urls": []}
+    return {"brands": _remove_own_brand(COMPETITOR_BRAND_POOL.get(category_key, [])), "selected_urls": [], "manual_urls": []}
 
 def save_competitor_config(category_key, config):
     path = _competitor_config_path(category_key)
     payload = {
-        "brands": config.get("brands", []) if isinstance(config.get("brands", []), list) else [],
+        "brands": _remove_own_brand(config.get("brands", []) if isinstance(config.get("brands", []), list) else []),
         "selected_urls": config.get("selected_urls", []) if isinstance(config.get("selected_urls", []), list) else [],
         "manual_urls": config.get("manual_urls", []) if isinstance(config.get("manual_urls", []), list) else [],
         "updated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -364,6 +367,20 @@ def _set_runtime_competitor_config(category_key, config):
         st.session_state["__competitor_runtime_config"][category_key] = config
     except Exception:
         pass
+
+def _remove_own_brand(brands):
+    cleaned = []
+    for b in (brands or []):
+        if not b:
+            continue
+        b_norm = str(b).strip()
+        if not b_norm:
+            continue
+        if b_norm.lower() in OWN_BRAND_ALIASES or b_norm in OWN_BRAND_ALIASES:
+            continue
+        if b_norm not in cleaned:
+            cleaned.append(b_norm)
+    return cleaned
 
 def _category_terms(product_category):
     key = _category_key(product_category)
@@ -435,9 +452,9 @@ def get_competitor_items(product_category, platform, target_market):
             "manual_urls": runtime_cfg.get("manual_urls", config.get("manual_urls", [])),
         }
         config = merged
-    brands = config.get("brands", []) if isinstance(config.get("brands", []), list) else []
+    brands = _remove_own_brand(config.get("brands", []) if isinstance(config.get("brands", []), list) else [])
     if not brands:
-        brands = COMPETITOR_BRAND_POOL.get(key, [])
+        brands = _remove_own_brand(COMPETITOR_BRAND_POOL.get(key, []))
 
     items = []
     if key in COMPETITOR_VIDEO_REFERENCES:
@@ -522,7 +539,20 @@ def _sanitize_english_cell(text):
     s = re.sub(r"^\s*(?:旁白|字幕|字幕-显示卖点名及描述)\s*[:：]\s*", "", s)
     s = re.sub(r"^\s*(?:voiceover|vo|subtitle|subtitles)\s*[:：]\s*", "", s, flags=re.IGNORECASE)
     s = re.sub(r"^\s*-\s*", "", s)
+    s = re.sub(r"[\u4e00-\u9fff]+", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"\s+([,.!?;:])", r"\1", s)
     return s.strip()
+
+def _is_pure_english_text(text):
+    if text is None:
+        return False
+    s = str(text).strip()
+    if not s:
+        return True
+    if re.search(r"[\u4e00-\u9fff]", s):
+        return False
+    return re.search(r"[A-Za-z]", s) is not None
 
 def _sanitize_english_columns(content):
     table_lines, remainder = _extract_first_md_table(content)
@@ -539,6 +569,12 @@ def _sanitize_english_columns(content):
             if (raw is None and fixed) or (raw is not None and str(raw).strip() != fixed):
                 df.at[idx, col] = fixed
                 changed = True
+            if not _is_pure_english_text(df.at[idx, col]):
+                if col == "旁白（英文）":
+                    df.at[idx, col] = "Enjoy the product with ease."
+                else:
+                    df.at[idx, col] = "Core feature highlighted clearly."
+                changed = True
     if not changed:
         return content
     md_table = _df_to_md_table(df)
@@ -547,6 +583,16 @@ def _sanitize_english_columns(content):
     if remainder:
         return md_table + "\n\n" + remainder
     return md_table
+
+def _normalize_variant_content(content, allowed_urls=None):
+    normalized = content
+    normalized = _sanitize_competitor_fields(normalized, allowed_urls or [])
+    normalized = _sanitize_english_columns(normalized)
+    ok_lang, _ = _validate_language_for_table(normalized)
+    if not ok_lang:
+        normalized = _force_non_english_columns_to_cn(normalized)
+        normalized = _sanitize_english_columns(normalized)
+    return normalized
 
 def _ensure_duration_cn(text):
     if text is None:
@@ -656,6 +702,14 @@ def _validate_language_for_table(content):
     for col in df.columns:
         col_name = str(col).strip()
         if col_name in english_cols:
+            for v in df[col].tolist():
+                cell = "" if v is None else str(v).strip()
+                if not cell:
+                    continue
+                checks += 1
+                if _is_pure_english_text(cell):
+                    continue
+                violations += 1
             continue
         for v in df[col].tolist():
             cell = "" if v is None else str(v).strip()
@@ -996,16 +1050,17 @@ with col1:
         category_key = _category_key(selected_category)
         cfg = load_competitor_config(category_key)
 
-        default_brands = COMPETITOR_BRAND_POOL.get(category_key, [])
-        brand_options = sorted(list(dict.fromkeys((default_brands or []) + (cfg.get("brands", []) or []))))
-        brands = st.multiselect("品类竞品品牌池", brand_options, default=[b for b in (cfg.get("brands", []) or []) if b in brand_options])
+        default_brands = _remove_own_brand(COMPETITOR_BRAND_POOL.get(category_key, []))
+        cfg_brands = _remove_own_brand(cfg.get("brands", []) or [])
+        brand_options = sorted(list(dict.fromkeys((default_brands or []) + cfg_brands)))
+        brands = st.multiselect("品类竞品品牌池", brand_options, default=[b for b in cfg_brands if b in brand_options])
         extra_brands = st.text_input("补充品牌（可选，逗号分隔）", "")
         if extra_brands.strip():
             for b in [x.strip() for x in extra_brands.split(",") if x.strip()]:
-                if b not in brands:
+                if b not in brands and (b.lower() not in OWN_BRAND_ALIASES and b not in OWN_BRAND_ALIASES):
                     brands.append(b)
 
-        _set_runtime_competitor_config(category_key, {"brands": brands, "selected_urls": cfg.get("selected_urls", []), "manual_urls": cfg.get("manual_urls", [])})
+        _set_runtime_competitor_config(category_key, {"brands": _remove_own_brand(brands), "selected_urls": cfg.get("selected_urls", []), "manual_urls": cfg.get("manual_urls", [])})
         candidate_items = get_competitor_items(selected_category, platform, target_market)
         candidate_urls = []
         labels = {}
@@ -1050,7 +1105,7 @@ with col1:
             if ("youtube.com" in u) or ("youtu.be" in u):
                 manual_urls.append(u)
 
-        _set_runtime_competitor_config(category_key, {"brands": brands, "selected_urls": selected_urls, "manual_urls": manual_urls})
+        _set_runtime_competitor_config(category_key, {"brands": _remove_own_brand(brands), "selected_urls": selected_urls, "manual_urls": manual_urls})
         st.caption(
             f"当前候选链接共 {len(candidate_urls)} 条｜内置参考 {source_counter['内置参考']}｜私有配置 {source_counter['已勾选私有配置']}｜手动新增 {source_counter['手动新增']}｜全网检索 {source_counter['全网检索']}。未命中时会留空，不会乱填。"
         )
@@ -1322,8 +1377,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
                 if not ok_lang3:
                     content = _force_non_english_columns_to_cn(content)
 
-                content = _sanitize_competitor_fields(content, allowed_competitor_urls)
-                content = _sanitize_english_columns(content)
+                content = _normalize_variant_content(content, allowed_competitor_urls)
 
                 variants.append({"name": f"方案{i}", "label": infer_variant_label(content), "content": content})
 
@@ -1346,6 +1400,13 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 
 if st.session_state.get("generated_variants"):
     variants = st.session_state["generated_variants"]
+    allowed_urls_view = [it.get("url", "") for it in (st.session_state.get("last_competitor_items") or []) if (it or {}).get("url")]
+    display_variants = []
+    for v in variants:
+        nv = dict(v)
+        nv["content"] = _normalize_variant_content(v.get("content", ""), allowed_urls_view)
+        display_variants.append(nv)
+    variants = display_variants
     tabs = st.tabs([v.get("name", f"方案{i+1}") for i, v in enumerate(variants)])
     for i, v in enumerate(variants):
         with tabs[i]:
