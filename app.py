@@ -73,6 +73,17 @@ DEFAULT_PAIN_POINTS = {
     "电视": "画面不够清晰/拖影影响观影和游戏；音效不够沉浸；反光严重白天看不清；接口不够/连接麻烦；系统卡顿广告多",
 }
 
+DEFAULT_TARGET_AUDIENCE = {
+    "空气炸锅": "忙碌的年轻上班族/学生；健身控/轻食人群；小家庭用户",
+    "微波炉": "快节奏上班族；租房党/小户型用户；有娃家庭",
+    "冰箱": "家庭用户；精细化备餐人群；爱囤货用户",
+    "洗衣机": "家庭用户；有娃家庭；健身/通勤高频换洗人群",
+    "洗碗机": "有娃家庭；双职工家庭；不愿手洗油污的人群",
+    "烤箱": "烘焙新手；家庭用户；周末做饭/聚会人群",
+    "空调": "对睡眠舒适度敏感的人群；家庭用户；小户型租房用户",
+    "电视": "家庭观影人群；游戏玩家；追剧党",
+}
+
 COMPETITOR_VIDEO_REFERENCES = {
     "空气炸锅": [
         {
@@ -1127,14 +1138,22 @@ with col2:
     video_usage = st.selectbox("视频用途", ["站外种草", "站内首推", "内部培训", "其他"])
     expected_duration = st.slider("期望视频时长(秒)", 15, 45, 30, 1)
     project_type = st.selectbox("项目类型(可选)", ["常规上新", "新品上市", "大促活动", "教程培训", "其他"])
-    general_audience_mode = st.checkbox("不指定目标受众（通用卖点）", value=False)
-    target_audience = st.text_input(
-        "目标受众",
-        "关注身材管理的年轻上班族/学生",
-        disabled=general_audience_mode,
-    )
+    general_audience_mode = st.checkbox("不指定目标受众（通用卖点）", value=True, key="general_audience_mode")
+    _aud_key = _category_key(selected_category)
+    if st.session_state.get("last_audience_category") != _aud_key:
+        st.session_state["last_audience_category"] = _aud_key
+        if not general_audience_mode:
+            st.session_state["target_audience"] = DEFAULT_TARGET_AUDIENCE.get(_aud_key, "家庭用户；年轻上班族；追求省时省力的人群")
+    if "target_audience" not in st.session_state:
+        st.session_state["target_audience"] = DEFAULT_TARGET_AUDIENCE.get(_aud_key, "家庭用户；年轻上班族；追求省时省力的人群")
     if general_audience_mode:
-        target_audience = ""
+        st.session_state["target_audience"] = ""
+    else:
+        if st.session_state.get("last_general_audience_mode") is True or not str(st.session_state.get("target_audience", "")).strip():
+            st.session_state["target_audience"] = DEFAULT_TARGET_AUDIENCE.get(_aud_key, "家庭用户；年轻上班族；追求省时省力的人群")
+    st.session_state["last_general_audience_mode"] = bool(general_audience_mode)
+
+    target_audience = st.text_input("目标受众", key="target_audience", disabled=general_audience_mode)
     _pain_key = _category_key(selected_category)
     if st.session_state.get("last_pain_category") != _pain_key:
         st.session_state["last_pain_category"] = _pain_key
