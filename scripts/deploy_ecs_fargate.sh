@@ -234,6 +234,18 @@ if [[ "$STORAGE_BACKEND" == "s3" ]]; then
     echo "S3_BUCKET is required when STORAGE_BACKEND=s3" >&2
     exit 1
   fi
+  if ! aws s3api head-bucket --bucket "$S3_BUCKET" >/dev/null 2>&1; then
+    if [[ "$AWS_REGION" == "us-east-1" ]]; then
+      aws s3api create-bucket \
+        --bucket "$S3_BUCKET" \
+        --region "$AWS_REGION" >/dev/null
+    else
+      aws s3api create-bucket \
+        --bucket "$S3_BUCKET" \
+        --region "$AWS_REGION" \
+        --create-bucket-configuration LocationConstraint="$AWS_REGION" >/dev/null
+    fi
+  fi
   python3 - "$POLICY_DOC" "$S3_BUCKET" <<'PY'
 import json, sys
 path, bucket = sys.argv[1], sys.argv[2]

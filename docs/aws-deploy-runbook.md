@@ -130,6 +130,19 @@ export S3_PREFIX=runtime
 bash scripts/deploy_apprunner.sh
 ```
 
+ECS/Fargate 使用 S3 持久化：
+
+```bash
+export STORAGE_BACKEND=s3
+export S3_BUCKET=video-script-creator-prod-assets-625093290485
+export S3_PREFIX=runtime
+
+bash scripts/deploy_ecs_fargate.sh
+bash scripts/ecs_status.sh
+```
+
+`deploy_ecs_fargate.sh` 会在 bucket 不存在时自动创建，并给 ECS task role 增加对应 bucket 的读写权限。
+
 脚本会创建/更新：
 
 - ECR repository
