@@ -259,6 +259,18 @@ if [[ -n "$APP_ACCESS_PASSWORD" && -z "$APP_ACCESS_PASSWORD_SECRET_ARN" ]]; then
     --output text)"
 fi
 
+if [[ -z "$APP_ACCESS_PASSWORD" && -z "$APP_ACCESS_PASSWORD_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$APP_ACCESS_PASSWORD_SECRET_NAME" >/dev/null 2>&1; then
+    APP_ACCESS_PASSWORD_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$APP_ACCESS_PASSWORD_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
 if ! aws iam get-role --role-name "$TASK_ROLE" >/dev/null 2>&1; then
   aws iam create-role \
     --role-name "$TASK_ROLE" \
