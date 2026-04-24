@@ -18,7 +18,7 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-COPY app.py .
+COPY app.py storage_adapters.py product_feature_store.py ./
 
 RUN mkdir -p /app/data
 

@@ -86,6 +86,37 @@ docker tag video-script-creator:local <account-id>.dkr.ecr.<region>.amazonaws.co
 docker push <account-id>.dkr.ecr.<region>.amazonaws.com/video-script-creator:latest
 ```
 
+## 3.1 快速部署到 App Runner
+
+CloudShell 中确认 `python3 scripts/check_aws_ready.py` 成功后，可以先用 App Runner 跑内部试用版：
+
+```bash
+export AWS_REGION=eu-central-1
+export AWS_DEFAULT_REGION=eu-central-1
+export BEDROCK_AWS_REGION=eu-central-1
+export BEDROCK_MODEL_ID=eu.amazon.nova-pro-v1:0
+
+bash scripts/deploy_apprunner.sh
+```
+
+默认使用本地容器临时存储。若要让上传的 Excel 和配置持久化到 S3：
+
+```bash
+export STORAGE_BACKEND=s3
+export S3_BUCKET=video-script-creator-prod-assets-625093290485
+export S3_PREFIX=runtime
+
+bash scripts/deploy_apprunner.sh
+```
+
+脚本会创建/更新：
+
+- ECR repository
+- App Runner ECR access role
+- App Runner instance role
+- App Runner service
+- 可选 S3 bucket
+
 ## 4. ECS 任务环境变量
 
 | 名称 | 来源 | 示例 |
