@@ -112,6 +112,14 @@ bash scripts/apprunner_status.sh
 - `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false`
 - `STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION=false`
 
+如果 App Runner 仍无法加载 Streamlit 页面，切到 ECS Fargate + ALB：
+
+```bash
+git pull
+bash scripts/deploy_ecs_fargate.sh
+bash scripts/ecs_status.sh
+```
+
 默认使用本地容器临时存储。若要让上传的 Excel 和配置持久化到 S3：
 
 ```bash
