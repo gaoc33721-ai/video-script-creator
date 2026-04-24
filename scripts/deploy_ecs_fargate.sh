@@ -9,6 +9,8 @@ BEDROCK_MAX_TOKENS="${BEDROCK_MAX_TOKENS:-4096}"
 STORAGE_BACKEND="${STORAGE_BACKEND:-local}"
 S3_BUCKET="${S3_BUCKET:-}"
 S3_PREFIX="${S3_PREFIX:-runtime}"
+APP_ACCESS_PASSWORD="${APP_ACCESS_PASSWORD:-}"
+ALLOWED_HTTP_CIDRS="${ALLOWED_HTTP_CIDRS:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-8501}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
 
@@ -92,6 +94,32 @@ if [[ "$ALB_SG_ID" == "None" || -z "$ALB_SG_ID" ]]; then
     --protocol tcp \
     --port 80 \
     --cidr 0.0.0.0/0 >/dev/null
+fi
+
+if [[ -n "$ALLOWED_HTTP_CIDRS" ]]; then
+  EXISTING_PERMISSIONS="$(aws ec2 describe-security-groups \
+    --region "$AWS_REGION" \
+    --group-ids "$ALB_SG_ID" \
+    --query "SecurityGroups[0].IpPermissions[?IpProtocol=='tcp' && FromPort==\`80\` && ToPort==\`80\`]" \
+    --output json)"
+  if [[ "$EXISTING_PERMISSIONS" != "[]" ]]; then
+    aws ec2 revoke-security-group-ingress \
+      --region "$AWS_REGION" \
+      --group-id "$ALB_SG_ID" \
+      --ip-permissions "$EXISTING_PERMISSIONS" >/dev/null || true
+  fi
+  IFS=',' read -ra CIDRS <<< "$ALLOWED_HTTP_CIDRS"
+  for cidr in "${CIDRS[@]}"; do
+    cidr="$(echo "$cidr" | xargs)"
+    if [[ -n "$cidr" ]]; then
+      aws ec2 authorize-security-group-ingress \
+        --region "$AWS_REGION" \
+        --group-id "$ALB_SG_ID" \
+        --protocol tcp \
+        --port 80 \
+        --cidr "$cidr" >/dev/null || true
+    fi
+  done
 fi
 
 TASK_SG_ID="$(get_sg_id "$TASK_SG_NAME")"
@@ -302,6 +330,8 @@ if "${S3_BUCKET}":
     env.append({"name": "S3_BUCKET", "value": "${S3_BUCKET}"})
 if "${S3_PREFIX}":
     env.append({"name": "S3_PREFIX", "value": "${S3_PREFIX}"})
+if "${APP_ACCESS_PASSWORD}":
+    env.append({"name": "APP_ACCESS_PASSWORD", "value": "${APP_ACCESS_PASSWORD}"})
 
 doc = {
     "family": "${TASK_FAMILY}",

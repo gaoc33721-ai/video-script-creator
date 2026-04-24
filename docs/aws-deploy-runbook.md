@@ -145,6 +145,28 @@ bash scripts/ecs_status.sh
 
 `deploy_ecs_fargate.sh` 会在 bucket 不存在时自动创建，并给 ECS task role 增加对应 bucket 的读写权限。
 
+## 3.2 访问控制
+
+试用期建议先启用应用访问密码：
+
+```bash
+export APP_ACCESS_PASSWORD='替换为内部试用密码'
+bash scripts/deploy_ecs_fargate.sh
+```
+
+如果已经拿到公司出口 IP/CIDR，可同时限制 ALB 只允许这些来源访问：
+
+```bash
+export ALLOWED_HTTP_CIDRS='203.0.113.10/32,198.51.100.0/24'
+bash scripts/deploy_ecs_fargate.sh
+```
+
+说明：
+
+- `APP_ACCESS_PASSWORD` 为空时，不显示密码门禁。
+- `ALLOWED_HTTP_CIDRS` 为空时，ALB 保持当前安全组规则。
+- 正式版建议接入 Cognito / IAM Identity Center / 公司 SSO。
+
 脚本会创建/更新：
 
 - ECR repository

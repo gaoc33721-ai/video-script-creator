@@ -5,6 +5,7 @@ import pandas as pd
 import datetime as dt
 import io
 import re
+import hmac
 import xml.etree.ElementTree as ET
 import urllib.parse
 
@@ -36,6 +37,7 @@ BEDROCK_AWS_REGION = (
 )
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
+APP_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
 
 OWN_BRAND_ALIASES = {"hisense", "海信"}
 
@@ -897,7 +899,26 @@ def get_product_data():
     """从存储适配层读取产品卖点数据。"""
     return PRODUCT_FEATURE_STORE.load()
 
+def require_access():
+    if not APP_ACCESS_PASSWORD:
+        return True
+    if st.session_state.get("__access_granted"):
+        return True
+
+    st.title("🎬 海外电商视频脚本生成器")
+    st.info("请输入访问密码。")
+    password = st.text_input("访问密码", type="password")
+    if st.button("进入平台", type="primary"):
+        if hmac.compare_digest(password or "", APP_ACCESS_PASSWORD):
+            st.session_state["__access_granted"] = True
+            st.rerun()
+        else:
+            st.error("访问密码不正确。")
+    st.stop()
+
 st.set_page_config(page_title="海外电商视频脚本生成器", page_icon="🎬", layout="wide")
+
+require_access()
 
 st.title("🎬 海外电商视频脚本生成器")
 st.markdown("基于《电商产品种草视频知识库》规范，为您自动生成高转化率的短视频脚本。")
