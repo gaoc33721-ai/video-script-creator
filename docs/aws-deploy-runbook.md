@@ -106,6 +106,12 @@ git pull
 bash scripts/apprunner_status.sh
 ```
 
+如果健康检查返回 `ok` 但浏览器一直停留在 Streamlit 骨架屏，通常是反向代理下 websocket/session 配置问题。镜像中已设置：
+
+- `STREAMLIT_SERVER_ENABLE_CORS=false`
+- `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false`
+- `STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION=false`
+
 默认使用本地容器临时存储。若要让上传的 Excel 和配置持久化到 S3：
 
 ```bash
