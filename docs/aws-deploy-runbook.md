@@ -130,6 +130,8 @@ bash scripts/deploy_apprunner.sh
 - App Runner service
 - 可选 S3 bucket
 
+部署脚本默认使用当前 git commit 短 SHA 作为镜像 tag，避免 App Runner 因复用 `latest` 标签而继续运行旧镜像。
+
 ## 4. ECS 任务环境变量
 
 | 名称 | 来源 | 示例 |
