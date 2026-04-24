@@ -29,3 +29,4 @@ ENV/
 
 # Streamlit 配置缓存
 .streamlit/
+.runtime_data/

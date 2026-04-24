@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import json
 import os
 import pandas as pd
 import datetime as dt
@@ -9,17 +8,34 @@ import re
 import xml.etree.ElementTree as ET
 import urllib.parse
 
+from product_feature_store import ProductFeatureStore, filter_product_features
+from storage_adapters import RuntimeStorage
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ModuleNotFoundError:
     load_dotenv = None
 
-# 缓存文件路径（保存在云端服务器临时目录）
-CACHE_FILE_PATH = "cached_product_features.pkl"
-CACHE_META_PATH = "cache_meta.json"
-HISTORY_PATH = "script_history.json"
-FEEDBACK_PATH = "trial_feedback.json"
+# 运行时数据目录：本地默认写入仓库内，AWS 部署时可切换为 S3/RDS。
+APP_DATA_DIR = os.getenv("APP_DATA_DIR", ".")
+os.makedirs(APP_DATA_DIR, exist_ok=True)
+
+STORAGE = RuntimeStorage()
+PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
+
+CACHE_META_KEY = "cache_meta.json"
+HISTORY_KEY = "script_history.json"
+FEEDBACK_KEY = "trial_feedback.json"
+
+BEDROCK_AWS_REGION = (
+    os.getenv("BEDROCK_AWS_REGION")
+    or os.getenv("AWS_REGION")
+    or os.getenv("AWS_DEFAULT_REGION")
+    or "us-east-1"
+)
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
 
 OWN_BRAND_ALIASES = {"hisense", "海信"}
 
@@ -127,26 +143,14 @@ COMPETITOR_VIDEO_REFERENCES = {
     ],
 }
 
-def _safe_read_json(path, default_value):
-    if not os.path.exists(path):
-        return default_value
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data
-    except Exception:
-        return default_value
+def _safe_read_json(key, default_value):
+    return STORAGE.read_json(key, default_value)
 
-def _safe_write_json(path, payload):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        return False
+def _safe_write_json(key, payload):
+    return STORAGE.write_json(key, payload)
 
 def load_cache_meta():
-    return _safe_read_json(CACHE_META_PATH, {})
+    return _safe_read_json(CACHE_META_KEY, {})
 
 def save_cache_meta(file_name, df):
     payload = {
@@ -156,25 +160,25 @@ def save_cache_meta(file_name, df):
         "category_count": int(df["Category"].nunique()) if (df is not None and "Category" in df.columns) else 0,
         "updated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-    return _safe_write_json(CACHE_META_PATH, payload)
+    return _safe_write_json(CACHE_META_KEY, payload)
 
 def load_history_records():
-    data = _safe_read_json(HISTORY_PATH, [])
+    data = _safe_read_json(HISTORY_KEY, [])
     return data if isinstance(data, list) else []
 
 def append_history_record(record, limit=12):
     records = load_history_records()
     records.insert(0, record)
     records = records[:limit]
-    return _safe_write_json(HISTORY_PATH, records)
+    return _safe_write_json(HISTORY_KEY, records)
 
 def save_feedback_record(record, limit=200):
-    records = _safe_read_json(FEEDBACK_PATH, [])
+    records = _safe_read_json(FEEDBACK_KEY, [])
     if not isinstance(records, list):
         records = []
     records.insert(0, record)
     records = records[:limit]
-    return _safe_write_json(FEEDBACK_PATH, records)
+    return _safe_write_json(FEEDBACK_KEY, records)
 
 def _nth_weekday_of_month(year, month, weekday, n):
     first = dt.date(year, month, 1)
@@ -333,16 +337,10 @@ def _competitor_config_path(category_key):
     return f"competitor_config_{_safe_slug(category_key)}.json"
 
 def load_competitor_config(category_key):
-    path = _competitor_config_path(category_key)
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    data["brands"] = _remove_own_brand(data.get("brands", []))
-                    return data
-        except Exception:
-            pass
+    data = _safe_read_json(_competitor_config_path(category_key), {})
+    if isinstance(data, dict) and data:
+        data["brands"] = _remove_own_brand(data.get("brands", []))
+        return data
     return {"brands": _remove_own_brand(COMPETITOR_BRAND_POOL.get(category_key, [])), "selected_urls": [], "manual_urls": []}
 
 def save_competitor_config(category_key, config):
@@ -353,12 +351,7 @@ def save_competitor_config(category_key, config):
         "manual_urls": config.get("manual_urls", []) if isinstance(config.get("manual_urls", []), list) else [],
         "updated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-    except Exception:
-        return False
-    return True
+    return _safe_write_json(path, payload)
 
 def _get_runtime_competitor_config(category_key):
     try:
@@ -900,22 +893,9 @@ def build_reference_links_inline(product_category):
         parts.append(f"{prefix}{title}: {url}{suffix}")
     return " <br> ".join(parts)
 
-def get_api_key():
-    try:
-        if "MINIMAX_API_KEY" in st.secrets:
-            return st.secrets["MINIMAX_API_KEY"]
-    except Exception:
-        pass
-    return os.getenv("MINIMAX_API_KEY", "")
-
 def get_product_data():
-    """从本地缓存文件读取数据"""
-    if os.path.exists(CACHE_FILE_PATH):
-        try:
-            return pd.read_pickle(CACHE_FILE_PATH)
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
+    """从存储适配层读取产品卖点数据。"""
+    return PRODUCT_FEATURE_STORE.load()
 
 st.set_page_config(page_title="海外电商视频脚本生成器", page_icon="🎬", layout="wide")
 
@@ -941,18 +921,17 @@ cache_meta = load_cache_meta()
 
 # 数据上传模块
 if df_products.empty:
-    st.info("👋 欢迎使用！首次使用请上传您的《产品卖点库》Excel 文件。数据仅在当前服务器安全暂存，不会泄露。")
-    st.caption("提示：每次云端重启/更新代码后，服务器本地缓存可能会被清空，需要重新上传一次。")
+    st.info("👋 欢迎使用！首次使用请上传您的《产品卖点库》Excel 文件。")
+    st.caption("提示：当前会通过存储适配层保存数据；配置 S3/RDS 后可持久化到 AWS。")
     uploaded_file = st.file_uploader("拖拽或点击上传 Excel 文件", type=["xlsx", "xls"])
     if uploaded_file is not None:
         with st.spinner("正在解析文件..."):
             try:
-                df = pd.read_excel(uploaded_file)
-                mask = df['language'].str.contains('英语|全球通用版', na=False)
-                df_filtered = df[mask].dropna(subset=['Feature Description', 'model', 'Category'])
-                df_filtered.to_pickle(CACHE_FILE_PATH)
-                save_cache_meta(uploaded_file.name, df_filtered)
-                st.success("✅ 文件解析并安全缓存成功！正在重新加载界面...")
+                file_bytes = uploaded_file.getvalue()
+                df = pd.read_excel(io.BytesIO(file_bytes))
+                df_filtered = filter_product_features(df)
+                PRODUCT_FEATURE_STORE.save(uploaded_file.name, file_bytes, df_filtered)
+                st.success("✅ 文件解析并保存成功！正在重新加载界面...")
                 st.rerun()
             except Exception as e:
                 st.error(f"解析文件失败: {e}")
@@ -964,17 +943,21 @@ else:
     status_cols[2].metric("当前卖点行数", int(len(df_products)))
     status_cols[3].metric("缓存状态", "已加载")
     if cache_meta:
-        st.caption(f"当前已加载文件：{cache_meta.get('file_name', '未知文件')}｜最近更新时间：{cache_meta.get('updated_at', '未知')}｜缓存仅保存在当前云端实例中。")
+        st.caption(
+            f"当前已加载文件：{cache_meta.get('file_name', '未知文件')}｜"
+            f"最近更新时间：{cache_meta.get('updated_at', '未知')}｜"
+            f"存储：{cache_meta.get('storage_backend', os.getenv('STORAGE_BACKEND', 'local'))}｜"
+            f"数据库：{'已启用' if cache_meta.get('database_enabled') else '未启用'}"
+        )
     with st.expander("🔄 更新产品卖点库 (目前已加载数据)"):
         uploaded_file = st.file_uploader("如果您有最新的 Excel，可以在此上传覆盖", type=["xlsx", "xls"])
         if uploaded_file is not None:
             with st.spinner("正在更新文件..."):
                 try:
-                    df = pd.read_excel(uploaded_file)
-                    mask = df['language'].str.contains('英语|全球通用版', na=False)
-                    df_filtered = df[mask].dropna(subset=['Feature Description', 'model', 'Category'])
-                    df_filtered.to_pickle(CACHE_FILE_PATH)
-                    save_cache_meta(uploaded_file.name, df_filtered)
+                    file_bytes = uploaded_file.getvalue()
+                    df = pd.read_excel(io.BytesIO(file_bytes))
+                    df_filtered = filter_product_features(df)
+                    PRODUCT_FEATURE_STORE.save(uploaded_file.name, file_bytes, df_filtered)
                     st.success("✅ 数据库已更新！")
                     st.rerun()
                 except Exception as e:
@@ -1230,32 +1213,33 @@ Recommended Settings（选填）:
 - 输出一行即可，例如：16:9 or 9:16, 24fps, 4-6s clips per shot, realistic style
 """
 
-def generate_script_minimax(api_key, user_prompt, temperature=0.7, top_p=0.9, max_tokens=3072):
-    url = "https://api.minimax.chat/v1/text/chatcompletion_v2"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-    
-    payload = {
-        "model": "abab6.5s-chat",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
-        ],
-        "temperature": temperature,
-        "top_p": top_p,
-        "max_tokens": max_tokens
-    }
-    
+def generate_script_bedrock(user_prompt, temperature=0.7, top_p=0.9, max_tokens=None):
+    max_tokens = int(max_tokens or BEDROCK_MAX_TOKENS)
     try:
-        # 添加 verify=False 忽略 SSL 验证，防止在某些代理/公司网络下报错
-        response = requests.post(url, headers=headers, json=payload, verify=False)
-        response.raise_for_status()
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
+        import boto3
+
+        client = boto3.client("bedrock-runtime", region_name=BEDROCK_AWS_REGION)
+        response = client.converse(
+            modelId=BEDROCK_MODEL_ID,
+            system=[{"text": SYSTEM_PROMPT}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"text": user_prompt}],
+                }
+            ],
+            inferenceConfig={
+                "temperature": float(temperature),
+                "maxTokens": max_tokens,
+            },
+        )
+        content_blocks = response.get("output", {}).get("message", {}).get("content", [])
+        return "\n".join([block.get("text", "") for block in content_blocks if block.get("text")]).strip()
     except Exception as e:
-        return f"API 调用失败: {str(e)}\n请检查 API Key 是否正确，或网络是否通畅。"
+        return (
+            f"Bedrock API 调用失败: {str(e)}\n"
+            f"请检查 AWS 凭证、区域 {BEDROCK_AWS_REGION}、模型权限 {BEDROCK_MODEL_ID} 是否已配置。"
+        )
 
 if "generated_variants" not in st.session_state:
     st.session_state["generated_variants"] = []
@@ -1263,12 +1247,7 @@ if "generated_excel_bytes" not in st.session_state:
     st.session_state["generated_excel_bytes"] = None
 
 if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True):
-    api_key = get_api_key()
-    
-    if not api_key:
-        st.error("未找到 MiniMax API Key。请在 Streamlit Cloud 的 Secrets 或本地 .env 文件中配置 MINIMAX_API_KEY。")
-    else:
-        with st.spinner("正在调用大模型生成脚本..."):
+    with st.spinner(f"正在调用 Amazon Bedrock 生成脚本...（{BEDROCK_MODEL_ID} / {BEDROCK_AWS_REGION}）"):
             feature_details = []
             for v in selected_features:
                 desc = ""
@@ -1359,11 +1338,11 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 - 结合热点：{festival_hotspot}
 """.strip()
 
-                content = generate_script_minimax(api_key, variant_prompt)
+                content = generate_script_bedrock(variant_prompt)
                 content = _strip_code_fences(content)
                 if (table_header_line not in content) or ("总时长" not in content):
                     retry_prompt = variant_prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
-                    content_retry = generate_script_minimax(api_key, retry_prompt, temperature=0.3, top_p=0.8)
+                    content_retry = generate_script_bedrock(retry_prompt, temperature=0.3, top_p=0.8)
                     content_retry = _strip_code_fences(content_retry)
                     if (table_header_line in content_retry) and ("总时长" in content_retry):
                         content = content_retry
@@ -1383,7 +1362,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
 """.strip()
                     fixed = content
                     for _ in range(2):
-                        fixed_try = generate_script_minimax(api_key, fix_prompt, temperature=0.2, top_p=0.7)
+                        fixed_try = generate_script_bedrock(fix_prompt, temperature=0.2, top_p=0.7)
                         fixed_try = _strip_code_fences(fixed_try)
                         ok_lang2, _ = _validate_language_for_table(fixed_try)
                         if ok_lang2:
