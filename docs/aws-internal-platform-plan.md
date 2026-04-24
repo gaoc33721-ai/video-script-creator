@@ -36,7 +36,7 @@ flowchart LR
   Web --> API["脚本生成服务"]
   API --> RDS["RDS PostgreSQL<br/>业务数据 + pgvector"]
   API --> S3["S3<br/>Excel/导出/素材文件"]
-  API --> LLM["Amazon Bedrock<br/>Claude Sonnet / Nova"]
+  API --> LLM["Amazon Bedrock<br/>Amazon Nova Pro"]
   Scheduler["EventBridge Scheduler"] --> Pipeline["Step Functions / ECS Task<br/>竞品采集与分析流水线"]
   Pipeline --> S3
   Pipeline --> RDS
@@ -68,9 +68,9 @@ flowchart LR
 - 运行时数据统一写入 `APP_DATA_DIR`。
 - Bedrock 区域、模型和输出 token 上限可通过环境变量配置。
 - 存储适配层支持本地/S3 切换；产品卖点支持本地缓存/RDS PostgreSQL 切换。
-- 默认脚本生成模型：`anthropic.claude-sonnet-4-5-20250929-v1:0`。
-  - 适合原因：长上下文、复杂指令遵循、结构化表格输出稳定性更适合脚本生成。
-  - 如果账号或区域未开通该模型，直接通过 `BEDROCK_MODEL_ID` 切到已授权的 Claude/Nova 模型。
+- 默认脚本生成模型：`eu.amazon.nova-pro-v1:0`。
+  - 适合原因：Amazon 自有模型更适合当前账号/区域落地；Nova Pro 比 Lite 更适合多约束脚本生成、表格输出、中英混排。
+  - 如果账号或区域未开通该 inference profile，直接通过 `BEDROCK_MODEL_ID` 切到已授权的 Nova profile 或模型。
 - 本地验证 Streamlit 可在容器中启动。
 
 ### Phase 1：内部试用版

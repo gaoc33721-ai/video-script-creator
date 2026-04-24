@@ -23,7 +23,7 @@ def main() -> int:
         return fail("boto3/botocore is not installed. Run `pip install -r requirements.txt`.")
 
     region = os.getenv("BEDROCK_AWS_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
-    model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+    model_id = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
     bucket = os.getenv("S3_BUCKET") or os.getenv("APP_S3_BUCKET")
 
     try:
@@ -55,6 +55,8 @@ def main() -> int:
         ]
         if matching:
             ok(f"Bedrock model is listed in {region}: {model_id}")
+        elif model_id.startswith(("eu.", "us.", "apac.", "global.")):
+            warn(f"{model_id} looks like an inference profile ID; skipping foundation-model list match.")
         else:
             warn(f"Bedrock model was not found in list_foundation_models for {region}: {model_id}")
     except (BotoCoreError, ClientError) as exc:

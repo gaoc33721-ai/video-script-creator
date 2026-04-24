@@ -34,7 +34,7 @@ BEDROCK_AWS_REGION = (
     or os.getenv("AWS_DEFAULT_REGION")
     or "us-east-1"
 )
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
 
 OWN_BRAND_ALIASES = {"hisense", "海信"}

@@ -6,7 +6,7 @@
 docker build -t video-script-creator:local .
 docker run --rm -p 8501:8501 `
   -e BEDROCK_AWS_REGION="us-east-1" `
-  -e BEDROCK_MODEL_ID="anthropic.claude-sonnet-4-5-20250929-v1:0" `
+  -e BEDROCK_MODEL_ID="eu.amazon.nova-pro-v1:0" `
   -e APP_DATA_DIR=/app/data `
   video-script-creator:local
 ```
@@ -59,8 +59,8 @@ $env:AWS_PROFILE="video-script-prod"
 1. 打开 Amazon Bedrock。
 2. 确认区域与 `BEDROCK_AWS_REGION` 一致，例如 `us-east-1`。
 3. 打开 Model access / Model catalog。
-4. 确认目标模型可用：默认是 `anthropic.claude-sonnet-4-5-20250929-v1:0`。
-5. 如果该模型不可用，选择账号已可用的 Claude Sonnet 或 Amazon Nova 模型，并把 `BEDROCK_MODEL_ID` 改成对应模型 ID。
+4. 确认目标模型可用：默认是 `eu.amazon.nova-pro-v1:0`。
+5. 如果该 profile 不可用，选择账号已可用的 Amazon Nova 模型/profile，并把 `BEDROCK_MODEL_ID` 改成对应 ID。
 
 AWS 当前文档说明：Bedrock 模型访问与 Marketplace/模型访问权限相关；Converse 调用需要 `bedrock:InvokeModel` 权限。
 
@@ -91,7 +91,7 @@ docker push <account-id>.dkr.ecr.<region>.amazonaws.com/video-script-creator:lat
 | 名称 | 来源 | 示例 |
 |---|---|---|
 | `BEDROCK_AWS_REGION` | Environment | `us-east-1` |
-| `BEDROCK_MODEL_ID` | Environment | `anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| `BEDROCK_MODEL_ID` | Environment | `eu.amazon.nova-pro-v1:0` |
 | `BEDROCK_MAX_TOKENS` | Environment | `4096` |
 | `APP_DATA_DIR` | Environment | `/app/data` |
 | `STORAGE_BACKEND` | Environment | `local` 或 `s3` |
