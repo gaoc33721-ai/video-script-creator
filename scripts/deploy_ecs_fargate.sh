@@ -159,6 +159,15 @@ if [[ -z "$TG_ARN" || "$TG_ARN" == "None" ]]; then
     --output text)"
 fi
 
+aws elbv2 modify-target-group-attributes \
+  --region "$AWS_REGION" \
+  --target-group-arn "$TG_ARN" \
+  --attributes \
+    Key=stickiness.enabled,Value=true \
+    Key=stickiness.type,Value=lb_cookie \
+    Key=stickiness.lb_cookie.duration_seconds,Value=86400 \
+    Key=deregistration_delay.timeout_seconds,Value=30 >/dev/null
+
 LISTENER_ARN="$(aws elbv2 describe-listeners \
   --region "$AWS_REGION" \
   --load-balancer-arn "$ALB_ARN" \

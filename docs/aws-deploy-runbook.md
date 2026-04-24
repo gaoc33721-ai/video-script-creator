@@ -120,6 +120,8 @@ bash scripts/deploy_ecs_fargate.sh
 bash scripts/ecs_status.sh
 ```
 
+ECS/Fargate 的 target group 会开启 ALB sticky session。Streamlit 的上传和页面会话依赖同一个后端 task；滚动部署期间若浏览器仍连着旧 task，可能出现 `AxiosError: Request failed with status code 400`。等待部署 stable 后强刷页面再上传即可。
+
 默认使用本地容器临时存储。若要让上传的 Excel 和配置持久化到 S3：
 
 ```bash
