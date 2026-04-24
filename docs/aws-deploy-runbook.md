@@ -99,6 +99,13 @@ export BEDROCK_MODEL_ID=eu.amazon.nova-pro-v1:0
 bash scripts/deploy_apprunner.sh
 ```
 
+部署后查状态和日志：
+
+```bash
+git pull
+bash scripts/apprunner_status.sh
+```
+
 默认使用本地容器临时存储。若要让上传的 Excel 和配置持久化到 S3：
 
 ```bash
