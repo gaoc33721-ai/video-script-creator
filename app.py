@@ -909,7 +909,7 @@ def require_access():
     st.info("请输入访问密码。")
     password = st.text_input("访问密码", type="password")
     if st.button("进入平台", type="primary"):
-        if hmac.compare_digest(password or "", APP_ACCESS_PASSWORD):
+        if hmac.compare_digest((password or "").encode("utf-8"), APP_ACCESS_PASSWORD.encode("utf-8")):
             st.session_state["__access_granted"] = True
             st.rerun()
         else:
