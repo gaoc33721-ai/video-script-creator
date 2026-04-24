@@ -12,6 +12,7 @@ S3_PREFIX="${S3_PREFIX:-runtime}"
 APP_ACCESS_PASSWORD="${APP_ACCESS_PASSWORD:-}"
 APP_ACCESS_PASSWORD_SECRET_NAME="${APP_ACCESS_PASSWORD_SECRET_NAME:-${APP_NAME}/app-access-password}"
 APP_ACCESS_PASSWORD_SECRET_ARN="${APP_ACCESS_PASSWORD_SECRET_ARN:-}"
+APP_ACCESS_PASSWORD_CACHE_TTL="${APP_ACCESS_PASSWORD_CACHE_TTL:-30}"
 ALLOWED_HTTP_CIDRS="${ALLOWED_HTTP_CIDRS:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-8501}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
@@ -366,6 +367,10 @@ JSON
     --role-name "$TASK_EXEC_ROLE" \
     --policy-name "${APP_NAME}-read-app-secrets" \
     --policy-document "file://${SECRET_POLICY_DOC}"
+  aws iam put-role-policy \
+    --role-name "$TASK_ROLE" \
+    --policy-name "${APP_NAME}-read-app-secrets-runtime" \
+    --policy-document "file://${SECRET_POLICY_DOC}"
 fi
 
 TASK_DEF_FILE="$(mktemp)"
@@ -385,6 +390,9 @@ if "${S3_BUCKET}":
     env.append({"name": "S3_BUCKET", "value": "${S3_BUCKET}"})
 if "${S3_PREFIX}":
     env.append({"name": "S3_PREFIX", "value": "${S3_PREFIX}"})
+if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
+    env.append({"name": "APP_ACCESS_PASSWORD_SECRET_ID", "value": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})
+    env.append({"name": "APP_ACCESS_PASSWORD_CACHE_TTL", "value": "${APP_ACCESS_PASSWORD_CACHE_TTL}"})
 secrets = []
 if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
     secrets.append({"name": "APP_ACCESS_PASSWORD", "valueFrom": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})

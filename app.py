@@ -6,6 +6,8 @@ import datetime as dt
 import io
 import re
 import hmac
+import time
+import hashlib
 import xml.etree.ElementTree as ET
 import urllib.parse
 
@@ -38,6 +40,9 @@ BEDROCK_AWS_REGION = (
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
 APP_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
+APP_ACCESS_PASSWORD_SECRET_ID = os.getenv("APP_ACCESS_PASSWORD_SECRET_ID", "")
+APP_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "30"))
+_ACCESS_PASSWORD_CACHE = {"value": None, "expires_at": 0}
 
 OWN_BRAND_ALIASES = {"hisense", "海信"}
 
@@ -899,18 +904,60 @@ def get_product_data():
     """从存储适配层读取产品卖点数据。"""
     return PRODUCT_FEATURE_STORE.load()
 
+def _extract_secret_password(secret_string):
+    if not secret_string:
+        return ""
+    stripped = secret_string.strip()
+    if stripped.startswith("{"):
+        try:
+            import json
+            payload = json.loads(stripped)
+            if isinstance(payload, dict):
+                return str(payload.get("password") or payload.get("APP_ACCESS_PASSWORD") or "")
+        except Exception:
+            pass
+    return secret_string
+
+def get_access_password():
+    if not APP_ACCESS_PASSWORD_SECRET_ID:
+        return APP_ACCESS_PASSWORD
+
+    now = time.time()
+    if _ACCESS_PASSWORD_CACHE["value"] is not None and now < _ACCESS_PASSWORD_CACHE["expires_at"]:
+        return _ACCESS_PASSWORD_CACHE["value"]
+
+    try:
+        import boto3
+        client = boto3.client("secretsmanager", region_name=BEDROCK_AWS_REGION)
+        response = client.get_secret_value(SecretId=APP_ACCESS_PASSWORD_SECRET_ID)
+        password = _extract_secret_password(response.get("SecretString", ""))
+        _ACCESS_PASSWORD_CACHE["value"] = password
+        _ACCESS_PASSWORD_CACHE["expires_at"] = now + APP_ACCESS_PASSWORD_CACHE_TTL
+        return password
+    except Exception:
+        return APP_ACCESS_PASSWORD
+
+def _password_fingerprint(password):
+    return hashlib.sha256((password or "").encode("utf-8")).hexdigest()
+
 def require_access():
-    if not APP_ACCESS_PASSWORD:
+    current_password = get_access_password()
+    if not current_password:
         return True
-    if st.session_state.get("__access_granted"):
+    current_fingerprint = _password_fingerprint(current_password)
+    if (
+        st.session_state.get("__access_granted")
+        and st.session_state.get("__access_password_fingerprint") == current_fingerprint
+    ):
         return True
 
     st.title("🎬 海外电商视频脚本生成器")
     st.info("请输入访问密码。")
     password = st.text_input("访问密码", type="password")
     if st.button("进入平台", type="primary"):
-        if hmac.compare_digest((password or "").encode("utf-8"), APP_ACCESS_PASSWORD.encode("utf-8")):
+        if hmac.compare_digest((password or "").encode("utf-8"), current_password.encode("utf-8")):
             st.session_state["__access_granted"] = True
+            st.session_state["__access_password_fingerprint"] = current_fingerprint
             st.rerun()
         else:
             st.error("访问密码不正确。")

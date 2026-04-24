@@ -171,6 +171,8 @@ bash scripts/deploy_ecs_fargate.sh
 
 如果使用默认 secret 名称 `video-script-creator/app-access-password`，也可以直接在 Secrets Manager 控制台修改值，然后重新运行部署脚本；脚本会自动发现并注入这个 secret。注意：ECS 只在 task 启动时读取 secret，修改 secret 后必须重新部署或重启 task 才会生效。
 
+新版应用同时支持运行时读取 Secrets Manager。完成一次新版部署后，后续在 Secrets Manager 控制台修改 `video-script-creator/app-access-password`，应用会在 `APP_ACCESS_PASSWORD_CACHE_TTL` 秒内自动读取新值，不需要重新部署。默认 TTL 为 30 秒。
+
 如果已经拿到公司出口 IP/CIDR，可同时限制 ALB 只允许这些来源访问：
 
 ```bash
