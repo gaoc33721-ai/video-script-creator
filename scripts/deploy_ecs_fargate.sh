@@ -10,6 +10,8 @@ STORAGE_BACKEND="${STORAGE_BACKEND:-local}"
 S3_BUCKET="${S3_BUCKET:-}"
 S3_PREFIX="${S3_PREFIX:-runtime}"
 APP_ACCESS_PASSWORD="${APP_ACCESS_PASSWORD:-}"
+APP_ACCESS_PASSWORD_SECRET_NAME="${APP_ACCESS_PASSWORD_SECRET_NAME:-${APP_NAME}/app-access-password}"
+APP_ACCESS_PASSWORD_SECRET_ARN="${APP_ACCESS_PASSWORD_SECRET_ARN:-}"
 ALLOWED_HTTP_CIDRS="${ALLOWED_HTTP_CIDRS:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-8501}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
@@ -236,6 +238,27 @@ if ! aws iam get-role --role-name "$TASK_EXEC_ROLE" >/dev/null 2>&1; then
     --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 fi
 
+if [[ -n "$APP_ACCESS_PASSWORD" && -z "$APP_ACCESS_PASSWORD_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$APP_ACCESS_PASSWORD_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$APP_ACCESS_PASSWORD_SECRET_NAME" \
+      --secret-string "$APP_ACCESS_PASSWORD" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$APP_ACCESS_PASSWORD_SECRET_NAME" \
+      --secret-string "$APP_ACCESS_PASSWORD" >/dev/null
+  fi
+  APP_ACCESS_PASSWORD_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$APP_ACCESS_PASSWORD_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
 if ! aws iam get-role --role-name "$TASK_ROLE" >/dev/null 2>&1; then
   aws iam create-role \
     --role-name "$TASK_ROLE" \
@@ -313,6 +336,26 @@ aws logs create-log-group --region "$AWS_REGION" --log-group-name "$LOG_GROUP" >
 EXEC_ROLE_ARN="$(aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text)"
 TASK_ROLE_ARN="$(aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text)"
 
+if [[ -n "$APP_ACCESS_PASSWORD_SECRET_ARN" ]]; then
+  SECRET_POLICY_DOC="$(mktemp)"
+  cat > "$SECRET_POLICY_DOC" <<JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "secretsmanager:GetSecretValue"
+    ],
+    "Resource": "${APP_ACCESS_PASSWORD_SECRET_ARN}"
+  }]
+}
+JSON
+  aws iam put-role-policy \
+    --role-name "$TASK_EXEC_ROLE" \
+    --policy-name "${APP_NAME}-read-app-secrets" \
+    --policy-document "file://${SECRET_POLICY_DOC}"
+fi
+
 TASK_DEF_FILE="$(mktemp)"
 python3 - "$TASK_DEF_FILE" <<PY
 import json, os, sys
@@ -330,8 +373,9 @@ if "${S3_BUCKET}":
     env.append({"name": "S3_BUCKET", "value": "${S3_BUCKET}"})
 if "${S3_PREFIX}":
     env.append({"name": "S3_PREFIX", "value": "${S3_PREFIX}"})
-if "${APP_ACCESS_PASSWORD}":
-    env.append({"name": "APP_ACCESS_PASSWORD", "value": "${APP_ACCESS_PASSWORD}"})
+secrets = []
+if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
+    secrets.append({"name": "APP_ACCESS_PASSWORD", "valueFrom": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})
 
 doc = {
     "family": "${TASK_FAMILY}",
@@ -347,6 +391,7 @@ doc = {
         "essential": True,
         "portMappings": [{"containerPort": ${CONTAINER_PORT}, "protocol": "tcp"}],
         "environment": env,
+        "secrets": secrets,
         "logConfiguration": {
             "logDriver": "awslogs",
             "options": {

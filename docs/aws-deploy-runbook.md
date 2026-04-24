@@ -154,6 +154,21 @@ export APP_ACCESS_PASSWORD='替换为内部试用密码'
 bash scripts/deploy_ecs_fargate.sh
 ```
 
+脚本会自动创建/更新 Secrets Manager secret：
+
+```text
+video-script-creator/app-access-password
+```
+
+并通过 ECS task definition 的 `secrets` 注入为 `APP_ACCESS_PASSWORD`，不会把密码明文写进镜像或 GitHub。
+
+如果你已经手动创建了 secret，可直接指定 ARN：
+
+```bash
+export APP_ACCESS_PASSWORD_SECRET_ARN='arn:aws:secretsmanager:eu-central-1:625093290485:secret:...'
+bash scripts/deploy_ecs_fargate.sh
+```
+
 如果已经拿到公司出口 IP/CIDR，可同时限制 ALB 只允许这些来源访问：
 
 ```bash
