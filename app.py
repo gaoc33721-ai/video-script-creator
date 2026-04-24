@@ -41,8 +41,8 @@ BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
 APP_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
 APP_ACCESS_PASSWORD_SECRET_ID = os.getenv("APP_ACCESS_PASSWORD_SECRET_ID", "")
-APP_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "30"))
-_ACCESS_PASSWORD_CACHE = {"value": None, "expires_at": 0}
+APP_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "300"))
+_ACCESS_PASSWORD_CACHE = {"value": None, "expires_at": 0, "error": ""}
 
 OWN_BRAND_ALIASES = {"hisense", "海信"}
 
@@ -920,11 +920,11 @@ def _extract_secret_password(secret_string):
 
 def get_access_password():
     if not APP_ACCESS_PASSWORD_SECRET_ID:
-        return APP_ACCESS_PASSWORD
+        return APP_ACCESS_PASSWORD, ""
 
     now = time.time()
     if _ACCESS_PASSWORD_CACHE["value"] is not None and now < _ACCESS_PASSWORD_CACHE["expires_at"]:
-        return _ACCESS_PASSWORD_CACHE["value"]
+        return _ACCESS_PASSWORD_CACHE["value"], _ACCESS_PASSWORD_CACHE.get("error", "")
 
     try:
         import boto3
@@ -933,16 +933,22 @@ def get_access_password():
         password = _extract_secret_password(response.get("SecretString", ""))
         _ACCESS_PASSWORD_CACHE["value"] = password
         _ACCESS_PASSWORD_CACHE["expires_at"] = now + APP_ACCESS_PASSWORD_CACHE_TTL
-        return password
-    except Exception:
-        return APP_ACCESS_PASSWORD
+        _ACCESS_PASSWORD_CACHE["error"] = ""
+        return password, ""
+    except Exception as exc:
+        _ACCESS_PASSWORD_CACHE["value"] = APP_ACCESS_PASSWORD
+        _ACCESS_PASSWORD_CACHE["expires_at"] = now + min(APP_ACCESS_PASSWORD_CACHE_TTL, 60)
+        _ACCESS_PASSWORD_CACHE["error"] = str(exc)
+        return APP_ACCESS_PASSWORD, str(exc)
 
 def _password_fingerprint(password):
     return hashlib.sha256((password or "").encode("utf-8")).hexdigest()
 
 def require_access():
-    current_password = get_access_password()
+    current_password, password_error = get_access_password()
     if not current_password:
+        if password_error:
+            st.error(f"暂时无法读取访问密码配置：{password_error}")
         return True
     current_fingerprint = _password_fingerprint(current_password)
     if (
@@ -955,12 +961,18 @@ def require_access():
     st.info("请输入访问密码。")
     password = st.text_input("访问密码", type="password")
     if st.button("进入平台", type="primary"):
-        if hmac.compare_digest((password or "").encode("utf-8"), current_password.encode("utf-8")):
-            st.session_state["__access_granted"] = True
-            st.session_state["__access_password_fingerprint"] = current_fingerprint
-            st.rerun()
-        else:
-            st.error("访问密码不正确。")
+        with st.spinner("正在验证访问权限..."):
+            current_password, password_error = get_access_password()
+            if password_error and not current_password:
+                st.error(f"暂时无法读取访问密码配置：{password_error}")
+                st.stop()
+            current_fingerprint = _password_fingerprint(current_password)
+            if hmac.compare_digest((password or "").encode("utf-8"), current_password.encode("utf-8")):
+                st.session_state["__access_granted"] = True
+                st.session_state["__access_password_fingerprint"] = current_fingerprint
+                st.rerun()
+            else:
+                st.error("访问密码不正确。")
     st.stop()
 
 st.set_page_config(page_title="海外电商视频脚本生成器", page_icon="🎬", layout="wide")
