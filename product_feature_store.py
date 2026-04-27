@@ -16,15 +16,81 @@ FEATURE_COLUMNS = [
     "Feature Description",
 ]
 
+NEW_FORMAT_REQUIRED_COLUMNS = [
+    "country_name",
+    "model",
+    "language_name",
+    "point_name",
+    "slogan",
+    "long_copy",
+]
+
+PRODUCT_LINE_COLUMN_CANDIDATES = [
+    "product_line_name",
+    "product_line_na",
+    "product_line",
+]
+
+LANGUAGE_FILTER_PATTERN = "英语|全球通用版"
+
+
+def _columns_by_normalized_name(df: pd.DataFrame) -> dict[str, str]:
+    return {str(col).strip().lower(): col for col in df.columns}
+
+
+def _find_product_line_column(df: pd.DataFrame) -> str | None:
+    normalized = _columns_by_normalized_name(df)
+    for candidate in PRODUCT_LINE_COLUMN_CANDIDATES:
+        if candidate in normalized:
+            return normalized[candidate]
+    for key, original in normalized.items():
+        if key.startswith("product_line"):
+            return original
+    return None
+
+
+def _normalize_new_format(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = _columns_by_normalized_name(df)
+    product_line_col = _find_product_line_column(df)
+    missing = [col for col in NEW_FORMAT_REQUIRED_COLUMNS if col not in normalized]
+    if product_line_col is None:
+        missing.append("product_line_name")
+    if missing:
+        raise ValueError(
+            "产品卖点库缺少必要字段。新版格式需包含："
+            "country_name, product_line_name, model, language_name, point_name, slogan, long_copy；"
+            f"当前缺少：{', '.join(missing)}"
+        )
+
+    return pd.DataFrame(
+        {
+            "Region": df[normalized["country_name"]],
+            "Brand": "海信",
+            "Category": df[product_line_col],
+            "model": df[normalized["model"]],
+            "language": df[normalized["language_name"]],
+            "Feature Name": df[normalized["point_name"]],
+            "Tagline": df[normalized["slogan"]],
+            "Feature Description": df[normalized["long_copy"]],
+        }
+    )
+
+
+def normalize_product_features(df: pd.DataFrame) -> pd.DataFrame:
+    if all(col in df.columns for col in FEATURE_COLUMNS):
+        return df[FEATURE_COLUMNS].copy()
+    return _normalize_new_format(df)
+
 
 def filter_product_features(df: pd.DataFrame) -> pd.DataFrame:
-    missing = [col for col in FEATURE_COLUMNS if col not in df.columns]
-    if missing:
-        raise ValueError(f"产品卖点库缺少必要字段：{', '.join(missing)}")
-
-    filtered = df[FEATURE_COLUMNS].copy()
-    mask = filtered["language"].astype(str).str.contains("英语|全球通用版", na=False)
+    filtered = normalize_product_features(df)
+    mask = filtered["language"].astype(str).str.contains(LANGUAGE_FILTER_PATTERN, na=False)
     filtered = filtered[mask].dropna(subset=["Feature Description", "model", "Category"])
+    filtered = filtered[
+        filtered["Feature Description"].astype(str).str.strip().ne("")
+        & filtered["model"].astype(str).str.strip().ne("")
+        & filtered["Category"].astype(str).str.strip().ne("")
+    ]
     return filtered.fillna("")
 
 

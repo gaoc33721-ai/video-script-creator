@@ -4,35 +4,17 @@ from pathlib import Path
 
 import pandas as pd
 
+from product_feature_store import filter_product_features
+
 try:
     import psycopg
 except ModuleNotFoundError:  # Allows dry-run validation before DB deps are installed.
     psycopg = None
 
 
-REQUIRED_COLUMNS = [
-    "Region",
-    "Brand",
-    "Category",
-    "model",
-    "language",
-    "Feature Name",
-    "Tagline",
-    "Feature Description",
-]
-
-
 def load_features(path: Path) -> pd.DataFrame:
     df = pd.read_excel(path)
-    missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {', '.join(missing)}")
-
-    df = df[REQUIRED_COLUMNS].copy()
-    df = df[df["language"].astype(str).str.contains("英语|全球通用版", na=False)]
-    df = df.dropna(subset=["Feature Description", "model", "Category"])
-    df = df.fillna("")
-    return df
+    return filter_product_features(df)
 
 
 def insert_features(conninfo: str, file_name: str, s3_key: str | None, created_by: str | None, df: pd.DataFrame) -> str:
