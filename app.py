@@ -41,6 +41,7 @@ BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
 APP_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
 APP_ACCESS_PASSWORD_SECRET_ID = os.getenv("APP_ACCESS_PASSWORD_SECRET_ID", "")
+APP_ACCESS_CONTROL_ENABLED = os.getenv("APP_ACCESS_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 APP_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "300"))
 APP_ACCESS_PASSWORD_FETCH_TIMEOUT = int(os.getenv("APP_ACCESS_PASSWORD_FETCH_TIMEOUT", "2"))
 _ACCESS_PASSWORD_CACHE = {"value": None, "expires_at": 0, "error": ""}
@@ -957,6 +958,9 @@ def _password_fingerprint(password):
     return hashlib.sha256((password or "").encode("utf-8")).hexdigest()
 
 def require_access():
+    if not APP_ACCESS_CONTROL_ENABLED:
+        return True
+
     current_password, password_error = get_access_password()
     if not current_password:
         if password_error:
