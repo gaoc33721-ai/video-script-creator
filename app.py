@@ -42,6 +42,7 @@ BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
 APP_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
 APP_ACCESS_PASSWORD_SECRET_ID = os.getenv("APP_ACCESS_PASSWORD_SECRET_ID", "")
 APP_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "300"))
+APP_ACCESS_PASSWORD_FETCH_TIMEOUT = int(os.getenv("APP_ACCESS_PASSWORD_FETCH_TIMEOUT", "2"))
 _ACCESS_PASSWORD_CACHE = {"value": None, "expires_at": 0, "error": ""}
 
 OWN_BRAND_ALIASES = {"hisense", "海信"}
@@ -928,7 +929,17 @@ def get_access_password():
 
     try:
         import boto3
-        client = boto3.client("secretsmanager", region_name=BEDROCK_AWS_REGION)
+        from botocore.config import Config
+
+        client = boto3.client(
+            "secretsmanager",
+            region_name=BEDROCK_AWS_REGION,
+            config=Config(
+                connect_timeout=APP_ACCESS_PASSWORD_FETCH_TIMEOUT,
+                read_timeout=APP_ACCESS_PASSWORD_FETCH_TIMEOUT,
+                retries={"max_attempts": 2},
+            ),
+        )
         response = client.get_secret_value(SecretId=APP_ACCESS_PASSWORD_SECRET_ID)
         password = _extract_secret_password(response.get("SecretString", ""))
         _ACCESS_PASSWORD_CACHE["value"] = password
@@ -936,10 +947,11 @@ def get_access_password():
         _ACCESS_PASSWORD_CACHE["error"] = ""
         return password, ""
     except Exception as exc:
-        _ACCESS_PASSWORD_CACHE["value"] = APP_ACCESS_PASSWORD
+        fallback_password = _ACCESS_PASSWORD_CACHE["value"] or APP_ACCESS_PASSWORD
+        _ACCESS_PASSWORD_CACHE["value"] = fallback_password
         _ACCESS_PASSWORD_CACHE["expires_at"] = now + min(APP_ACCESS_PASSWORD_CACHE_TTL, 60)
         _ACCESS_PASSWORD_CACHE["error"] = str(exc)
-        return APP_ACCESS_PASSWORD, str(exc)
+        return fallback_password, str(exc)
 
 def _password_fingerprint(password):
     return hashlib.sha256((password or "").encode("utf-8")).hexdigest()
@@ -959,8 +971,12 @@ def require_access():
 
     st.title("🎬 海外电商视频脚本生成器")
     st.info("请输入访问密码。")
-    password = st.text_input("访问密码", type="password")
-    if st.button("进入平台", type="primary"):
+    if password_error:
+        st.caption("密码配置读取暂时较慢，已使用最近一次成功读取的配置进行校验。")
+    with st.form("__access_login_form"):
+        password = st.text_input("访问密码", type="password")
+        submitted = st.form_submit_button("进入平台", type="primary")
+    if submitted:
         with st.spinner("正在验证访问权限..."):
             current_password, password_error = get_access_password()
             if password_error and not current_password:
