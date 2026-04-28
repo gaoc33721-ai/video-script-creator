@@ -1026,7 +1026,7 @@ def apply_apple_theme():
 
         .block-container {
             max-width: 1220px;
-            padding-top: 2.2rem;
+            padding-top: 1rem;
             padding-bottom: 5rem;
         }
 
@@ -1048,7 +1048,7 @@ def apply_apple_theme():
         }
 
         h1 {
-            font-size: clamp(2.6rem, 5vw, 4.6rem) !important;
+            font-size: clamp(1.9rem, 3vw, 2.8rem) !important;
             line-height: 1.04 !important;
             font-weight: 760 !important;
         }
@@ -1058,21 +1058,19 @@ def apply_apple_theme():
         }
 
         .apple-hero {
-            padding: 3.2rem 3.4rem;
-            margin: 0 0 1.6rem 0;
-            border-radius: 30px;
-            background:
-                linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.72)),
-                radial-gradient(circle at 90% 10%, rgba(0, 113, 227, 0.16), transparent 24rem);
-            border: 1px solid rgba(255, 255, 255, 0.74);
-            box-shadow: var(--app-shadow);
+            padding: 0.85rem 0 1rem;
+            margin: 0 0 0.6rem 0;
+            border-radius: 0;
+            background: transparent;
+            border: 0;
+            box-shadow: none;
         }
 
         .apple-eyebrow {
             color: var(--app-blue);
-            font-size: 0.92rem;
+            font-size: 0.82rem;
             font-weight: 650;
-            margin-bottom: 0.8rem;
+            margin-bottom: 0.35rem;
         }
 
         .apple-hero h1 {
@@ -1080,32 +1078,32 @@ def apply_apple_theme():
         }
 
         .apple-hero p {
-            max-width: 760px;
-            margin: 1.1rem 0 0;
+            max-width: 820px;
+            margin: 0.45rem 0 0;
             color: var(--app-muted);
-            font-size: 1.18rem;
-            line-height: 1.7;
+            font-size: 0.98rem;
+            line-height: 1.55;
         }
 
         .apple-chip-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 0.65rem;
-            margin-top: 1.5rem;
+            gap: 0.45rem;
+            margin-top: 0.75rem;
         }
 
         .apple-chip {
-            padding: 0.46rem 0.78rem;
+            padding: 0.28rem 0.58rem;
             border-radius: 999px;
             color: #3a3a3c;
             background: rgba(255, 255, 255, 0.82);
             border: 1px solid rgba(0, 0, 0, 0.07);
-            font-size: 0.88rem;
+            font-size: 0.78rem;
             font-weight: 560;
         }
 
         .apple-section-title {
-            margin: 1.65rem 0 0.65rem;
+            margin: 1.05rem 0 0.45rem;
             font-size: 1.72rem;
             line-height: 1.2;
             font-weight: 720;
@@ -1242,8 +1240,8 @@ def apply_apple_theme():
             }
 
             .apple-hero {
-                padding: 2rem 1.4rem;
-                border-radius: 24px;
+                padding: 0.75rem 0 0.9rem;
+                border-radius: 0;
             }
 
             .apple-hero p {
@@ -1262,12 +1260,11 @@ def render_hero():
         <section class="apple-hero">
             <div class="apple-eyebrow">Hisense International E-commerce</div>
             <h1>视频脚本生成器</h1>
-            <p>基于产品卖点文案库，把型号、卖点、场景和营销诉求快速整理成可拍摄、可导出的海外电商短视频脚本。</p>
+            <p>基于产品卖点文案库，快速生成可拍摄、可导出的海外电商短视频脚本。</p>
             <div class="apple-chip-row">
                 <span class="apple-chip">产品卖点库驱动</span>
                 <span class="apple-chip">Amazon Bedrock 生成</span>
-                <span class="apple-chip">多方案导出 Excel</span>
-                <span class="apple-chip">内部试用平台</span>
+                <span class="apple-chip">Excel 导出</span>
             </div>
         </section>
         """,
