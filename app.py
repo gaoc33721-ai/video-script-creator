@@ -1038,15 +1038,16 @@ def apply_apple_theme():
         }
 
         [data-testid="stToolbar"] {
-            position: fixed !important;
-            top: 5.4rem !important;
-            right: 1.25rem !important;
-            z-index: 1000 !important;
-            background: rgba(255, 255, 255, 0.78) !important;
-            border: 1px solid rgba(0, 0, 0, 0.08) !important;
-            border-radius: 999px !important;
-            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.08) !important;
-            backdrop-filter: blur(18px);
+            display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
+
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"] {
+            display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
         }
 
         [data-testid="stSidebar"] {
