@@ -50,6 +50,7 @@ $env:AWS_PROFILE="video-script-prod"
 
 - 创建/更新 ECR、ECS/App Runner、S3、CloudWatch、Secrets Manager、IAM role。
 - 调用 Bedrock：`bedrock:InvokeModel`、`bedrock:InvokeModelWithResponseStream`。
+- 如需 Nova Reel 视频素材 PoC：`bedrock:StartAsyncInvoke`、`bedrock:GetAsyncInvoke`、`bedrock:ListAsyncInvokes`，并允许 Bedrock 将输出写入平台 S3 bucket。
 - 如需初始化 RDS：连接数据库并执行 `aws/postgres_schema.sql`。
 
 ## 2.2 没有 Bedrock 模型授权怎么办
@@ -145,7 +146,37 @@ bash scripts/ecs_status.sh
 
 `deploy_ecs_fargate.sh` 会在 bucket 不存在时自动创建，并给 ECS task role 增加对应 bucket 的读写权限。
 
-## 3.2 访问控制
+## 3.2 Nova Reel 视频素材 PoC
+
+平台内置一个轻量 PoC 面板，会默认从卖点库中选择 `烤箱`、`微波炉`、`空气炸锅` 三个品类，每个品类最多 2 个型号。每个型号提交 1 条 6 秒 Nova Reel 异步视频生成任务，输出到 S3。
+
+建议先用 ECS/Fargate + S3 持久化部署：
+
+```bash
+export STORAGE_BACKEND=s3
+export S3_BUCKET=video-script-creator-prod-assets-625093290485
+export S3_PREFIX=runtime
+
+# Nova Reel 建议单独配置区域；默认 us-east-1。
+export NOVA_REEL_AWS_REGION=us-east-1
+export NOVA_REEL_MODEL_ID=amazon.nova-reel-v1:1
+
+# 可选：如果希望视频输出到单独目录，可显式指定。
+export NOVA_REEL_OUTPUT_S3_URI=s3://video-script-creator-prod-assets-625093290485/runtime/nova-reel-poc
+
+bash scripts/deploy_ecs_fargate.sh
+bash scripts/ecs_status.sh
+```
+
+PoC 使用 Bedrock Runtime 异步接口：
+
+- 提交：`StartAsyncInvoke`
+- 查询：`GetAsyncInvoke`
+- 输出：S3 目录下的 `output.mp4`
+
+注意：Nova Reel 模型授权和区域可用性需要在 AWS Bedrock 控制台确认；实际费用以 AWS 账单为准，页面上的费用只是 PoC 粗估。
+
+## 3.3 访问控制
 
 试用期建议先启用应用访问密码：
 
@@ -203,6 +234,10 @@ bash scripts/deploy_ecs_fargate.sh
 | `BEDROCK_AWS_REGION` | Environment | `us-east-1` |
 | `BEDROCK_MODEL_ID` | Environment | `eu.amazon.nova-pro-v1:0` |
 | `BEDROCK_MAX_TOKENS` | Environment | `4096` |
+| `NOVA_REEL_AWS_REGION` | Environment | `us-east-1` |
+| `NOVA_REEL_MODEL_ID` | Environment | `amazon.nova-reel-v1:1` |
+| `NOVA_REEL_OUTPUT_S3_URI` | Environment | `s3://.../runtime/nova-reel-poc` |
+| `NOVA_REEL_ESTIMATED_USD_PER_SECOND` | Environment | `0.08` |
 | `APP_DATA_DIR` | Environment | `/app/data` |
 | `STORAGE_BACKEND` | Environment | `local` 或 `s3` |
 | `S3_BUCKET` | Environment | `video-script-creator-prod-assets` |
@@ -213,6 +248,9 @@ ECS task role 需要至少包含：
 
 - `bedrock:InvokeModel`
 - `bedrock:InvokeModelWithResponseStream`（为后续流式输出预留）
+- `bedrock:StartAsyncInvoke`
+- `bedrock:GetAsyncInvoke`
+- `bedrock:ListAsyncInvokes`
 - `s3:GetObject`
 - `s3:PutObject`
 - `s3:HeadObject`

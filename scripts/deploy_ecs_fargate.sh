@@ -6,6 +6,10 @@ AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-eu-central-1}}"
 BEDROCK_AWS_REGION="${BEDROCK_AWS_REGION:-$AWS_REGION}"
 BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-eu.amazon.nova-pro-v1:0}"
 BEDROCK_MAX_TOKENS="${BEDROCK_MAX_TOKENS:-4096}"
+NOVA_REEL_AWS_REGION="${NOVA_REEL_AWS_REGION:-us-east-1}"
+NOVA_REEL_MODEL_ID="${NOVA_REEL_MODEL_ID:-amazon.nova-reel-v1:1}"
+NOVA_REEL_OUTPUT_S3_URI="${NOVA_REEL_OUTPUT_S3_URI:-}"
+NOVA_REEL_ESTIMATED_USD_PER_SECOND="${NOVA_REEL_ESTIMATED_USD_PER_SECOND:-0.08}"
 STORAGE_BACKEND="${STORAGE_BACKEND:-local}"
 S3_BUCKET="${S3_BUCKET:-}"
 S3_PREFIX="${S3_PREFIX:-runtime}"
@@ -294,7 +298,10 @@ cat > "$POLICY_DOC" <<JSON
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:StartAsyncInvoke",
+        "bedrock:GetAsyncInvoke",
+        "bedrock:ListAsyncInvokes"
       ],
       "Resource": "*"
     }
@@ -380,6 +387,10 @@ env = [
     {"name": "BEDROCK_AWS_REGION", "value": "${BEDROCK_AWS_REGION}"},
     {"name": "BEDROCK_MODEL_ID", "value": "${BEDROCK_MODEL_ID}"},
     {"name": "BEDROCK_MAX_TOKENS", "value": "${BEDROCK_MAX_TOKENS}"},
+    {"name": "NOVA_REEL_AWS_REGION", "value": "${NOVA_REEL_AWS_REGION}"},
+    {"name": "NOVA_REEL_MODEL_ID", "value": "${NOVA_REEL_MODEL_ID}"},
+    {"name": "NOVA_REEL_OUTPUT_S3_URI", "value": "${NOVA_REEL_OUTPUT_S3_URI}"},
+    {"name": "NOVA_REEL_ESTIMATED_USD_PER_SECOND", "value": "${NOVA_REEL_ESTIMATED_USD_PER_SECOND}"},
     {"name": "APP_DATA_DIR", "value": "/app/data"},
     {"name": "STORAGE_BACKEND", "value": "${STORAGE_BACKEND}"},
     {"name": "STREAMLIT_SERVER_ENABLE_CORS", "value": "false"},

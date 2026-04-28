@@ -4,12 +4,14 @@ import os
 import pandas as pd
 import datetime as dt
 import io
+import random
 import re
 import hmac
 import time
 import hashlib
 import xml.etree.ElementTree as ET
 import urllib.parse
+import uuid
 
 from product_feature_store import ProductFeatureStore, filter_product_features
 from storage_adapters import RuntimeStorage
@@ -30,6 +32,7 @@ PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
 CACHE_META_KEY = "cache_meta.json"
 HISTORY_KEY = "script_history.json"
 FEEDBACK_KEY = "trial_feedback.json"
+NOVA_REEL_POC_JOBS_KEY = "nova_reel_poc_jobs.json"
 
 BEDROCK_AWS_REGION = (
     os.getenv("BEDROCK_AWS_REGION")
@@ -39,6 +42,10 @@ BEDROCK_AWS_REGION = (
 )
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
+NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
+NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
+NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
+NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
 APP_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
 APP_ACCESS_PASSWORD_SECRET_ID = os.getenv("APP_ACCESS_PASSWORD_SECRET_ID", "")
 APP_ACCESS_CONTROL_ENABLED = os.getenv("APP_ACCESS_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -188,6 +195,146 @@ def save_feedback_record(record, limit=200):
     records.insert(0, record)
     records = records[:limit]
     return _safe_write_json(FEEDBACK_KEY, records)
+
+def load_nova_reel_poc_jobs():
+    data = _safe_read_json(NOVA_REEL_POC_JOBS_KEY, [])
+    return data if isinstance(data, list) else []
+
+def save_nova_reel_poc_jobs(records, limit=200):
+    if not isinstance(records, list):
+        records = []
+    records = records[:limit]
+    return _safe_write_json(NOVA_REEL_POC_JOBS_KEY, records)
+
+def _s3_output_base_uri():
+    if NOVA_REEL_OUTPUT_S3_URI:
+        return NOVA_REEL_OUTPUT_S3_URI
+    bucket = os.getenv("S3_BUCKET") or os.getenv("APP_S3_BUCKET")
+    prefix = os.getenv("S3_PREFIX", "").strip("/")
+    if not bucket:
+        return ""
+    parts = [f"s3://{bucket}"]
+    if prefix:
+        parts.append(prefix)
+    parts.append("nova-reel-poc")
+    return "/".join(parts)
+
+def _poc_category_models(df_products, categories=None, max_models_per_category=2):
+    categories = categories or ["烤箱", "微波炉", "空气炸锅"]
+    targets = []
+    if df_products.empty or "Category" not in df_products.columns or "model" not in df_products.columns:
+        return targets
+    for category in categories:
+        matched = df_products[df_products["Category"].astype(str).str.contains(category, na=False)]
+        models = []
+        if not matched.empty:
+            models = [
+                str(x).strip()
+                for x in matched["model"].dropna().astype(str).tolist()
+                if str(x).strip()
+            ]
+            models = list(dict.fromkeys(models))[:max_models_per_category]
+        targets.append({"category": category, "models": models})
+    return targets
+
+def _feature_summary_for_model(df_products, model, limit=3):
+    if df_products.empty or not model:
+        return []
+    rows = df_products[df_products["model"].astype(str) == str(model)]
+    features = []
+    for _, row in rows.head(12).iterrows():
+        name = str(row.get("Feature Name", "") or "").strip()
+        desc = str(row.get("Feature Description", "") or "").strip()
+        tagline = str(row.get("Tagline", "") or "").strip()
+        text = " - ".join([x for x in [name, tagline, desc] if x])
+        if text:
+            features.append(text)
+    return list(dict.fromkeys(features))[:limit]
+
+def build_nova_reel_prompt(category, model, features):
+    category_en = {
+        "烤箱": "built-in oven",
+        "微波炉": "microwave oven",
+        "空气炸锅": "air fryer",
+    }.get(category, "home appliance")
+    feature_text = "; ".join(features[:3]) if features else "clean design, practical everyday cooking benefit"
+    prompt = (
+        f"Six-second premium e-commerce product video for a Hisense {category_en}, model {model}. "
+        f"Show a modern bright kitchen, realistic product beauty shot, smooth slow dolly-in camera movement, "
+        f"cinematic soft daylight, clean countertop, premium home lifestyle mood. "
+        f"Highlight these product benefits visually: {feature_text}. "
+        "No text overlay, no logo distortion, no extra brands, no people close-up, realistic product proportions."
+    )
+    return prompt[:500]
+
+def _nova_reel_job_output_uri(category, model):
+    base_uri = _s3_output_base_uri()
+    if not base_uri:
+        return ""
+    stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return f"{base_uri}/{stamp}_{_safe_slug(category)}_{_safe_slug(model)}_{uuid.uuid4().hex[:8]}"
+
+def start_nova_reel_job(category, model, prompt, duration_seconds=6):
+    output_s3_uri = _nova_reel_job_output_uri(category, model)
+    if not output_s3_uri:
+        raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 STORAGE_BACKEND=s3/S3_BUCKET，或设置 NOVA_REEL_OUTPUT_S3_URI。")
+
+    import boto3
+
+    client = boto3.client("bedrock-runtime", region_name=NOVA_REEL_AWS_REGION)
+    model_input = {
+        "taskType": "TEXT_VIDEO",
+        "textToVideoParams": {"text": prompt},
+        "videoGenerationConfig": {
+            "durationSeconds": int(duration_seconds),
+            "fps": 24,
+            "dimension": "1280x720",
+            "seed": random.randint(0, 2147483646),
+        },
+    }
+    response = client.start_async_invoke(
+        modelId=NOVA_REEL_MODEL_ID,
+        modelInput=model_input,
+        outputDataConfig={"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
+        clientRequestToken=str(uuid.uuid4()),
+    )
+    return response["invocationArn"], output_s3_uri
+
+def query_nova_reel_job(invocation_arn):
+    import boto3
+
+    client = boto3.client("bedrock-runtime", region_name=NOVA_REEL_AWS_REGION)
+    return client.get_async_invoke(invocationArn=invocation_arn)
+
+def _video_uri_from_job(job):
+    output_uri = (
+        ((job or {}).get("outputDataConfig") or {})
+        .get("s3OutputDataConfig", {})
+        .get("s3Uri", "")
+    )
+    if not output_uri:
+        output_uri = (job or {}).get("output_s3_uri", "")
+    return f"{output_uri.rstrip('/')}/output.mp4" if output_uri else ""
+
+def _presigned_url_for_s3_uri(s3_uri, expires_in=3600):
+    if not s3_uri.startswith("s3://"):
+        return ""
+    parsed = urllib.parse.urlparse(s3_uri)
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+    if not bucket or not key:
+        return ""
+    try:
+        import boto3
+
+        client = boto3.client("s3", region_name=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"))
+        return client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
+    except Exception:
+        return ""
 
 def _nth_weekday_of_month(year, month, weekday, n):
     first = dt.date(year, month, 1)
@@ -1392,6 +1539,140 @@ else:
                 )
                 st.session_state["history_loaded_note"] = f"已载入历史记录：{history_options[history_idx]}"
                 st.rerun()
+
+    with st.expander("Nova Reel 视频素材 PoC", expanded=False):
+        st.caption("默认测试品类：烤箱、微波炉、空气炸锅；每个品类最多取 2 个型号，每个型号提交 1 条 6 秒素材任务。")
+        poc_targets = _poc_category_models(df_products)
+        poc_rows = []
+        for target in poc_targets:
+            models = target.get("models", [])
+            if models:
+                for model in models:
+                    features = _feature_summary_for_model(df_products, model)
+                    poc_rows.append(
+                        {
+                            "品类": target.get("category", ""),
+                            "型号": model,
+                            "卖点摘要": "；".join(features[:2]),
+                            "Prompt": build_nova_reel_prompt(target.get("category", ""), model, features),
+                        }
+                    )
+            else:
+                poc_rows.append(
+                    {
+                        "品类": target.get("category", ""),
+                        "型号": "未找到",
+                        "卖点摘要": "当前卖点库中未匹配到该品类型号",
+                        "Prompt": "",
+                    }
+                )
+
+        valid_poc_rows = [row for row in poc_rows if row.get("型号") != "未找到" and row.get("Prompt")]
+        estimated_seconds = len(valid_poc_rows) * 6
+        st.caption(
+            f"本轮计划提交 {len(valid_poc_rows)} 条素材任务，预计生成 {estimated_seconds} 秒；"
+            f"按 ${NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}/秒估算约 ${estimated_seconds * NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}。实际以 AWS 账单为准。"
+        )
+        if poc_rows:
+            st.dataframe(pd.DataFrame(poc_rows), use_container_width=True, hide_index=True)
+        else:
+            st.warning("当前卖点库暂无可用于 PoC 的产品数据。")
+
+        col_submit, col_refresh = st.columns(2)
+        with col_submit:
+            if st.button("提交 Nova Reel PoC 任务", use_container_width=True, disabled=not valid_poc_rows):
+                jobs = load_nova_reel_poc_jobs()
+                submitted_count = 0
+                errors = []
+                for row in valid_poc_rows:
+                    try:
+                        invocation_arn, output_s3_uri = start_nova_reel_job(row["品类"], row["型号"], row["Prompt"])
+                        jobs.insert(
+                            0,
+                            {
+                                "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                                "category": row["品类"],
+                                "model": row["型号"],
+                                "prompt": row["Prompt"],
+                                "duration_seconds": 6,
+                                "status": "InProgress",
+                                "invocation_arn": invocation_arn,
+                                "output_s3_uri": output_s3_uri,
+                                "video_s3_uri": "",
+                                "model_id": NOVA_REEL_MODEL_ID,
+                                "region": NOVA_REEL_AWS_REGION,
+                            },
+                        )
+                        submitted_count += 1
+                    except Exception as exc:
+                        errors.append(f"{row['品类']} / {row['型号']}：{exc}")
+                save_nova_reel_poc_jobs(jobs)
+                if submitted_count:
+                    st.success(f"已提交 {submitted_count} 条 Nova Reel 任务。")
+                if errors:
+                    st.error("部分任务提交失败：\n" + "\n".join(errors[:6]))
+                st.rerun()
+        with col_refresh:
+            if st.button("刷新 Nova Reel 任务状态", use_container_width=True):
+                jobs = load_nova_reel_poc_jobs()
+                refreshed = 0
+                errors = []
+                for job in jobs:
+                    arn = job.get("invocation_arn", "")
+                    if not arn or job.get("status") in {"Completed", "Failed"}:
+                        continue
+                    try:
+                        result = query_nova_reel_job(arn)
+                        job["status"] = result.get("status", job.get("status", "Unknown"))
+                        job["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                        if result.get("failureMessage"):
+                            job["failure_message"] = result.get("failureMessage")
+                        if job["status"] == "Completed":
+                            job["output_s3_uri"] = (
+                                (result.get("outputDataConfig") or {})
+                                .get("s3OutputDataConfig", {})
+                                .get("s3Uri", job.get("output_s3_uri", ""))
+                            )
+                            job["video_s3_uri"] = _video_uri_from_job(job)
+                        refreshed += 1
+                    except Exception as exc:
+                        errors.append(f"{job.get('category', '')} / {job.get('model', '')}：{exc}")
+                save_nova_reel_poc_jobs(jobs)
+                if refreshed:
+                    st.success(f"已刷新 {refreshed} 条任务。")
+                if errors:
+                    st.error("部分任务刷新失败：\n" + "\n".join(errors[:6]))
+                st.rerun()
+
+        jobs = load_nova_reel_poc_jobs()
+        if jobs:
+            display_jobs = []
+            for job in jobs[:30]:
+                video_uri = job.get("video_s3_uri") or _video_uri_from_job(job)
+                display_jobs.append(
+                    {
+                        "创建时间": job.get("created_at", ""),
+                        "品类": job.get("category", ""),
+                        "型号": job.get("model", ""),
+                        "状态": job.get("status", ""),
+                        "视频S3地址": video_uri,
+                        "失败原因": job.get("failure_message", ""),
+                    }
+                )
+            st.dataframe(pd.DataFrame(display_jobs), use_container_width=True, hide_index=True)
+            completed = [job for job in jobs if (job.get("video_s3_uri") or _video_uri_from_job(job)) and job.get("status") == "Completed"]
+            if completed:
+                selected_job = st.selectbox(
+                    "选择已完成素材预览/下载",
+                    range(len(completed)),
+                    format_func=lambda i: f"{completed[i].get('category', '')} / {completed[i].get('model', '')} / {completed[i].get('created_at', '')}",
+                )
+                video_uri = completed[selected_job].get("video_s3_uri") or _video_uri_from_job(completed[selected_job])
+                presigned_url = _presigned_url_for_s3_uri(video_uri)
+                st.code(video_uri)
+                if presigned_url:
+                    st.video(presigned_url)
+                    st.link_button("打开临时预览链接", presigned_url, use_container_width=True)
 
 if st.session_state.get("history_loaded_note"):
     st.info(st.session_state.get("history_loaded_note"))

@@ -6,7 +6,10 @@
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:StartAsyncInvoke",
+        "bedrock:GetAsyncInvoke",
+        "bedrock:ListAsyncInvokes"
       ],
       "Resource": "*"
     },
