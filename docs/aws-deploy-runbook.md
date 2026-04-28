@@ -148,7 +148,7 @@ bash scripts/ecs_status.sh
 
 ## 3.2 Nova Reel 视频素材 PoC
 
-平台内置一个轻量 PoC 面板，会默认从卖点库中选择 `烤箱`、`微波炉`、`空气炸锅` 三个品类，每个品类最多 2 个型号。每个型号提交 1 条 6 秒 Nova Reel 异步视频生成任务，输出到 S3。
+平台内置一个轻量 PoC 面板，位置在脚本生成结果下方。业务先生成并确认脚本文档，再选择某个脚本方案提交 1 条 6 秒 Nova Reel 异步视频生成任务。生成完成后页面会创建 S3 临时预览/下载链接，业务无需进入 S3 控制台。
 
 建议先用 ECS/Fargate + S3 持久化部署：
 
@@ -173,7 +173,7 @@ PoC 使用 Bedrock Runtime 异步接口：
 
 - 提交：`StartAsyncInvoke`
 - 查询：`GetAsyncInvoke`
-- 输出：S3 目录下的 `output.mp4`
+- 输出：S3 目录下的 `output.mp4`，页面通过预签名 URL 提供预览/下载。
 
 注意：Nova Reel 模型授权和区域可用性需要在 AWS Bedrock 控制台确认；实际费用以 AWS 账单为准，页面上的费用只是 PoC 粗估。
 

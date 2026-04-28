@@ -268,6 +268,44 @@ def build_nova_reel_prompt(category, model, features):
     )
     return prompt[:500]
 
+def extract_variant_video_prompt(content):
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    match = re.search(
+        r"整体AI视频生成Prompt（English）\s*:\s*(.*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        match = re.search(
+            r"Overall AI Video Generation Prompt\s*:\s*(.*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    if not match:
+        return ""
+    prompt = re.sub(r"^\s*[-•]\s*", "", match.group(1).strip(), flags=re.MULTILINE)
+    prompt = re.sub(r"\s+", " ", prompt).strip()
+    return prompt[:500]
+
+def build_variant_nova_reel_prompt(variant, category, model, selected_features):
+    extracted = extract_variant_video_prompt((variant or {}).get("content", ""))
+    if extracted:
+        return extracted
+    feature_text = "; ".join([str(x) for x in selected_features if str(x).strip()]) or "product benefits and lifestyle usage"
+    category_en = {
+        "烤箱": "built-in oven",
+        "微波炉": "microwave oven",
+        "空气炸锅": "air fryer",
+    }.get(_category_key(category), "home appliance")
+    return (
+        f"Six-second premium e-commerce reference video for a Hisense {category_en}, model {model}. "
+        f"Show a realistic product-focused scene based on this script variant, highlighting: {feature_text}. "
+        "Modern bright kitchen, cinematic soft daylight, smooth camera movement, realistic product proportions, "
+        "no text overlay, no logo distortion, no extra brands."
+    )[:500]
+
 def _nova_reel_job_output_uri(category, model):
     base_uri = _s3_output_base_uri()
     if not base_uri:
@@ -1566,170 +1604,6 @@ else:
                 st.session_state["history_loaded_note"] = f"已载入历史记录：{history_options[history_idx]}"
                 st.rerun()
 
-    with st.expander("Nova Reel 视频素材 PoC", expanded=False):
-        st.caption("默认测试品类：烤箱、微波炉、空气炸锅；每个品类最多取 2 个型号，每个型号提交 1 条 6 秒素材任务。")
-        poc_targets = _poc_category_models(df_products)
-        poc_rows = []
-        for target in poc_targets:
-            models = target.get("models", [])
-            if models:
-                for model in models:
-                    features = _feature_summary_for_model(df_products, model)
-                    poc_rows.append(
-                        {
-                            "品类": target.get("category", ""),
-                            "型号": model,
-                            "卖点摘要": "；".join(features[:2]),
-                            "Prompt": build_nova_reel_prompt(target.get("category", ""), model, features),
-                        }
-                    )
-            else:
-                poc_rows.append(
-                    {
-                        "品类": target.get("category", ""),
-                        "型号": "未找到",
-                        "卖点摘要": "当前卖点库中未匹配到该品类型号",
-                        "Prompt": "",
-                    }
-                )
-
-        jobs = load_nova_reel_poc_jobs()
-        submitted_pairs = {
-            (str(job.get("category", "")), str(job.get("model", "")))
-            for job in jobs
-            if job.get("invocation_arn")
-        }
-        valid_poc_rows = [
-            row
-            for row in poc_rows
-            if row.get("型号") != "未找到"
-            and row.get("Prompt")
-            and (str(row.get("品类", "")), str(row.get("型号", ""))) not in submitted_pairs
-        ]
-        batch_rows = valid_poc_rows[:NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK]
-        estimated_seconds = len(batch_rows) * 6
-        st.caption(
-            f"本次最多提交 {len(batch_rows)} 条素材任务（总待提交 {len(valid_poc_rows)} 条，已提交过的型号会自动跳过），预计生成 {estimated_seconds} 秒；"
-            f"按 ${NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}/秒估算约 ${estimated_seconds * NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}。实际以 AWS 账单为准。"
-        )
-        if poc_rows:
-            st.dataframe(pd.DataFrame(poc_rows), use_container_width=True, hide_index=True)
-        else:
-            st.warning("当前卖点库暂无可用于 PoC 的产品数据。")
-
-        if st.session_state.get("nova_reel_submit_notice"):
-            st.success(st.session_state.pop("nova_reel_submit_notice"))
-        if st.session_state.get("nova_reel_submit_error"):
-            st.error(st.session_state.pop("nova_reel_submit_error"))
-        if st.session_state.get("nova_reel_refresh_notice"):
-            st.success(st.session_state.pop("nova_reel_refresh_notice"))
-        if st.session_state.get("nova_reel_refresh_error"):
-            st.error(st.session_state.pop("nova_reel_refresh_error"))
-
-        col_submit, col_refresh = st.columns(2)
-        with col_submit:
-            if st.button("提交 Nova Reel PoC 任务", use_container_width=True, disabled=not batch_rows):
-                with st.spinner(f"正在提交 Nova Reel 异步任务，请稍候...（{NOVA_REEL_MODEL_ID} / {NOVA_REEL_AWS_REGION}）"):
-                    jobs = load_nova_reel_poc_jobs()
-                    submitted_count = 0
-                    errors = []
-                    for row in batch_rows:
-                        try:
-                            invocation_arn, output_s3_uri = start_nova_reel_job(row["品类"], row["型号"], row["Prompt"])
-                            jobs.insert(
-                                0,
-                                {
-                                    "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-                                    "category": row["品类"],
-                                    "model": row["型号"],
-                                    "prompt": row["Prompt"],
-                                    "duration_seconds": 6,
-                                    "status": "InProgress",
-                                    "invocation_arn": invocation_arn,
-                                    "output_s3_uri": output_s3_uri,
-                                    "video_s3_uri": "",
-                                    "model_id": NOVA_REEL_MODEL_ID,
-                                    "region": NOVA_REEL_AWS_REGION,
-                                },
-                            )
-                            submitted_count += 1
-                        except Exception as exc:
-                            errors.append(f"{row['品类']} / {row['型号']}：{exc}")
-                            if "ThrottlingException" in str(exc) or "Too many requests" in str(exc):
-                                break
-                    save_nova_reel_poc_jobs(jobs)
-                    if submitted_count:
-                        remaining = max(0, len(valid_poc_rows) - submitted_count)
-                        st.session_state["nova_reel_submit_notice"] = (
-                            f"已提交 {submitted_count} 条 Nova Reel 任务，可稍后点击刷新状态。"
-                            f"剩余 {remaining} 条待提交，建议等待 1-2 分钟后再继续提交。"
-                        )
-                    if errors:
-                        st.session_state["nova_reel_submit_error"] = "部分任务提交失败：\n" + "\n".join(errors[:6])
-                st.rerun()
-        with col_refresh:
-            if st.button("刷新 Nova Reel 任务状态", use_container_width=True):
-                with st.spinner("正在刷新 Nova Reel 任务状态..."):
-                    jobs = load_nova_reel_poc_jobs()
-                    refreshed = 0
-                    errors = []
-                    for job in jobs:
-                        arn = job.get("invocation_arn", "")
-                        if not arn or job.get("status") in {"Completed", "Failed"}:
-                            continue
-                        try:
-                            result = query_nova_reel_job(arn)
-                            job["status"] = result.get("status", job.get("status", "Unknown"))
-                            job["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
-                            if result.get("failureMessage"):
-                                job["failure_message"] = result.get("failureMessage")
-                            if job["status"] == "Completed":
-                                job["output_s3_uri"] = (
-                                    (result.get("outputDataConfig") or {})
-                                    .get("s3OutputDataConfig", {})
-                                    .get("s3Uri", job.get("output_s3_uri", ""))
-                                )
-                                job["video_s3_uri"] = _video_uri_from_job(job)
-                            refreshed += 1
-                        except Exception as exc:
-                            errors.append(f"{job.get('category', '')} / {job.get('model', '')}：{exc}")
-                    save_nova_reel_poc_jobs(jobs)
-                    if refreshed:
-                        st.session_state["nova_reel_refresh_notice"] = f"已刷新 {refreshed} 条任务。"
-                    if errors:
-                        st.session_state["nova_reel_refresh_error"] = "部分任务刷新失败：\n" + "\n".join(errors[:6])
-                st.rerun()
-
-        jobs = load_nova_reel_poc_jobs()
-        if jobs:
-            display_jobs = []
-            for job in jobs[:30]:
-                video_uri = job.get("video_s3_uri") or _video_uri_from_job(job)
-                display_jobs.append(
-                    {
-                        "创建时间": job.get("created_at", ""),
-                        "品类": job.get("category", ""),
-                        "型号": job.get("model", ""),
-                        "状态": job.get("status", ""),
-                        "视频S3地址": video_uri,
-                        "失败原因": job.get("failure_message", ""),
-                    }
-                )
-            st.dataframe(pd.DataFrame(display_jobs), use_container_width=True, hide_index=True)
-            completed = [job for job in jobs if (job.get("video_s3_uri") or _video_uri_from_job(job)) and job.get("status") == "Completed"]
-            if completed:
-                selected_job = st.selectbox(
-                    "选择已完成素材预览/下载",
-                    range(len(completed)),
-                    format_func=lambda i: f"{completed[i].get('category', '')} / {completed[i].get('model', '')} / {completed[i].get('created_at', '')}",
-                )
-                video_uri = completed[selected_job].get("video_s3_uri") or _video_uri_from_job(completed[selected_job])
-                presigned_url = _presigned_url_for_s3_uri(video_uri)
-                st.code(video_uri)
-                if presigned_url:
-                    st.video(presigned_url)
-                    st.link_button("打开临时预览链接", presigned_url, use_container_width=True)
-
 if st.session_state.get("history_loaded_note"):
     st.info(st.session_state.get("history_loaded_note"))
 
@@ -2163,6 +2037,134 @@ if st.session_state.get("generated_variants"):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+
+    with st.expander("生成 Nova Reel 视频参考片段", expanded=False):
+        st.caption("建议先确认上方脚本文档无误，再选择一个方案生成 6 秒参考视频片段。生成完成后可在页面内预览，无需进入 S3。")
+        if st.session_state.get("nova_reel_submit_notice"):
+            st.success(st.session_state.pop("nova_reel_submit_notice"))
+        if st.session_state.get("nova_reel_submit_error"):
+            st.error(st.session_state.pop("nova_reel_submit_error"))
+        if st.session_state.get("nova_reel_refresh_notice"):
+            st.success(st.session_state.pop("nova_reel_refresh_notice"))
+        if st.session_state.get("nova_reel_refresh_error"):
+            st.error(st.session_state.pop("nova_reel_refresh_error"))
+
+        variant_idx = st.selectbox(
+            "选择要生成视频片段的脚本方案",
+            range(len(variants)),
+            format_func=lambda i: f"{variants[i].get('name', f'方案{i+1}')}｜{variants[i].get('label', '')}".strip("｜"),
+        )
+        selected_variant = variants[variant_idx]
+        video_prompt = build_variant_nova_reel_prompt(selected_variant, selected_category, selected_model, selected_features)
+        st.text_area("将提交给 Nova Reel 的视频 Prompt", video_prompt, height=150, disabled=True)
+
+        estimated_seconds = 6
+        st.caption(
+            f"本次会提交 1 条 6 秒视频任务；按 ${NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}/秒估算约 "
+            f"${estimated_seconds * NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}。实际以 AWS 账单为准。"
+        )
+
+        col_submit_video, col_refresh_video = st.columns(2)
+        with col_submit_video:
+            if st.button("生成此方案的视频参考片段", use_container_width=True):
+                with st.spinner(f"正在提交 Nova Reel 异步任务...（{NOVA_REEL_MODEL_ID} / {NOVA_REEL_AWS_REGION}）"):
+                    jobs = load_nova_reel_poc_jobs()
+                    try:
+                        invocation_arn, output_s3_uri = start_nova_reel_job(selected_category, selected_model, video_prompt)
+                        jobs.insert(
+                            0,
+                            {
+                                "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                                "category": selected_category,
+                                "model": selected_model,
+                                "variant_name": selected_variant.get("name", f"方案{variant_idx + 1}"),
+                                "variant_label": selected_variant.get("label", ""),
+                                "prompt": video_prompt,
+                                "duration_seconds": 6,
+                                "status": "InProgress",
+                                "invocation_arn": invocation_arn,
+                                "output_s3_uri": output_s3_uri,
+                                "video_s3_uri": "",
+                                "model_id": NOVA_REEL_MODEL_ID,
+                                "region": NOVA_REEL_AWS_REGION,
+                                "source": "script_variant",
+                            },
+                        )
+                        save_nova_reel_poc_jobs(jobs)
+                        st.session_state["nova_reel_submit_notice"] = "已提交 1 条 Nova Reel 视频任务。生成通常需要一段时间，请稍后刷新状态。"
+                    except Exception as exc:
+                        st.session_state["nova_reel_submit_error"] = f"视频任务提交失败：{exc}"
+                st.rerun()
+        with col_refresh_video:
+            if st.button("刷新视频生成状态", use_container_width=True):
+                with st.spinner("正在刷新 Nova Reel 任务状态..."):
+                    jobs = load_nova_reel_poc_jobs()
+                    refreshed = 0
+                    errors = []
+                    for job in jobs:
+                        if job.get("source") != "script_variant":
+                            continue
+                        arn = job.get("invocation_arn", "")
+                        if not arn or job.get("status") in {"Completed", "Failed"}:
+                            continue
+                        try:
+                            result = query_nova_reel_job(arn)
+                            job["status"] = result.get("status", job.get("status", "Unknown"))
+                            job["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                            if result.get("failureMessage"):
+                                job["failure_message"] = result.get("failureMessage")
+                            if job["status"] == "Completed":
+                                job["output_s3_uri"] = (
+                                    (result.get("outputDataConfig") or {})
+                                    .get("s3OutputDataConfig", {})
+                                    .get("s3Uri", job.get("output_s3_uri", ""))
+                                )
+                                job["video_s3_uri"] = _video_uri_from_job(job)
+                            refreshed += 1
+                        except Exception as exc:
+                            errors.append(f"{job.get('variant_name', '')}：{exc}")
+                    save_nova_reel_poc_jobs(jobs)
+                    if refreshed:
+                        st.session_state["nova_reel_refresh_notice"] = f"已刷新 {refreshed} 条视频任务。"
+                    if errors:
+                        st.session_state["nova_reel_refresh_error"] = "部分任务刷新失败：\n" + "\n".join(errors[:5])
+                st.rerun()
+
+        jobs = [
+            job
+            for job in load_nova_reel_poc_jobs()
+            if job.get("source") == "script_variant"
+            and str(job.get("category", "")) == str(selected_category)
+            and str(job.get("model", "")) == str(selected_model)
+        ]
+        if jobs:
+            display_jobs = []
+            for job in jobs[:20]:
+                video_uri = job.get("video_s3_uri") or _video_uri_from_job(job)
+                display_jobs.append(
+                    {
+                        "创建时间": job.get("created_at", ""),
+                        "方案": job.get("variant_name", ""),
+                        "状态": job.get("status", ""),
+                        "失败原因": job.get("failure_message", ""),
+                        "模型": job.get("model_id", ""),
+                    }
+                )
+            st.dataframe(pd.DataFrame(display_jobs), use_container_width=True, hide_index=True)
+            completed = [job for job in jobs if (job.get("video_s3_uri") or _video_uri_from_job(job)) and job.get("status") == "Completed"]
+            if completed:
+                selected_job_idx = st.selectbox(
+                    "选择已完成视频片段",
+                    range(len(completed)),
+                    format_func=lambda i: f"{completed[i].get('variant_name', '')}｜{completed[i].get('created_at', '')}",
+                )
+                video_uri = completed[selected_job_idx].get("video_s3_uri") or _video_uri_from_job(completed[selected_job_idx])
+                presigned_url = _presigned_url_for_s3_uri(video_uri)
+                if presigned_url:
+                    st.video(presigned_url)
+                    st.link_button("打开/下载视频片段", presigned_url, use_container_width=True)
+                else:
+                    st.warning("视频已生成，但临时预览链接创建失败。请联系平台维护人员检查 S3 权限。")
 
     with st.expander("试用反馈", expanded=False):
         feedback_score = st.radio("本次生成结果可用性", ["好用", "一般", "不可用"], horizontal=True)
