@@ -1026,8 +1026,27 @@ def apply_apple_theme():
 
         .block-container {
             max-width: 1220px;
-            padding-top: 1rem;
+            padding-top: 0.45rem;
             padding-bottom: 5rem;
+        }
+
+        [data-testid="stHeader"] {
+            height: 0 !important;
+            min-height: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+
+        [data-testid="stToolbar"] {
+            position: fixed !important;
+            top: 5.4rem !important;
+            right: 1.25rem !important;
+            z-index: 1000 !important;
+            background: rgba(255, 255, 255, 0.78) !important;
+            border: 1px solid rgba(0, 0, 0, 0.08) !important;
+            border-radius: 999px !important;
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.08) !important;
+            backdrop-filter: blur(18px);
         }
 
         [data-testid="stSidebar"] {
