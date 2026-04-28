@@ -280,8 +280,13 @@ def start_nova_reel_job(category, model, prompt, duration_seconds=6):
         raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 STORAGE_BACKEND=s3/S3_BUCKET，或设置 NOVA_REEL_OUTPUT_S3_URI。")
 
     import boto3
+    from botocore.config import Config
 
-    client = boto3.client("bedrock-runtime", region_name=NOVA_REEL_AWS_REGION)
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=NOVA_REEL_AWS_REGION,
+        config=Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2}),
+    )
     model_input = {
         "taskType": "TEXT_VIDEO",
         "textToVideoParams": {"text": prompt},
@@ -302,8 +307,13 @@ def start_nova_reel_job(category, model, prompt, duration_seconds=6):
 
 def query_nova_reel_job(invocation_arn):
     import boto3
+    from botocore.config import Config
 
-    client = boto3.client("bedrock-runtime", region_name=NOVA_REEL_AWS_REGION)
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=NOVA_REEL_AWS_REGION,
+        config=Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2}),
+    )
     return client.get_async_invoke(invocationArn=invocation_arn)
 
 def _video_uri_from_job(job):
@@ -1578,70 +1588,81 @@ else:
         else:
             st.warning("当前卖点库暂无可用于 PoC 的产品数据。")
 
+        if st.session_state.get("nova_reel_submit_notice"):
+            st.success(st.session_state.pop("nova_reel_submit_notice"))
+        if st.session_state.get("nova_reel_submit_error"):
+            st.error(st.session_state.pop("nova_reel_submit_error"))
+        if st.session_state.get("nova_reel_refresh_notice"):
+            st.success(st.session_state.pop("nova_reel_refresh_notice"))
+        if st.session_state.get("nova_reel_refresh_error"):
+            st.error(st.session_state.pop("nova_reel_refresh_error"))
+
         col_submit, col_refresh = st.columns(2)
         with col_submit:
             if st.button("提交 Nova Reel PoC 任务", use_container_width=True, disabled=not valid_poc_rows):
-                jobs = load_nova_reel_poc_jobs()
-                submitted_count = 0
-                errors = []
-                for row in valid_poc_rows:
-                    try:
-                        invocation_arn, output_s3_uri = start_nova_reel_job(row["品类"], row["型号"], row["Prompt"])
-                        jobs.insert(
-                            0,
-                            {
-                                "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-                                "category": row["品类"],
-                                "model": row["型号"],
-                                "prompt": row["Prompt"],
-                                "duration_seconds": 6,
-                                "status": "InProgress",
-                                "invocation_arn": invocation_arn,
-                                "output_s3_uri": output_s3_uri,
-                                "video_s3_uri": "",
-                                "model_id": NOVA_REEL_MODEL_ID,
-                                "region": NOVA_REEL_AWS_REGION,
-                            },
-                        )
-                        submitted_count += 1
-                    except Exception as exc:
-                        errors.append(f"{row['品类']} / {row['型号']}：{exc}")
-                save_nova_reel_poc_jobs(jobs)
-                if submitted_count:
-                    st.success(f"已提交 {submitted_count} 条 Nova Reel 任务。")
-                if errors:
-                    st.error("部分任务提交失败：\n" + "\n".join(errors[:6]))
+                with st.spinner(f"正在提交 Nova Reel 异步任务，请稍候...（{NOVA_REEL_MODEL_ID} / {NOVA_REEL_AWS_REGION}）"):
+                    jobs = load_nova_reel_poc_jobs()
+                    submitted_count = 0
+                    errors = []
+                    for row in valid_poc_rows:
+                        try:
+                            invocation_arn, output_s3_uri = start_nova_reel_job(row["品类"], row["型号"], row["Prompt"])
+                            jobs.insert(
+                                0,
+                                {
+                                    "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                                    "category": row["品类"],
+                                    "model": row["型号"],
+                                    "prompt": row["Prompt"],
+                                    "duration_seconds": 6,
+                                    "status": "InProgress",
+                                    "invocation_arn": invocation_arn,
+                                    "output_s3_uri": output_s3_uri,
+                                    "video_s3_uri": "",
+                                    "model_id": NOVA_REEL_MODEL_ID,
+                                    "region": NOVA_REEL_AWS_REGION,
+                                },
+                            )
+                            submitted_count += 1
+                        except Exception as exc:
+                            errors.append(f"{row['品类']} / {row['型号']}：{exc}")
+                    save_nova_reel_poc_jobs(jobs)
+                    if submitted_count:
+                        st.session_state["nova_reel_submit_notice"] = f"已提交 {submitted_count} 条 Nova Reel 任务，可稍后点击刷新状态。"
+                    if errors:
+                        st.session_state["nova_reel_submit_error"] = "部分任务提交失败：\n" + "\n".join(errors[:6])
                 st.rerun()
         with col_refresh:
             if st.button("刷新 Nova Reel 任务状态", use_container_width=True):
-                jobs = load_nova_reel_poc_jobs()
-                refreshed = 0
-                errors = []
-                for job in jobs:
-                    arn = job.get("invocation_arn", "")
-                    if not arn or job.get("status") in {"Completed", "Failed"}:
-                        continue
-                    try:
-                        result = query_nova_reel_job(arn)
-                        job["status"] = result.get("status", job.get("status", "Unknown"))
-                        job["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
-                        if result.get("failureMessage"):
-                            job["failure_message"] = result.get("failureMessage")
-                        if job["status"] == "Completed":
-                            job["output_s3_uri"] = (
-                                (result.get("outputDataConfig") or {})
-                                .get("s3OutputDataConfig", {})
-                                .get("s3Uri", job.get("output_s3_uri", ""))
-                            )
-                            job["video_s3_uri"] = _video_uri_from_job(job)
-                        refreshed += 1
-                    except Exception as exc:
-                        errors.append(f"{job.get('category', '')} / {job.get('model', '')}：{exc}")
-                save_nova_reel_poc_jobs(jobs)
-                if refreshed:
-                    st.success(f"已刷新 {refreshed} 条任务。")
-                if errors:
-                    st.error("部分任务刷新失败：\n" + "\n".join(errors[:6]))
+                with st.spinner("正在刷新 Nova Reel 任务状态..."):
+                    jobs = load_nova_reel_poc_jobs()
+                    refreshed = 0
+                    errors = []
+                    for job in jobs:
+                        arn = job.get("invocation_arn", "")
+                        if not arn or job.get("status") in {"Completed", "Failed"}:
+                            continue
+                        try:
+                            result = query_nova_reel_job(arn)
+                            job["status"] = result.get("status", job.get("status", "Unknown"))
+                            job["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                            if result.get("failureMessage"):
+                                job["failure_message"] = result.get("failureMessage")
+                            if job["status"] == "Completed":
+                                job["output_s3_uri"] = (
+                                    (result.get("outputDataConfig") or {})
+                                    .get("s3OutputDataConfig", {})
+                                    .get("s3Uri", job.get("output_s3_uri", ""))
+                                )
+                                job["video_s3_uri"] = _video_uri_from_job(job)
+                            refreshed += 1
+                        except Exception as exc:
+                            errors.append(f"{job.get('category', '')} / {job.get('model', '')}：{exc}")
+                    save_nova_reel_poc_jobs(jobs)
+                    if refreshed:
+                        st.session_state["nova_reel_refresh_notice"] = f"已刷新 {refreshed} 条任务。"
+                    if errors:
+                        st.session_state["nova_reel_refresh_error"] = "部分任务刷新失败：\n" + "\n".join(errors[:6])
                 st.rerun()
 
         jobs = load_nova_reel_poc_jobs()
