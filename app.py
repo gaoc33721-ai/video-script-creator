@@ -272,7 +272,9 @@ def _nova_reel_job_output_uri(category, model):
     if not base_uri:
         return ""
     stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    return f"{base_uri}/{stamp}_{_safe_slug(category)}_{_safe_slug(model)}_{uuid.uuid4().hex[:8]}"
+    # Bedrock video async output expects an S3 bucket or directory URI.
+    # Keep the generated directory ASCII-only and slash-terminated for stricter service validation.
+    return f"{base_uri.rstrip('/')}/{stamp}_{_safe_ascii_slug(category)}_{_safe_ascii_slug(model)}_{uuid.uuid4().hex[:8]}/"
 
 def start_nova_reel_job(category, model, prompt, duration_seconds=6):
     output_s3_uri = _nova_reel_job_output_uri(category, model)
@@ -482,6 +484,19 @@ def _safe_slug(text):
     s = re.sub(r"\s+", "_", str(text).strip())
     s = re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff-]+", "_", s)
     return s[:60] if s else "unknown"
+
+def _safe_ascii_slug(text):
+    if not text:
+        return "unknown"
+    mapping = {
+        "烤箱": "oven",
+        "微波炉": "microwave",
+        "空气炸锅": "air_fryer",
+    }
+    raw = mapping.get(str(text).strip(), str(text).strip())
+    slug = re.sub(r"\s+", "_", raw)
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", slug).strip("_")
+    return slug[:60] if slug else "unknown"
 
 def _category_key(product_category):
     if not product_category:
