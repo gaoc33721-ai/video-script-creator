@@ -973,7 +973,7 @@ def require_access():
     ):
         return True
 
-    st.title("🎬 海外电商视频脚本生成器")
+    st.title("视频脚本生成器")
     st.info("请输入访问密码。")
     if password_error:
         st.caption("密码配置读取暂时较慢，已使用最近一次成功读取的配置进行校验。")
@@ -997,13 +997,298 @@ def require_access():
 
 st.set_page_config(page_title="海外电商视频脚本生成器", page_icon="🎬", layout="wide")
 
+def apply_apple_theme():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --app-bg: #f5f5f7;
+            --app-surface: rgba(255, 255, 255, 0.86);
+            --app-surface-solid: #ffffff;
+            --app-border: rgba(0, 0, 0, 0.08);
+            --app-text: #1d1d1f;
+            --app-muted: #6e6e73;
+            --app-blue: #0071e3;
+            --app-blue-dark: #005bb5;
+            --app-red: #ff3b30;
+            --app-radius: 22px;
+            --app-shadow: 0 18px 55px rgba(0, 0, 0, 0.08);
+        }
+
+        html, body, [data-testid="stAppViewContainer"], .stApp {
+            background:
+                radial-gradient(circle at 20% 0%, rgba(0, 113, 227, 0.08), transparent 28rem),
+                radial-gradient(circle at 95% 15%, rgba(52, 199, 89, 0.08), transparent 24rem),
+                var(--app-bg) !important;
+            color: var(--app-text);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
+        }
+
+        .block-container {
+            max-width: 1220px;
+            padding-top: 2.2rem;
+            padding-bottom: 5rem;
+        }
+
+        [data-testid="stSidebar"] {
+            background: rgba(246, 246, 248, 0.78) !important;
+            border-right: 1px solid var(--app-border);
+            backdrop-filter: blur(22px);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+            color: var(--app-text);
+            letter-spacing: 0;
+        }
+
+        h1, h2, h3 {
+            color: var(--app-text);
+            letter-spacing: 0 !important;
+        }
+
+        h1 {
+            font-size: clamp(2.6rem, 5vw, 4.6rem) !important;
+            line-height: 1.04 !important;
+            font-weight: 760 !important;
+        }
+
+        h2, h3 {
+            font-weight: 680 !important;
+        }
+
+        .apple-hero {
+            padding: 3.2rem 3.4rem;
+            margin: 0 0 1.6rem 0;
+            border-radius: 30px;
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.72)),
+                radial-gradient(circle at 90% 10%, rgba(0, 113, 227, 0.16), transparent 24rem);
+            border: 1px solid rgba(255, 255, 255, 0.74);
+            box-shadow: var(--app-shadow);
+        }
+
+        .apple-eyebrow {
+            color: var(--app-blue);
+            font-size: 0.92rem;
+            font-weight: 650;
+            margin-bottom: 0.8rem;
+        }
+
+        .apple-hero h1 {
+            margin: 0;
+        }
+
+        .apple-hero p {
+            max-width: 760px;
+            margin: 1.1rem 0 0;
+            color: var(--app-muted);
+            font-size: 1.18rem;
+            line-height: 1.7;
+        }
+
+        .apple-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            margin-top: 1.5rem;
+        }
+
+        .apple-chip {
+            padding: 0.46rem 0.78rem;
+            border-radius: 999px;
+            color: #3a3a3c;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid rgba(0, 0, 0, 0.07);
+            font-size: 0.88rem;
+            font-weight: 560;
+        }
+
+        .apple-section-title {
+            margin: 1.65rem 0 0.65rem;
+            font-size: 1.72rem;
+            line-height: 1.2;
+            font-weight: 720;
+            color: var(--app-text);
+        }
+
+        .apple-section-caption {
+            margin: -0.2rem 0 1rem;
+            color: var(--app-muted);
+            font-size: 0.98rem;
+        }
+
+        div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stMetric"]) {
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid var(--app-border);
+            border-radius: 20px;
+            padding: 1rem 1.05rem;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.05);
+        }
+
+        [data-testid="stMetricLabel"] {
+            color: var(--app-muted) !important;
+            font-size: 0.9rem !important;
+        }
+
+        [data-testid="stMetricValue"] {
+            color: var(--app-text) !important;
+            font-size: 2.15rem !important;
+            font-weight: 650 !important;
+        }
+
+        div[data-testid="stExpander"] {
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid var(--app-border);
+            border-radius: 18px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.045);
+            overflow: hidden;
+        }
+
+        div[data-testid="stExpander"] details summary {
+            font-weight: 650;
+            color: var(--app-text);
+        }
+
+        .stTextInput input,
+        .stNumberInput input,
+        .stTextArea textarea,
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="select"] input {
+            border-radius: 14px !important;
+            border-color: rgba(0, 0, 0, 0.08) !important;
+            background: rgba(255, 255, 255, 0.9) !important;
+            box-shadow: none !important;
+        }
+
+        .stTextInput input:focus,
+        .stNumberInput input:focus,
+        .stTextArea textarea:focus {
+            border-color: rgba(0, 113, 227, 0.58) !important;
+            box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.13) !important;
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        .stFormSubmitButton > button {
+            border-radius: 999px !important;
+            min-height: 2.8rem;
+            border: 0 !important;
+            font-weight: 650 !important;
+            transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+        }
+
+        .stButton > button[kind="primary"],
+        .stDownloadButton > button,
+        .stFormSubmitButton > button[kind="primary"] {
+            background: var(--app-blue) !important;
+            color: #fff !important;
+            box-shadow: 0 10px 22px rgba(0, 113, 227, 0.24);
+        }
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        .stFormSubmitButton > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 14px 28px rgba(0, 0, 0, 0.12);
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 18px;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        [data-testid="stFileUploader"] section {
+            border-radius: 20px;
+            border: 1px dashed rgba(0, 113, 227, 0.28);
+            background: rgba(255, 255, 255, 0.76);
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.35rem;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid var(--app-border);
+            border-radius: 999px;
+            padding: 0.3rem;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 999px;
+            padding: 0.45rem 1rem;
+            color: var(--app-muted);
+        }
+
+        .stTabs [aria-selected="true"] {
+            background: var(--app-surface-solid);
+            color: var(--app-text);
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
+        }
+
+        hr {
+            border: 0;
+            border-top: 1px solid rgba(0, 0, 0, 0.08);
+            margin: 1.8rem 0;
+        }
+
+        table {
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        @media (max-width: 760px) {
+            .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+
+            .apple-hero {
+                padding: 2rem 1.4rem;
+                border-radius: 24px;
+            }
+
+            .apple-hero p {
+                font-size: 1rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_hero():
+    st.markdown(
+        """
+        <section class="apple-hero">
+            <div class="apple-eyebrow">Hisense International E-commerce</div>
+            <h1>视频脚本生成器</h1>
+            <p>基于产品卖点文案库，把型号、卖点、场景和营销诉求快速整理成可拍摄、可导出的海外电商短视频脚本。</p>
+            <div class="apple-chip-row">
+                <span class="apple-chip">产品卖点库驱动</span>
+                <span class="apple-chip">Amazon Bedrock 生成</span>
+                <span class="apple-chip">多方案导出 Excel</span>
+                <span class="apple-chip">内部试用平台</span>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_title(title, caption=""):
+    st.markdown(f'<div class="apple-section-title">{title}</div>', unsafe_allow_html=True)
+    if caption:
+        st.markdown(f'<div class="apple-section-caption">{caption}</div>', unsafe_allow_html=True)
+
+
+apply_apple_theme()
+
 require_access()
 
-st.title("🎬 海外电商视频脚本生成器")
-st.markdown("基于《电商产品种草视频知识库》规范，为您自动生成高转化率的短视频脚本。")
+render_hero()
 
 with st.sidebar:
-    st.header("⚙️ 基础配置")
+    st.header("基础配置")
     platform = st.selectbox("目标平台", ["TikTok / Reels / Shorts", "Amazon 主图视频", "独立站详情页"])
     target_market = st.selectbox("目标市场", ["北美 (US/CA)", "欧洲 (UK/DE/FR)", "东南亚", "其他"])
     video_type = st.multiselect("视频类型定位 (可多选)", 
@@ -1021,7 +1306,8 @@ cache_meta = load_cache_meta()
 
 # 数据上传模块
 if df_products.empty:
-    st.info("👋 欢迎使用！首次使用请上传您的《产品卖点库》Excel 文件。")
+    render_section_title("导入产品卖点库", "上传新版或旧版 Excel，系统会自动校验字段并保存为当前知识库。")
+    st.info("首次使用请上传《产品卖点库》Excel 文件。")
     st.caption("提示：当前会通过存储适配层保存数据；配置 S3/RDS 后可持久化到 AWS。")
     uploaded_file = st.file_uploader("拖拽或点击上传 Excel 文件", type=["xlsx", "xls"])
     if uploaded_file is not None:
@@ -1037,6 +1323,7 @@ if df_products.empty:
                 st.error(f"解析文件失败: {e}")
     st.stop()
 else:
+    render_section_title("卖点库状态", "当前加载的数据会作为脚本生成的产品知识来源。")
     status_cols = st.columns(4)
     status_cols[0].metric("当前品类数", int(df_products["Category"].nunique()) if "Category" in df_products.columns else 0)
     status_cols[1].metric("当前型号数", int(df_products["model"].nunique()) if "model" in df_products.columns else 0)
@@ -1049,7 +1336,7 @@ else:
             f"存储：{cache_meta.get('storage_backend', os.getenv('STORAGE_BACKEND', 'local'))}｜"
             f"数据库：{'已启用' if cache_meta.get('database_enabled') else '未启用'}"
         )
-    with st.expander("🔄 更新产品卖点库 (目前已加载数据)"):
+    with st.expander("更新产品卖点库", expanded=False):
         uploaded_file = st.file_uploader("如果您有最新的 Excel，可以在此上传覆盖", type=["xlsx", "xls"])
         if uploaded_file is not None:
             with st.spinner("正在更新文件..."):
@@ -1064,7 +1351,7 @@ else:
                     st.error(f"解析文件失败: {e}")
 
     history_records = load_history_records()
-    with st.expander("🕘 最近生成记录", expanded=False):
+    with st.expander("最近生成记录", expanded=False):
         if not history_records:
             st.caption("暂无历史记录。生成脚本后会自动保存最近 12 次记录，便于再次查看。")
         else:
@@ -1075,7 +1362,7 @@ else:
             history_idx = st.selectbox("选择历史记录", range(len(history_options)), format_func=lambda i: history_options[i])
             selected_history = history_records[history_idx]
             st.caption(f"历史标签：{' / '.join(selected_history.get('labels', [])) if selected_history.get('labels') else '无'}")
-            if st.button("📂 载入该次结果", use_container_width=True):
+            if st.button("载入该次结果", use_container_width=True):
                 st.session_state["generated_variants"] = selected_history.get("variants", [])
                 history_category = selected_history.get("category", "")
                 history_competitors = get_competitor_items(history_category, "", selected_history.get("market", ""))
@@ -1095,7 +1382,7 @@ if st.session_state.get("history_loaded_note"):
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("📦 产品信息")
+    render_section_title("产品信息", "选择品类、型号和核心卖点，决定脚本内容的事实基础。")
     
     # 动态获取品类
     all_categories = sorted(df_products['Category'].unique().tolist()) if not df_products.empty else ["空气炸锅", "烤箱", "洗碗机", "洗衣机"]
@@ -1138,9 +1425,9 @@ with col1:
         if selected:
             selected_features.append(selected)
 
-    st.caption(f"已选择 {len(selected_features)} 个卖点（用于生成脚本）")
+    st.caption(f"已选择 {len(selected_features)} 个卖点")
 
-    with st.expander("🏷️ 竞品素材配置（按品类缓存）", expanded=False):
+    with st.expander("竞品素材配置", expanded=False):
         category_key = _category_key(selected_category)
         cfg = load_competitor_config(category_key)
 
@@ -1206,7 +1493,7 @@ with col1:
 
         col_save, col_hint = st.columns([1, 3])
         with col_save:
-            if st.button("💾 保存该品类配置", use_container_width=True):
+            if st.button("保存该品类配置", use_container_width=True):
                 ok = save_competitor_config(category_key, {"brands": brands, "selected_urls": selected_urls, "manual_urls": manual_urls})
                 if ok:
                     st.success("已保存（该品类配置会缓存在云端服务器文件中）")
@@ -1217,7 +1504,7 @@ with col1:
             st.caption("说明：该配置按“品类”写入云端服务器本地文件，属于应用内部配置；未匹配到链接时会留空，避免乱填。")
 
 with col2:
-    st.subheader("🎯 营销诉求")
+    render_section_title("营销诉求", "补充场景、受众、痛点和内容节点，让脚本更贴近投放需求。")
     video_usage = st.selectbox("视频用途", ["站外种草", "站内首推", "内部培训", "其他"])
     expected_duration = st.slider("期望视频时长(秒)", 15, 45, 30, 1)
     project_type = st.selectbox("项目类型(可选)", ["常规上新", "新品上市", "大促活动", "教程培训", "其他"])
@@ -1243,7 +1530,7 @@ with col2:
         st.session_state["pain_points"] = DEFAULT_PAIN_POINTS.get(_pain_key, "省时省力；提升体验；减少清洁与维护成本；更适合家庭/小户型使用场景")
     pain_points = st.text_area("用户痛点", key="pain_points")
 
-    with st.expander("📅 节日/热点推荐（可选）", expanded=False):
+    with st.expander("节日与热点推荐", expanded=False):
         publish_date = st.date_input("内容发布日期", value=dt.date.today())
         market_key = _market_key(target_market)
         upcoming_nodes = get_upcoming_nodes(market_key, publish_date, limit=4)
@@ -1346,7 +1633,7 @@ if "generated_variants" not in st.session_state:
 if "generated_excel_bytes" not in st.session_state:
     st.session_state["generated_excel_bytes"] = None
 
-if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True):
+if st.button("生成视频脚本", type="primary", use_container_width=True):
     with st.spinner(f"正在调用 Amazon Bedrock 生成脚本...（{BEDROCK_MODEL_ID} / {BEDROCK_AWS_REGION}）"):
             feature_details = []
             for v in selected_features:
@@ -1482,7 +1769,7 @@ if st.button("🚀 生成爆款脚本", type="primary", use_container_width=True
             progress.progress(100)
             
             st.success("脚本生成成功！")
-            st.markdown("### 📝 生成结果预览")
+            render_section_title("生成结果预览", "检查分镜脚本后可直接导出 Excel。")
             st.session_state["generated_variants"] = variants
             st.session_state["generated_excel_bytes"] = _build_excel_bytes(variants, config_dict, selected_category, competitor_items=st.session_state.get("last_competitor_items"))
             append_history_record({
@@ -1516,18 +1803,18 @@ if st.session_state.get("generated_variants"):
     if excel_bytes:
         safe_model = re.sub(r"[^A-Za-z0-9_-]+", "_", str(selected_model))[:50] if selected_model else "model"
         st.download_button(
-            "⬇️ 下载Excel（含多套方案）",
+            "下载 Excel（含多套方案）",
             data=excel_bytes,
             file_name=f"video_script_{safe_model}_{dt.date.today().isoformat()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
 
-    with st.expander("📝 试用反馈收集", expanded=False):
+    with st.expander("试用反馈", expanded=False):
         feedback_score = st.radio("本次生成结果可用性", ["好用", "一般", "不可用"], horizontal=True)
         feedback_issue = st.multiselect("主要问题类型（可多选）", ["语言不合规", "表格格式", "竞品链接", "热点趋势", "脚本创意", "导出体验", "其他"])
         feedback_note = st.text_area("补充说明（可选）", "")
-        if st.button("📮 提交试用反馈", use_container_width=True):
+        if st.button("提交试用反馈", use_container_width=True):
             ok = save_feedback_record({
                 "created_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "category": selected_category,
