@@ -160,6 +160,7 @@ export S3_PREFIX=runtime
 # Nova Reel 建议单独配置区域；默认 us-east-1。
 export NOVA_REEL_AWS_REGION=us-east-1
 export NOVA_REEL_MODEL_ID=amazon.nova-reel-v1:1
+export NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK=2
 
 # 可选：如果希望视频输出到单独目录，可显式指定。
 export NOVA_REEL_OUTPUT_S3_URI=s3://video-script-creator-prod-assets-625093290485/runtime/nova-reel-poc
@@ -238,6 +239,7 @@ bash scripts/deploy_ecs_fargate.sh
 | `NOVA_REEL_MODEL_ID` | Environment | `amazon.nova-reel-v1:1` |
 | `NOVA_REEL_OUTPUT_S3_URI` | Environment | `s3://.../runtime/nova-reel-poc` |
 | `NOVA_REEL_ESTIMATED_USD_PER_SECOND` | Environment | `0.08` |
+| `NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK` | Environment | `2` |
 | `APP_DATA_DIR` | Environment | `/app/data` |
 | `STORAGE_BACKEND` | Environment | `local` 或 `s3` |
 | `S3_BUCKET` | Environment | `video-script-creator-prod-assets` |

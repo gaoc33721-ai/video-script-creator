@@ -46,6 +46,7 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
+NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK = int(os.getenv("NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK", "2"))
 APP_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
 APP_ACCESS_PASSWORD_SECRET_ID = os.getenv("APP_ACCESS_PASSWORD_SECRET_ID", "")
 APP_ACCESS_CONTROL_ENABLED = os.getenv("APP_ACCESS_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -1592,10 +1593,23 @@ else:
                     }
                 )
 
-        valid_poc_rows = [row for row in poc_rows if row.get("型号") != "未找到" and row.get("Prompt")]
-        estimated_seconds = len(valid_poc_rows) * 6
+        jobs = load_nova_reel_poc_jobs()
+        submitted_pairs = {
+            (str(job.get("category", "")), str(job.get("model", "")))
+            for job in jobs
+            if job.get("invocation_arn")
+        }
+        valid_poc_rows = [
+            row
+            for row in poc_rows
+            if row.get("型号") != "未找到"
+            and row.get("Prompt")
+            and (str(row.get("品类", "")), str(row.get("型号", ""))) not in submitted_pairs
+        ]
+        batch_rows = valid_poc_rows[:NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK]
+        estimated_seconds = len(batch_rows) * 6
         st.caption(
-            f"本轮计划提交 {len(valid_poc_rows)} 条素材任务，预计生成 {estimated_seconds} 秒；"
+            f"本次最多提交 {len(batch_rows)} 条素材任务（总待提交 {len(valid_poc_rows)} 条，已提交过的型号会自动跳过），预计生成 {estimated_seconds} 秒；"
             f"按 ${NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}/秒估算约 ${estimated_seconds * NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}。实际以 AWS 账单为准。"
         )
         if poc_rows:
@@ -1614,12 +1628,12 @@ else:
 
         col_submit, col_refresh = st.columns(2)
         with col_submit:
-            if st.button("提交 Nova Reel PoC 任务", use_container_width=True, disabled=not valid_poc_rows):
+            if st.button("提交 Nova Reel PoC 任务", use_container_width=True, disabled=not batch_rows):
                 with st.spinner(f"正在提交 Nova Reel 异步任务，请稍候...（{NOVA_REEL_MODEL_ID} / {NOVA_REEL_AWS_REGION}）"):
                     jobs = load_nova_reel_poc_jobs()
                     submitted_count = 0
                     errors = []
-                    for row in valid_poc_rows:
+                    for row in batch_rows:
                         try:
                             invocation_arn, output_s3_uri = start_nova_reel_job(row["品类"], row["型号"], row["Prompt"])
                             jobs.insert(
@@ -1641,9 +1655,15 @@ else:
                             submitted_count += 1
                         except Exception as exc:
                             errors.append(f"{row['品类']} / {row['型号']}：{exc}")
+                            if "ThrottlingException" in str(exc) or "Too many requests" in str(exc):
+                                break
                     save_nova_reel_poc_jobs(jobs)
                     if submitted_count:
-                        st.session_state["nova_reel_submit_notice"] = f"已提交 {submitted_count} 条 Nova Reel 任务，可稍后点击刷新状态。"
+                        remaining = max(0, len(valid_poc_rows) - submitted_count)
+                        st.session_state["nova_reel_submit_notice"] = (
+                            f"已提交 {submitted_count} 条 Nova Reel 任务，可稍后点击刷新状态。"
+                            f"剩余 {remaining} 条待提交，建议等待 1-2 分钟后再继续提交。"
+                        )
                     if errors:
                         st.session_state["nova_reel_submit_error"] = "部分任务提交失败：\n" + "\n".join(errors[:6])
                 st.rerun()
