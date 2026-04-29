@@ -18,6 +18,7 @@ APP_ACCESS_PASSWORD="${APP_ACCESS_PASSWORD:-}"
 APP_ACCESS_PASSWORD_SECRET_NAME="${APP_ACCESS_PASSWORD_SECRET_NAME:-${APP_NAME}/app-access-password}"
 APP_ACCESS_PASSWORD_SECRET_ARN="${APP_ACCESS_PASSWORD_SECRET_ARN:-}"
 APP_ACCESS_PASSWORD_CACHE_TTL="${APP_ACCESS_PASSWORD_CACHE_TTL:-300}"
+DATABASE_URL_SECRET_ARN="${DATABASE_URL_SECRET_ARN:-}"
 ALLOWED_HTTP_CIDRS="${ALLOWED_HTTP_CIDRS:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-8501}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
@@ -357,8 +358,17 @@ aws logs create-log-group --region "$AWS_REGION" --log-group-name "$LOG_GROUP" >
 EXEC_ROLE_ARN="$(aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text)"
 TASK_ROLE_ARN="$(aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text)"
 
+SECRET_ARNS=()
 if [[ -n "$APP_ACCESS_PASSWORD_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$APP_ACCESS_PASSWORD_SECRET_ARN")
+fi
+if [[ -n "$DATABASE_URL_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$DATABASE_URL_SECRET_ARN")
+fi
+
+if [[ ${#SECRET_ARNS[@]} -gt 0 ]]; then
   SECRET_POLICY_DOC="$(mktemp)"
+  SECRET_RESOURCES_JSON="$(printf '%s\n' "${SECRET_ARNS[@]}" | python3 -c 'import json, sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
   cat > "$SECRET_POLICY_DOC" <<JSON
 {
   "Version": "2012-10-17",
@@ -367,7 +377,7 @@ if [[ -n "$APP_ACCESS_PASSWORD_SECRET_ARN" ]]; then
     "Action": [
       "secretsmanager:GetSecretValue"
     ],
-    "Resource": "${APP_ACCESS_PASSWORD_SECRET_ARN}"
+    "Resource": ${SECRET_RESOURCES_JSON}
   }]
 }
 JSON
@@ -409,6 +419,8 @@ if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
 secrets = []
 if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
     secrets.append({"name": "APP_ACCESS_PASSWORD", "valueFrom": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})
+if "${DATABASE_URL_SECRET_ARN}":
+    secrets.append({"name": "DATABASE_URL", "valueFrom": "${DATABASE_URL_SECRET_ARN}"})
 
 doc = {
     "family": "${TASK_FAMILY}",
