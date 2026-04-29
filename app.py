@@ -1194,7 +1194,7 @@ def require_access():
                 st.error("访问密码不正确。")
     st.stop()
 
-st.set_page_config(page_title="海外爆款内容引擎", page_icon="🎬", layout="wide")
+st.set_page_config(page_title="海外爆款内容引擎", page_icon="🎬", layout="wide", initial_sidebar_state="expanded")
 
 def apply_apple_theme():
     st.markdown(
@@ -1240,6 +1240,34 @@ def apply_apple_theme():
             display: none !important;
             visibility: hidden !important;
             pointer-events: none !important;
+        }
+
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stSidebarNav"] button,
+        button[title="Open sidebar"],
+        button[title="Close sidebar"] {
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapsedControl"],
+        button[title="Open sidebar"] {
+            position: fixed !important;
+            top: 0.75rem !important;
+            left: 0.75rem !important;
+            z-index: 999999 !important;
+            width: 2.5rem !important;
+            height: 2.5rem !important;
+            border-radius: 999px !important;
+            background: rgba(255, 255, 255, 0.9) !important;
+            border: 1px solid rgba(0, 0, 0, 0.12) !important;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12) !important;
+            align-items: center !important;
+            justify-content: center !important;
         }
 
         [data-testid="stDecoration"],
