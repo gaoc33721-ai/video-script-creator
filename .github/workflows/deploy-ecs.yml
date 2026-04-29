@@ -1,0 +1,70 @@
+name: Deploy ECS Fargate
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: video-script-creator-ecs-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      APP_NAME: video-script-creator
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
+      BEDROCK_AWS_REGION: ${{ vars.BEDROCK_AWS_REGION || 'eu-central-1' }}
+      BEDROCK_MODEL_ID: ${{ vars.BEDROCK_MODEL_ID || 'eu.amazon.nova-pro-v1:0' }}
+      BEDROCK_MAX_TOKENS: ${{ vars.BEDROCK_MAX_TOKENS || '4096' }}
+      STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 's3' }}
+      S3_BUCKET: ${{ vars.S3_BUCKET || 'video-script-creator-prod-assets-625093290485' }}
+      S3_PREFIX: ${{ vars.S3_PREFIX || 'runtime' }}
+      NOVA_REEL_AWS_REGION: ${{ vars.NOVA_REEL_AWS_REGION || 'us-east-1' }}
+      NOVA_REEL_MODEL_ID: ${{ vars.NOVA_REEL_MODEL_ID || 'amazon.nova-reel-v1:1' }}
+      NOVA_REEL_OUTPUT_S3_URI: ${{ vars.NOVA_REEL_OUTPUT_S3_URI || 's3://video-script-creator-prod-assets-625093290485/runtime/nova-reel-poc' }}
+      NOVA_REEL_ESTIMATED_USD_PER_SECOND: ${{ vars.NOVA_REEL_ESTIMATED_USD_PER_SECOND || '0.08' }}
+      NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK: ${{ vars.NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK || '2' }}
+      AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+      APP_ACCESS_PASSWORD_SECRET_ARN: ${{ secrets.APP_ACCESS_PASSWORD_SECRET_ARN }}
+      APP_ACCESS_PASSWORD_CACHE_TTL: ${{ vars.APP_ACCESS_PASSWORD_CACHE_TTL || '300' }}
+      ALLOWED_HTTP_CIDRS: ${{ vars.ALLOWED_HTTP_CIDRS || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Skip until AWS role is configured
+        if: ${{ env.AWS_ROLE_TO_ASSUME == '' }}
+        run: |
+          echo "AWS_ROLE_TO_ASSUME is not configured. Skipping deployment."
+          echo "See docs/github-actions-auto-deploy.md for one-time setup."
+
+      - name: Configure AWS credentials
+        if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
+        run: aws sts get-caller-identity
+
+      - name: Deploy ECS service
+        if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
+        run: bash scripts/deploy_ecs_fargate.sh
+
+      - name: Show ECS status
+        if: ${{ always() && env.AWS_ROLE_TO_ASSUME != '' }}
+        run: bash scripts/ecs_status.sh || true

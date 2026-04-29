@@ -87,6 +87,22 @@ docker tag video-script-creator:local <account-id>.dkr.ecr.<region>.amazonaws.co
 docker push <account-id>.dkr.ecr.<region>.amazonaws.com/video-script-creator:latest
 ```
 
+## 3.0 自动部署（推荐）
+
+仓库已提供 GitHub Actions 工作流：
+
+```text
+.github/workflows/deploy-ecs.yml
+```
+
+完成一次性 OIDC 授权配置后，push 到 `main` 会自动执行 ECS/Fargate 部署，不再需要每次手动复制 CloudShell 命令。
+
+配置方式见：
+
+```text
+docs/github-actions-auto-deploy.md
+```
+
 ## 3.1 快速部署到 App Runner
 
 CloudShell 中确认 `python3 scripts/check_aws_ready.py` 成功后，可以先用 App Runner 跑内部试用版：
