@@ -69,7 +69,7 @@ COMPETITOR_BRAND_POOL = {
 
 CATEGORY_QUERY_TERMS = {
     "空气炸锅": ["air fryer", "airfryer"],
-    "微波炉": ["microwave", "inverter microwave"],
+    "微波炉": ["microwave"],
     "冰箱": ["refrigerator", "fridge", "french door refrigerator", "side by side refrigerator"],
     "洗衣机": ["washing machine", "washer", "laundry"],
     "洗碗机": ["dishwasher"],
@@ -144,20 +144,7 @@ COMPETITOR_VIDEO_REFERENCES = {
             "focus_points": ["可视化烹饪/可视窗口", "快速出餐节奏", "场景演示"],
         },
     ],
-    "微波炉": [
-        {
-            "brand": "Panasonic",
-            "title": "Panasonic Inverter Microwaves（产品视频示例）",
-            "url": "https://m.youtube.com/watch?v=k50Ckg_E4rU",
-            "focus_points": ["Inverter（变频）概念表达", "均匀加热/解冻体验", "操作与场景演示"],
-        },
-        {
-            "brand": "LG",
-            "title": "LG NeoChef（Smart Inverter 卖点视频示例）",
-            "url": "https://m.youtube.com/watch?v=0RDCJqSF4dY",
-            "focus_points": ["Smart Inverter（智能变频）概念", "控温/解冻体验", "外观与厨房场景"],
-        },
-    ],
+    "微波炉": [],
 }
 
 def _safe_read_json(key, default_value):
@@ -834,7 +821,6 @@ def _fallback_cn_cell(col_name):
     mapping = {
         "结构分段": "结构段落",
         "功能点": "功能演示",
-        "意境表达": "温馨生活氛围",
         "表现手法": "产品特写 + 场景化对比",
         "特色效果": "关键卖点文字点亮 + 氛围光",
         "拍摄角度": "侧面中景 + 手部特写",
@@ -1517,16 +1503,23 @@ render_hero()
 
 with st.sidebar:
     st.header("基础配置")
-    platform = st.selectbox("目标平台", ["TikTok / Reels / Shorts", "Amazon 主图视频", "独立站详情页"])
-    target_market = st.selectbox("目标市场", ["北美 (US/CA)", "欧洲 (UK/DE/FR)", "东南亚", "其他"])
-    video_type = st.multiselect("视频类型定位 (可多选)", 
-                                ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
-                                default=["问题解决/痛点挖掘型", "场景化/生活方式型"])
-    variant_count = st.selectbox("生成脚本套数", [2, 3], index=0)
-    production_method = st.selectbox("制作方式", ["实拍", "渲染"])
-    overall_style = st.selectbox("风格", ["科技", "时尚", "温馨家居", "高端奢华"])
-    music_style = st.selectbox("音乐", ["舒缓", "日系"])
-    tone_color = st.selectbox("调性/色调", ["暖色", "冷色", "日系"])
+    platform = st.selectbox(
+        "发布渠道",
+        ["TikTok / Reels / Shorts", "Amazon 主图视频", "独立站详情页"],
+        help="决定脚本节奏和画幅表达，默认适合海外短视频投放。",
+    )
+    target_market = st.selectbox(
+        "目标市场",
+        ["北美 (US/CA)", "欧洲 (UK/DE/FR)", "东南亚", "其他"],
+        help="用于匹配语言、节日节点和用户表达习惯。",
+    )
+    variant_count = st.selectbox("生成方案数", [2, 3], index=0, help="一次生成几套不同脚本方向。")
+    with st.expander("高级风格设置", expanded=False):
+        st.caption("无特殊要求时保持默认即可。")
+        production_method = st.selectbox("制作方式", ["实拍", "渲染"])
+        overall_style = st.selectbox("视觉风格", ["科技", "时尚", "温馨家居", "高端奢华"])
+        music_style = st.selectbox("音乐氛围", ["舒缓", "日系"])
+        tone_color = st.selectbox("画面色调", ["暖色", "冷色", "日系"])
     
 # 检查是否已有缓存数据
 df_products = get_product_data()
@@ -1734,7 +1727,20 @@ with col1:
 with col2:
     render_section_title("营销诉求", "补充场景、受众、痛点和内容节点，让脚本更贴近投放需求。")
     video_usage = st.selectbox("视频用途", ["站外种草", "站内首推", "内部培训", "其他"])
-    expected_duration = st.slider("期望视频时长(秒)", 15, 45, 30, 1)
+    video_type = st.multiselect(
+        "脚本方向（可多选）",
+        ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
+        default=["问题解决/痛点挖掘型", "场景化/生活方式型"],
+        help="用于约束脚本结构；不确定时保留默认即可。",
+    )
+    expected_duration = st.number_input(
+        "期望视频时长(秒)",
+        min_value=6,
+        max_value=90,
+        value=30,
+        step=1,
+        help="可直接输入业务希望的视频时长。建议短视频控制在 15-45 秒。",
+    )
     project_type = st.selectbox("项目类型(可选)", ["常规上新", "新品上市", "大促活动", "教程培训", "其他"])
     general_audience_mode = st.checkbox("不指定目标受众（通用卖点）", value=True, key="general_audience_mode")
     _aud_key = _category_key(selected_category)
@@ -1757,6 +1763,12 @@ with col2:
         st.session_state["last_pain_category"] = _pain_key
         st.session_state["pain_points"] = DEFAULT_PAIN_POINTS.get(_pain_key, "省时省力；提升体验；减少清洁与维护成本；更适合家庭/小户型使用场景")
     pain_points = st.text_area("用户痛点", key="pain_points")
+    custom_requirements = st.text_area(
+        "自定义需求",
+        placeholder="例如：60% 内容聚焦第一个卖点；补充强调安装便利；弱化价格表达；面向美国亚马逊站外种草。",
+        help="用于补充无法通过筛选项表达的具体要求，会直接传入生成提示词。",
+        height=120,
+    )
 
     with st.expander("节日与热点推荐", expanded=False):
         publish_date = st.date_input("内容发布日期", value=dt.date.today())
@@ -1788,7 +1800,7 @@ SYSTEM_PROMPT = """##角色
 你是“海外爆款内容引擎”，为海信海外电商产品策划推广提供视频脚本生成服务。你需要基于海信的产品卖点，撰写不同类型（产品展示视频、产品介绍视频、产品操作视频、产品种草视频等）的视频脚本，以支持导出为word或excel形式的Markdown表格输出。 
  
 ##限制与优化规范
-1. **时长精确控制**：脚本总时长需严格控制在 15-45 秒以内，并尽量贴近用户给定的“期望视频时长(秒)”。表格的“时长”列必须给出**确切的秒数**（如：5秒），并在表格最后一行增加“总时长”统计。
+1. **时长精确控制**：脚本总时长需尽量贴近用户给定的“期望视频时长(秒)”；如用户未特别指定，建议控制在 15-45 秒。表格的“时长”列必须给出**确切的秒数**（如：5秒），并在表格最后一行增加“总时长”统计。
 2. **结构模块化与落地**：对于产品展示和操作类视频，采用“步骤拆解式”的结构分段（如：开箱检查、安装放置、功能A演示、对比实验等），逻辑务实清晰。
 3. **强调交互与对比镜头**：在“表现手法/拍摄角度/运镜方式”等字段中，必须包含**UI面板/按键的特写、操作反馈（如LED屏幕显示、滴滴声）**，并尽量设计**使用前后的对比实验镜头**（如：传统解冻 vs 微波炉解冻）以直观展示卖点。
 4. **品牌 Slogan 收尾**：脚本的最后一段（总结）必须是固定的格式：产品静置全景特写 + 海信品牌 Slogan（"Hisense Designed to Ease, Crafted to Cheer."）。
@@ -1800,13 +1812,13 @@ SYSTEM_PROMPT = """##角色
 6. **竞品链接**：表格中必须包含“竞品链接”字段，至少在“总结/收尾”行填写 1-3 条可用链接（使用用户提供的链接清单，不要编造）。
 7. **竞品盖帽**：表格中必须新增“竞品盖帽”字段，用于一句话概括“本产品强于该竞品主打点的展示特点”。必须只基于本产品卖点写法，避免编造竞品参数/结论；可采用“对标点+本品优势”表达（例如：对标可视化/预设菜单/快速解冻，本品通过XX镜头更直观、更省事）。
 8. **AI Prompt**：如需 AI 视频生成 Prompt，请将其放入“表现手法/特色效果/运镜方式”等中文描述字段中，以括号附带英文（如：[AI Prompt: xxx]）。
-9. **整体要求**：必须遵循用户给定的“制作方式/风格/音乐/调性(色调)”整体要求，并在“意境表达/表现手法/特色效果/整体AI视频生成Prompt”中体现一致的视觉与剪辑风格。
+9. **整体要求**：必须遵循用户给定的“制作方式/风格/音乐/调性(色调)”整体要求，并在“表现手法/特色效果/整体AI视频生成Prompt”中体现一致的视觉与剪辑风格。
 
 ## 格式要求
 必须以**标准的 Markdown 表格**形式输出，**请直接输出纯文本形式的表格，绝对不要将表格包裹在 ```markdown 或 ``` 代码块中！**
-请确保每一行都用 `|` 完整闭合，表格必须统一使用以下 13 列：
-| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"""
+请确保每一行都用 `|` 完整闭合，表格必须统一使用以下 12 列：
+| 结构分段 | 功能点 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"""
 
 # 在表格后追加整体 AI Prompt 的要求（不要影响表格渲染）
 SYSTEM_PROMPT += """
@@ -1910,12 +1922,13 @@ if st.button("生成视频脚本", type="primary", use_container_width=True):
                 "核心卖点": core_features_md,
                 "目标受众": target_audience if target_audience else "通用卖点（不指定具体人群）",
                 "用户痛点": pain_points,
+                "自定义需求": custom_requirements,
                 "内容发布日期": str(publish_date),
                 "结合热点": festival_hotspot,
                 "生成脚本套数": variant_count,
             }
 
-            table_header_line = "| 结构分段 | 功能点 | 意境表达 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |"
+            table_header_line = "| 结构分段 | 功能点 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |"
 
             variants = []
             progress = st.progress(0)
@@ -1923,15 +1936,17 @@ if st.button("生成视频脚本", type="primary", use_container_width=True):
                 progress.progress(int((i - 1) / int(variant_count) * 100))
                 variant_prompt = f"""
 请生成【方案{i}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
-- 必须先输出一张符合系统要求的 Markdown 表格（13列，行内时长为秒，最后一行为总时长）。
+- 必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
 - 表格必须包含并使用如下表头（逐字一致）：
 {table_header_line}
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
-- 与其他方案保持明显差异：开场hook、意境表达、表现手法至少两处不同。
+- 与其他方案保持明显差异：开场hook、表现手法、镜头组织至少两处不同。
 - 可用竞品链接与主打点（请从中选择填写到表格的“竞品链接”列，并在“竞品盖帽”列用一句话写本品在展示上的强项）：{competitor_links_inline}
 - 若可用竞品链接为“无（请留空，不要编造）”，则表格中的“竞品链接/竞品盖帽”两列必须留空。
-- 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列（结构分段/功能点/意境表达/表现手法/特色效果/拍摄角度/运镜方式/竞品盖帽/音效/时长）必须以中文为主；允许出现极少量大写缩写（如 UI/LED/4K）。
+- 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列（结构分段/功能点/表现手法/特色效果/拍摄角度/运镜方式/竞品盖帽/音效/时长）必须以中文为主；允许出现极少量大写缩写（如 UI/LED/4K）。
 - 英文列格式强约束：两列英文内容不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
+- 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数；例如核心卖点没有“变频/Inverter”，就不得把“变频”写入案例、竞品盖帽或脚本内容。
+- 自定义需求优先级高于默认方向，但不得违背产品卖点事实：{custom_requirements if custom_requirements else "无"}
 
 输入参数：
 - 目标平台：{platform}
@@ -1949,6 +1964,7 @@ if st.button("生成视频脚本", type="primary", use_container_width=True):
 - 核心卖点：{core_features_md}
 - 目标受众：{target_audience if target_audience else "通用卖点（不指定具体人群）"}
 - 用户痛点：{pain_points}
+- 自定义需求：{custom_requirements if custom_requirements else "无"}
 - 内容发布日期：{publish_date if 'publish_date' in locals() else ""}
 - 结合热点：{festival_hotspot}
 """.strip()
