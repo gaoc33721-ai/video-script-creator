@@ -1531,7 +1531,7 @@ require_access()
 
 render_hero()
 
-with st.expander("基础配置", expanded=True):
+with st.expander("基础配置", expanded=False):
     st.caption("先设置发布渠道、目标市场和生成方案数；无特殊要求时，高级风格设置保持默认即可。")
     cfg_col1, cfg_col2, cfg_col3 = st.columns(3)
     with cfg_col1:
