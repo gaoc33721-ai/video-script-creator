@@ -185,3 +185,15 @@ create table script_feedback (
 4. 将脚本生成逻辑从 Streamlit 页面拆成服务函数。
 5. 接入 Cognito 身份信息，记录用户维度的生成历史和反馈。
 6. 增加 CloudWatch 日志字段：`job_id`, `user_id`, `category`, `model`, `latency_ms`, `status`。
+
+## 9. 待办：启用数据库
+
+- 目标：将部门内部使用过程中的产品卖点库版本、生成历史、反馈记录、Prompt 模板、Nova Reel 任务记录沉淀到 RDS PostgreSQL。
+- 当前状态：线上已启用 S3 持久化，数据库暂未启用；部署脚本已预留 `DATABASE_URL_SECRET_ARN` 注入能力。
+- 建议时机：业务反馈优化稳定后执行，避免数据库迁移与体验问题修复同时进行。
+- 最小实施步骤：
+  1. 创建 RDS PostgreSQL 小规格实例。
+  2. 执行 `aws/postgres_schema.sql` 初始化表结构。
+  3. 将当前生效产品卖点库导入 `product_feature_versions` 和 `product_features`。
+  4. 将数据库连接串写入 Secrets Manager，并在 GitHub Actions 配置 `DATABASE_URL_SECRET_ARN`。
+  5. 触发自动部署，确认页面显示 `数据库：已启用`。
