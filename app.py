@@ -2039,7 +2039,7 @@ if st.session_state.get("generated_variants"):
         )
 
     with st.expander("生成 Nova Reel 视频参考片段", expanded=False):
-        st.caption("建议先确认上方脚本文档无误，再选择一个方案生成 6 秒参考视频片段。生成完成后可在页面内预览，无需进入 S3。")
+        st.caption("建议先确认上方脚本文档无误，再选择一个方案生成 6 秒参考视频片段。这里的 6 秒指成片时长，不是生成等待时间；生成完成后可在页面内预览，无需进入 S3。")
         if st.session_state.get("nova_reel_submit_notice"):
             st.success(st.session_state.pop("nova_reel_submit_notice"))
         if st.session_state.get("nova_reel_submit_error"):
@@ -2060,8 +2060,10 @@ if st.session_state.get("generated_variants"):
 
         estimated_seconds = 6
         st.caption(
-            f"本次会提交 1 条 6 秒视频任务；按 ${NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}/秒估算约 "
-            f"${estimated_seconds * NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}。实际以 AWS 账单为准。"
+            f"本次会提交 1 条视频任务，目标成片时长约 6 秒；费用按成片时长估算："
+            f"${NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}/成片秒，约 "
+            f"${estimated_seconds * NOVA_REEL_ESTIMATED_USD_PER_SECOND:.2f}。"
+            "生成等待时间取决于 Bedrock 队列和账号限流，通常明显长于 6 秒；实际耗时和费用以 AWS 为准。"
         )
 
         col_submit_video, col_refresh_video = st.columns(2)
@@ -2091,7 +2093,7 @@ if st.session_state.get("generated_variants"):
                             },
                         )
                         save_nova_reel_poc_jobs(jobs)
-                        st.session_state["nova_reel_submit_notice"] = "已提交 1 条 Nova Reel 视频任务。生成通常需要一段时间，请稍后刷新状态。"
+                        st.session_state["nova_reel_submit_notice"] = "已提交 1 条 Nova Reel 视频任务。6 秒是目标成片时长，生成任务为异步排队处理，请稍后刷新状态。"
                     except Exception as exc:
                         st.session_state["nova_reel_submit_error"] = f"视频任务提交失败：{exc}"
                 st.rerun()
