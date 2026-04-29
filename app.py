@@ -1184,7 +1184,7 @@ def require_access():
     ):
         return True
 
-    st.title("视频脚本生成器")
+    st.title("海外爆款内容引擎")
     st.info("请输入访问密码。")
     if password_error:
         st.caption("密码配置读取暂时较慢，已使用最近一次成功读取的配置进行校验。")
@@ -1206,7 +1206,7 @@ def require_access():
                 st.error("访问密码不正确。")
     st.stop()
 
-st.set_page_config(page_title="海外电商视频脚本生成器", page_icon="🎬", layout="wide")
+st.set_page_config(page_title="海外爆款内容引擎", page_icon="🎬", layout="wide")
 
 def apply_apple_theme():
     st.markdown(
@@ -1490,7 +1490,7 @@ def render_hero():
         """
         <section class="apple-hero">
             <div class="apple-eyebrow">Hisense International E-commerce</div>
-            <h1>视频脚本生成器</h1>
+            <h1>海外爆款内容引擎</h1>
             <p>基于产品卖点文案库，快速生成可拍摄、可导出的海外电商短视频脚本。</p>
             <div class="apple-chip-row">
                 <span class="apple-chip">产品卖点库驱动</span>
@@ -1785,7 +1785,7 @@ st.markdown("---")
 
 # 定义系统 Prompt
 SYSTEM_PROMPT = """##角色 
-你是一位专业的视频脚本撰写智能体，为海信海外电商产品策划推广提供服务。你需要基于海信的产品卖点，撰写不同类型（产品展示视频、产品介绍视频、产品操作视频、产品种草视频等）的视频脚本，以支持导出为word或excel形式的Markdown表格输出。 
+你是“海外爆款内容引擎”，为海信海外电商产品策划推广提供视频脚本生成服务。你需要基于海信的产品卖点，撰写不同类型（产品展示视频、产品介绍视频、产品操作视频、产品种草视频等）的视频脚本，以支持导出为word或excel形式的Markdown表格输出。 
  
 ##限制与优化规范
 1. **时长精确控制**：脚本总时长需严格控制在 15-45 秒以内，并尽量贴近用户给定的“期望视频时长(秒)”。表格的“时长”列必须给出**确切的秒数**（如：5秒），并在表格最后一行增加“总时长”统计。
