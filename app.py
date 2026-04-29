@@ -12,6 +12,7 @@ import hashlib
 import xml.etree.ElementTree as ET
 import urllib.parse
 import uuid
+import threading
 
 from product_feature_store import ProductFeatureStore, filter_product_features
 from storage_adapters import RuntimeStorage
@@ -33,6 +34,7 @@ CACHE_META_KEY = "cache_meta.json"
 HISTORY_KEY = "script_history.json"
 FEEDBACK_KEY = "trial_feedback.json"
 NOVA_REEL_POC_JOBS_KEY = "nova_reel_poc_jobs.json"
+SCRIPT_JOBS_KEY = "script_generation_jobs.json"
 
 BEDROCK_AWS_REGION = (
     os.getenv("BEDROCK_AWS_REGION")
@@ -1868,73 +1870,38 @@ def generate_script_bedrock(user_prompt, temperature=0.7, top_p=0.9, max_tokens=
             f"请检查 AWS 凭证、区域 {BEDROCK_AWS_REGION}、模型权限 {BEDROCK_MODEL_ID} 是否已配置。"
         )
 
-if "generated_variants" not in st.session_state:
-    st.session_state["generated_variants"] = []
-if "generated_excel_bytes" not in st.session_state:
-    st.session_state["generated_excel_bytes"] = None
 
-if st.button("生成视频脚本", type="primary", use_container_width=True):
-    with st.spinner(f"正在调用 Amazon Bedrock 生成脚本...（{BEDROCK_MODEL_ID} / {BEDROCK_AWS_REGION}）"):
-            feature_details = []
-            for v in selected_features:
-                desc = ""
-                if not model_features.empty and "Feature Description" in model_features.columns:
-                    matches = model_features[model_features["Feature Name"] == v]
-                    if not matches.empty:
-                        desc_val = matches.iloc[0].get("Feature Description", "")
-                        desc = str(desc_val).strip() if desc_val is not None else ""
-                feature_details.append({"name": v, "description": desc})
+_SCRIPT_JOB_LOCK = threading.Lock()
+_SCRIPT_JOB_THREADS: dict[str, threading.Thread] = {}
 
-            core_features_md = "；".join([
-                f"{i+1}. {x['name']}{(' — ' + x['description']) if x.get('description') else ''}"
-                for i, x in enumerate(feature_details)
-            ]) if feature_details else ""
-            competitor_items = get_competitor_items(selected_category, platform, target_market)
-            allowed_competitor_urls = [it.get("url", "") for it in competitor_items if (it or {}).get("url")]
-            if competitor_items:
-                parts = []
-                for it in competitor_items:
-                    title = (it or {}).get("title", "").strip()
-                    url = (it or {}).get("url", "").strip()
-                    brand = (it or {}).get("brand", "").strip()
-                    focus = (it or {}).get("focus_points", []) or []
-                    focus_text = " / ".join([x for x in focus if x])
-                    suffix = f" (focus: {focus_text})" if focus_text else ""
-                    prefix = f"{brand} - " if brand else ""
-                    parts.append(f"{prefix}{title}: {url}{suffix}")
-                competitor_links_inline = " <br> ".join(parts)
-            else:
-                competitor_links_inline = "无（请留空，不要编造）"
-            st.session_state["last_competitor_items"] = competitor_items
-            config_dict = {
-                "目标平台": platform,
-                "目标市场": target_market,
-                "视频类型定位": ", ".join(video_type),
-                "视频用途": video_usage,
-                "期望视频时长(秒)": expected_duration,
-                "项目类型": project_type,
-                "制作方式": production_method,
-                "风格": overall_style,
-                "音乐": music_style,
-                "调性/色调": tone_color,
-                "产品品类": selected_category,
-                "产品型号": selected_model,
-                "核心卖点": core_features_md,
-                "目标受众": target_audience if target_audience else "通用卖点（不指定具体人群）",
-                "用户痛点": pain_points,
-                "自定义需求": custom_requirements,
-                "内容发布日期": str(publish_date),
-                "结合热点": festival_hotspot,
-                "生成脚本套数": variant_count,
-            }
 
-            table_header_line = "| 结构分段 | 功能点 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |"
+def load_script_jobs(limit=50):
+    jobs = _safe_read_json(SCRIPT_JOBS_KEY, [])
+    if not isinstance(jobs, list):
+        jobs = []
+    return jobs[:limit]
 
-            variants = []
-            progress = st.progress(0)
-            for i in range(1, int(variant_count) + 1):
-                progress.progress(int((i - 1) / int(variant_count) * 100))
-                variant_prompt = f"""
+
+def save_script_jobs(jobs, limit=100):
+    if not isinstance(jobs, list):
+        jobs = []
+    return _safe_write_json(SCRIPT_JOBS_KEY, jobs[:limit])
+
+
+def _update_script_job(job_id, **fields):
+    with _SCRIPT_JOB_LOCK:
+        jobs = load_script_jobs(limit=100)
+        for job in jobs:
+            if job.get("id") == job_id:
+                job.update(fields)
+                job["updated_at"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_script_jobs(jobs)
+                return job
+    return None
+
+
+def _build_variant_prompt(i, request, competitor_links_inline, table_header_line):
+    return f"""
 请生成【方案{i}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
 - 必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
 - 表格必须包含并使用如下表头（逐字一致）：
@@ -1946,41 +1913,76 @@ if st.button("生成视频脚本", type="primary", use_container_width=True):
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列（结构分段/功能点/表现手法/特色效果/拍摄角度/运镜方式/竞品盖帽/音效/时长）必须以中文为主；允许出现极少量大写缩写（如 UI/LED/4K）。
 - 英文列格式强约束：两列英文内容不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数；例如核心卖点没有“变频/Inverter”，就不得把“变频”写入案例、竞品盖帽或脚本内容。
-- 自定义需求优先级高于默认方向，但不得违背产品卖点事实：{custom_requirements if custom_requirements else "无"}
+- 自定义需求优先级高于默认方向，但不得违背产品卖点事实：{request.get("自定义需求") or "无"}
 
 输入参数：
-- 目标平台：{platform}
-- 目标市场：{target_market}
-- 建议视频类型：{', '.join(video_type)}
-- 视频用途：{video_usage}
-- 期望视频时长(秒)：{expected_duration}
-- 项目类型：{project_type}
-- 制作方式：{production_method}
-- 风格：{overall_style}
-- 音乐：{music_style}
-- 调性/色调：{tone_color}
-- 产品品类：{selected_category}
-- 产品型号：{selected_model}
-- 核心卖点：{core_features_md}
-- 目标受众：{target_audience if target_audience else "通用卖点（不指定具体人群）"}
-- 用户痛点：{pain_points}
-- 自定义需求：{custom_requirements if custom_requirements else "无"}
-- 内容发布日期：{publish_date if 'publish_date' in locals() else ""}
-- 结合热点：{festival_hotspot}
+- 目标平台：{request.get("目标平台", "")}
+- 目标市场：{request.get("目标市场", "")}
+- 建议视频类型：{request.get("视频类型定位", "")}
+- 视频用途：{request.get("视频用途", "")}
+- 期望视频时长(秒)：{request.get("期望视频时长(秒)", "")}
+- 项目类型：{request.get("项目类型", "")}
+- 制作方式：{request.get("制作方式", "")}
+- 风格：{request.get("风格", "")}
+- 音乐：{request.get("音乐", "")}
+- 调性/色调：{request.get("调性/色调", "")}
+- 产品品类：{request.get("产品品类", "")}
+- 产品型号：{request.get("产品型号", "")}
+- 核心卖点：{request.get("核心卖点", "")}
+- 目标受众：{request.get("目标受众", "")}
+- 用户痛点：{request.get("用户痛点", "")}
+- 自定义需求：{request.get("自定义需求") or "无"}
+- 内容发布日期：{request.get("内容发布日期", "")}
+- 结合热点：{request.get("结合热点", "")}
 """.strip()
 
-                content = generate_script_bedrock(variant_prompt)
-                content = _strip_code_fences(content)
-                if (table_header_line not in content) or ("总时长" not in content):
-                    retry_prompt = variant_prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
-                    content_retry = generate_script_bedrock(retry_prompt, temperature=0.3, top_p=0.8)
-                    content_retry = _strip_code_fences(content_retry)
-                    if (table_header_line in content_retry) and ("总时长" in content_retry):
-                        content = content_retry
 
-                ok_lang, _ = _validate_language_for_table(content)
-                if not ok_lang:
-                    fix_prompt = f"""
+def run_script_generation_job(job_id):
+    job = _update_script_job(job_id, status="running", progress=0, error_message="")
+    if not job:
+        return
+    try:
+        request = job.get("request", {}) or {}
+        competitor_items = job.get("competitor_items", []) or []
+        allowed_competitor_urls = [it.get("url", "") for it in competitor_items if (it or {}).get("url")]
+        if competitor_items:
+            parts = []
+            for it in competitor_items:
+                title = (it or {}).get("title", "").strip()
+                url = (it or {}).get("url", "").strip()
+                brand = (it or {}).get("brand", "").strip()
+                focus = (it or {}).get("focus_points", []) or []
+                focus_text = " / ".join([x for x in focus if x])
+                suffix = f" (focus: {focus_text})" if focus_text else ""
+                prefix = f"{brand} - " if brand else ""
+                parts.append(f"{prefix}{title}: {url}{suffix}")
+            competitor_links_inline = " <br> ".join(parts)
+        else:
+            competitor_links_inline = "无（请留空，不要编造）"
+
+        table_header_line = "| 结构分段 | 功能点 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |"
+        variant_count = int(request.get("生成脚本套数") or 2)
+        variants = []
+        for i in range(1, variant_count + 1):
+            fresh_job = next((j for j in load_script_jobs(limit=100) if j.get("id") == job_id), {})
+            if fresh_job.get("status") == "cancel_requested":
+                _update_script_job(job_id, status="cancelled", progress=int((i - 1) / variant_count * 100))
+                return
+
+            _update_script_job(job_id, status="running", progress=int((i - 1) / variant_count * 100), current_step=f"正在生成方案{i}")
+            variant_prompt = _build_variant_prompt(i, request, competitor_links_inline, table_header_line)
+            content = generate_script_bedrock(variant_prompt)
+            content = _strip_code_fences(content)
+            if (table_header_line not in content) or ("总时长" not in content):
+                retry_prompt = variant_prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
+                content_retry = generate_script_bedrock(retry_prompt, temperature=0.3, top_p=0.8)
+                content_retry = _strip_code_fences(content_retry)
+                if (table_header_line in content_retry) and ("总时长" in content_retry):
+                    content = content_retry
+
+            ok_lang, _ = _validate_language_for_table(content)
+            if not ok_lang:
+                fix_prompt = f"""
 请将下面脚本中的 Markdown 表格按以下规则“修复语言”并输出修复后的完整内容：
 1) 保持表格列数/表头/行数/时长数字不变；
 2) 仅【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列保留英文；
@@ -1991,41 +1993,195 @@ if st.button("生成视频脚本", type="primary", use_container_width=True):
 原内容：
 {content}
 """.strip()
-                    fixed = content
-                    for _ in range(2):
-                        fixed_try = generate_script_bedrock(fix_prompt, temperature=0.2, top_p=0.7)
-                        fixed_try = _strip_code_fences(fixed_try)
-                        ok_lang2, _ = _validate_language_for_table(fixed_try)
-                        if ok_lang2:
-                            fixed = fixed_try
-                            break
+                fixed = content
+                for _ in range(2):
+                    fixed_try = generate_script_bedrock(fix_prompt, temperature=0.2, top_p=0.7)
+                    fixed_try = _strip_code_fences(fixed_try)
+                    ok_lang2, _ = _validate_language_for_table(fixed_try)
+                    if ok_lang2:
                         fixed = fixed_try
-                    content = fixed
+                        break
+                    fixed = fixed_try
+                content = fixed
 
-                ok_lang3, _ = _validate_language_for_table(content)
-                if not ok_lang3:
-                    content = _force_non_english_columns_to_cn(content)
+            ok_lang3, _ = _validate_language_for_table(content)
+            if not ok_lang3:
+                content = _force_non_english_columns_to_cn(content)
+            content = _normalize_variant_content(content, allowed_competitor_urls)
+            variants.append({"name": f"方案{i}", "label": infer_variant_label(content), "content": content})
+            _update_script_job(job_id, progress=int(i / variant_count * 100), partial_count=len(variants))
 
-                content = _normalize_variant_content(content, allowed_competitor_urls)
+        _update_script_job(
+            job_id,
+            status="succeeded",
+            progress=100,
+            current_step="已完成",
+            variants=variants,
+            completed_at=dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        append_history_record({
+            "created_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "category": request.get("产品品类", ""),
+            "model": request.get("产品型号", ""),
+            "platform": request.get("目标平台", ""),
+            "market": request.get("目标市场", ""),
+            "labels": [v.get("label", "") for v in variants],
+            "variants": variants,
+            "config": request,
+        })
+    except Exception as exc:
+        _update_script_job(job_id, status="failed", error_message=str(exc), current_step="生成失败")
 
-                variants.append({"name": f"方案{i}", "label": infer_variant_label(content), "content": content})
 
-            progress.progress(100)
-            
-            st.success("脚本生成成功！")
-            render_section_title("生成结果预览", "检查分镜脚本后可直接导出 Excel。")
-            st.session_state["generated_variants"] = variants
-            st.session_state["generated_excel_bytes"] = _build_excel_bytes(variants, config_dict, selected_category, competitor_items=st.session_state.get("last_competitor_items"))
-            append_history_record({
-                "created_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "category": selected_category,
-                "model": selected_model,
-                "platform": platform,
-                "market": target_market,
-                "labels": [v.get("label", "") for v in variants],
-                "variants": variants,
-                "config": config_dict,
-            })
+def start_script_generation_job(job_id):
+    thread = _SCRIPT_JOB_THREADS.get(job_id)
+    if thread and thread.is_alive():
+        return
+    thread = threading.Thread(target=run_script_generation_job, args=(job_id,), daemon=True)
+    _SCRIPT_JOB_THREADS[job_id] = thread
+    thread.start()
+
+
+def create_script_generation_job(request, competitor_items):
+    job = {
+        "id": uuid.uuid4().hex[:12],
+        "created_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "pending",
+        "progress": 0,
+        "current_step": "已提交，等待生成",
+        "request": request,
+        "competitor_items": competitor_items,
+        "variants": [],
+        "error_message": "",
+    }
+    with _SCRIPT_JOB_LOCK:
+        jobs = load_script_jobs(limit=100)
+        jobs.insert(0, job)
+        save_script_jobs(jobs)
+    start_script_generation_job(job["id"])
+    return job
+
+if "generated_variants" not in st.session_state:
+    st.session_state["generated_variants"] = []
+if "generated_excel_bytes" not in st.session_state:
+    st.session_state["generated_excel_bytes"] = None
+
+if st.button("提交脚本生成任务", type="primary", use_container_width=True):
+    feature_details = []
+    for v in selected_features:
+        desc = ""
+        if not model_features.empty and "Feature Description" in model_features.columns:
+            matches = model_features[model_features["Feature Name"] == v]
+            if not matches.empty:
+                desc_val = matches.iloc[0].get("Feature Description", "")
+                desc = str(desc_val).strip() if desc_val is not None else ""
+        feature_details.append({"name": v, "description": desc})
+
+    core_features_md = "；".join([
+        f"{i+1}. {x['name']}{(' — ' + x['description']) if x.get('description') else ''}"
+        for i, x in enumerate(feature_details)
+    ]) if feature_details else ""
+    competitor_items = get_competitor_items(selected_category, platform, target_market)
+    st.session_state["last_competitor_items"] = competitor_items
+    config_dict = {
+        "目标平台": platform,
+        "目标市场": target_market,
+        "视频类型定位": ", ".join(video_type),
+        "视频用途": video_usage,
+        "期望视频时长(秒)": expected_duration,
+        "项目类型": project_type,
+        "制作方式": production_method,
+        "风格": overall_style,
+        "音乐": music_style,
+        "调性/色调": tone_color,
+        "产品品类": selected_category,
+        "产品型号": selected_model,
+        "核心卖点": core_features_md,
+        "目标受众": target_audience if target_audience else "通用卖点（不指定具体人群）",
+        "用户痛点": pain_points,
+        "自定义需求": custom_requirements,
+        "内容发布日期": str(publish_date),
+        "结合热点": festival_hotspot,
+        "生成脚本套数": variant_count,
+    }
+    job = create_script_generation_job(config_dict, competitor_items)
+    st.success(f"已提交生成任务：{job['id']}。可以刷新任务中心查看进度，页面可继续操作。")
+    st.rerun()
+
+with st.expander("任务中心", expanded=True):
+    jobs = load_script_jobs()
+    if not jobs:
+        st.caption("暂无脚本生成任务。")
+    else:
+        status_label = {
+            "pending": "排队中",
+            "running": "生成中",
+            "succeeded": "已完成",
+            "failed": "失败",
+            "cancel_requested": "取消中",
+            "cancelled": "已取消",
+        }
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "任务ID": j.get("id", ""),
+                    "创建时间": j.get("created_at", ""),
+                    "产品": f"{(j.get('request') or {}).get('产品品类', '')} / {(j.get('request') or {}).get('产品型号', '')}",
+                    "状态": status_label.get(j.get("status", ""), j.get("status", "")),
+                    "进度": f"{int(j.get('progress', 0) or 0)}%",
+                    "当前步骤": j.get("current_step", ""),
+                    "失败原因": j.get("error_message", ""),
+                }
+                for j in jobs[:12]
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+        col_refresh, col_action = st.columns(2)
+        with col_refresh:
+            if st.button("刷新任务状态", use_container_width=True):
+                st.rerun()
+        selectable_jobs = [j for j in jobs if j.get("status") in {"succeeded", "failed", "pending", "running", "cancel_requested"}]
+        if selectable_jobs:
+            selected_job_id = st.selectbox(
+                "选择任务操作",
+                [j.get("id", "") for j in selectable_jobs],
+                format_func=lambda jid: next(
+                    (
+                        f"{jid}｜{status_label.get(j.get('status', ''), j.get('status', ''))}｜{(j.get('request') or {}).get('产品型号', '')}"
+                        for j in selectable_jobs
+                        if j.get("id") == jid
+                    ),
+                    jid,
+                ),
+            )
+            selected_job = next((j for j in selectable_jobs if j.get("id") == selected_job_id), None)
+            if selected_job:
+                action_cols = st.columns(3)
+                with action_cols[0]:
+                    if selected_job.get("status") == "succeeded" and st.button("载入完成结果", use_container_width=True):
+                        variants = selected_job.get("variants", []) or []
+                        request = selected_job.get("request", {}) or {}
+                        st.session_state["generated_variants"] = variants
+                        st.session_state["last_competitor_items"] = selected_job.get("competitor_items", []) or []
+                        st.session_state["generated_excel_bytes"] = _build_excel_bytes(
+                            variants,
+                            request,
+                            request.get("产品品类", ""),
+                            competitor_items=selected_job.get("competitor_items", []),
+                        )
+                        st.session_state["history_loaded_note"] = f"已载入任务结果：{selected_job_id}"
+                        st.rerun()
+                with action_cols[1]:
+                    if selected_job.get("status") == "failed" and st.button("重试失败任务", use_container_width=True):
+                        _update_script_job(selected_job_id, status="pending", progress=0, current_step="已重新提交", error_message="", variants=[])
+                        start_script_generation_job(selected_job_id)
+                        st.rerun()
+                with action_cols[2]:
+                    if selected_job.get("status") in {"pending", "running"} and st.button("取消任务", use_container_width=True):
+                        _update_script_job(selected_job_id, status="cancel_requested", current_step="正在尝试取消")
+                        st.rerun()
 
 if st.session_state.get("generated_variants"):
     variants = st.session_state["generated_variants"]
