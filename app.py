@@ -1531,25 +1531,33 @@ require_access()
 
 render_hero()
 
-with st.sidebar:
-    st.header("基础配置")
-    platform = st.selectbox(
-        "发布渠道",
-        ["TikTok / Reels / Shorts", "Amazon 主图视频", "独立站详情页"],
-        help="决定脚本节奏和画幅表达，默认适合海外短视频投放。",
-    )
-    target_market = st.selectbox(
-        "目标市场",
-        ["北美 (US/CA)", "欧洲 (UK/DE/FR)", "东南亚", "其他"],
-        help="用于匹配语言、节日节点和用户表达习惯。",
-    )
-    variant_count = st.selectbox("生成方案数", [2, 3], index=0, help="一次生成几套不同脚本方向。")
+with st.expander("基础配置", expanded=True):
+    st.caption("先设置发布渠道、目标市场和生成方案数；无特殊要求时，高级风格设置保持默认即可。")
+    cfg_col1, cfg_col2, cfg_col3 = st.columns(3)
+    with cfg_col1:
+        platform = st.selectbox(
+            "发布渠道",
+            ["TikTok / Reels / Shorts", "Amazon 主图视频", "独立站详情页"],
+            help="决定脚本节奏和画幅表达，默认适合海外短视频投放。",
+        )
+    with cfg_col2:
+        target_market = st.selectbox(
+            "目标市场",
+            ["北美 (US/CA)", "欧洲 (UK/DE/FR)", "东南亚", "其他"],
+            help="用于匹配语言、节日节点和用户表达习惯。",
+        )
+    with cfg_col3:
+        variant_count = st.selectbox("生成方案数", [2, 3], index=0, help="一次生成几套不同脚本方向。")
     with st.expander("高级风格设置", expanded=False):
-        st.caption("无特殊要求时保持默认即可。")
-        production_method = st.selectbox("制作方式", ["实拍", "渲染"])
-        overall_style = st.selectbox("视觉风格", ["科技", "时尚", "温馨家居", "高端奢华"])
-        music_style = st.selectbox("音乐氛围", ["舒缓", "日系"])
-        tone_color = st.selectbox("画面色调", ["暖色", "冷色", "日系"])
+        style_col1, style_col2, style_col3, style_col4 = st.columns(4)
+        with style_col1:
+            production_method = st.selectbox("制作方式", ["实拍", "渲染"])
+        with style_col2:
+            overall_style = st.selectbox("视觉风格", ["科技", "时尚", "温馨家居", "高端奢华"])
+        with style_col3:
+            music_style = st.selectbox("音乐氛围", ["舒缓", "日系"])
+        with style_col4:
+            tone_color = st.selectbox("画面色调", ["暖色", "冷色", "日系"])
     
 # 检查是否已有缓存数据
 df_products = get_product_data()
