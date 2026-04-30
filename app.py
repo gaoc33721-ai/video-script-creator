@@ -1398,12 +1398,21 @@ def apply_apple_theme():
         .stTextInput input,
         .stNumberInput input,
         .stTextArea textarea,
-        div[data-baseweb="select"] > div,
-        div[data-baseweb="select"] input {
+        div[data-baseweb="select"] > div {
             border-radius: 14px !important;
             border-color: rgba(0, 0, 0, 0.08) !important;
             background: rgba(255, 255, 255, 0.9) !important;
             box-shadow: none !important;
+        }
+
+        div[data-baseweb="select"] input,
+        div[data-baseweb="select"] input:focus {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+            min-width: 2px !important;
+            padding: 0 !important;
         }
 
         .stTextInput input:focus,
