@@ -1202,31 +1202,33 @@ def apply_apple_theme():
         <style>
         :root {
             --app-bg: #f5f5f7;
-            --app-surface: rgba(255, 255, 255, 0.86);
+            --app-surface: rgba(255, 255, 255, 0.92);
             --app-surface-solid: #ffffff;
-            --app-border: rgba(0, 0, 0, 0.08);
+            --app-border: rgba(29, 29, 31, 0.09);
             --app-text: #1d1d1f;
             --app-muted: #6e6e73;
+            --app-faint: #86868b;
             --app-blue: #0071e3;
             --app-blue-dark: #005bb5;
+            --app-orange: #f56300;
+            --app-green: #34c759;
             --app-red: #ff3b30;
-            --app-radius: 22px;
-            --app-shadow: 0 18px 55px rgba(0, 0, 0, 0.08);
+            --app-radius: 28px;
+            --app-shadow: 0 18px 42px rgba(0, 0, 0, 0.08);
         }
 
         html, body, [data-testid="stAppViewContainer"], .stApp {
-            background:
-                radial-gradient(circle at 20% 0%, rgba(0, 113, 227, 0.08), transparent 28rem),
-                radial-gradient(circle at 95% 15%, rgba(52, 199, 89, 0.08), transparent 24rem),
-                var(--app-bg) !important;
+            background: var(--app-bg) !important;
             color: var(--app-text);
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
         }
 
         .block-container {
-            max-width: 1220px;
-            padding-top: 0.45rem;
+            max-width: 1440px;
+            padding-top: 1.05rem;
             padding-bottom: 5rem;
+            padding-left: 3.4rem;
+            padding-right: 3.4rem;
         }
 
         [data-testid="stHeader"] {
@@ -1278,7 +1280,7 @@ def apply_apple_theme():
         }
 
         [data-testid="stSidebar"] {
-            background: rgba(246, 246, 248, 0.78) !important;
+            background: rgba(245, 245, 247, 0.9) !important;
             border-right: 1px solid var(--app-border);
             backdrop-filter: blur(22px);
         }
@@ -1295,8 +1297,8 @@ def apply_apple_theme():
         }
 
         h1 {
-            font-size: clamp(1.9rem, 3vw, 2.8rem) !important;
-            line-height: 1.04 !important;
+            font-size: clamp(2.3rem, 4.8vw, 4.4rem) !important;
+            line-height: 1.02 !important;
             font-weight: 760 !important;
         }
 
@@ -1305,70 +1307,155 @@ def apply_apple_theme():
         }
 
         .apple-hero {
-            padding: 0.85rem 0 1rem;
-            margin: 0 0 0.6rem 0;
-            border-radius: 0;
-            background: transparent;
-            border: 0;
-            box-shadow: none;
+            display: grid;
+            grid-template-columns: minmax(0, 1.14fr) minmax(18rem, 0.86fr);
+            gap: 1rem;
+            align-items: stretch;
+            margin: 0 0 1.4rem 0;
+        }
+
+        .apple-hero-main,
+        .apple-hero-side,
+        .apple-store-card {
+            background: var(--app-surface-solid);
+            border: 1px solid rgba(29, 29, 31, 0.06);
+            border-radius: var(--app-radius);
+            box-shadow: var(--app-shadow);
+        }
+
+        .apple-hero-main {
+            min-height: 15.4rem;
+            padding: 2.35rem 2.55rem;
+            background:
+                radial-gradient(circle at 78% 10%, rgba(0, 113, 227, 0.11), transparent 18rem),
+                linear-gradient(135deg, #ffffff 0%, #fbfbfd 58%, #eef6ff 100%);
+        }
+
+        .apple-hero-side {
+            min-height: 15.4rem;
+            padding: 1.55rem;
+            background:
+                radial-gradient(circle at 88% 0%, rgba(255, 149, 0, 0.14), transparent 13rem),
+                #ffffff;
         }
 
         .apple-eyebrow {
             color: var(--app-blue);
-            font-size: 0.82rem;
-            font-weight: 650;
-            margin-bottom: 0.35rem;
+            font-size: 0.88rem;
+            font-weight: 700;
+            margin-bottom: 0.9rem;
         }
 
         .apple-hero h1 {
+            max-width: 860px;
             margin: 0;
         }
 
+        .apple-hero h1 .apple-accent {
+            color: var(--app-orange);
+        }
+
         .apple-hero p {
-            max-width: 820px;
-            margin: 0.45rem 0 0;
+            max-width: 760px;
+            margin: 1rem 0 0;
             color: var(--app-muted);
-            font-size: 0.98rem;
+            font-size: 1.12rem;
             line-height: 1.55;
         }
 
         .apple-chip-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 0.45rem;
-            margin-top: 0.75rem;
+            gap: 0.55rem;
+            margin-top: 1.2rem;
         }
 
         .apple-chip {
-            padding: 0.28rem 0.58rem;
+            padding: 0.5rem 0.78rem;
             border-radius: 999px;
             color: #3a3a3c;
-            background: rgba(255, 255, 255, 0.82);
+            background: rgba(255, 255, 255, 0.88);
             border: 1px solid rgba(0, 0, 0, 0.07);
+            font-size: 0.86rem;
+            font-weight: 650;
+        }
+
+        .apple-side-kicker {
+            color: var(--app-orange);
+            font-size: 0.82rem;
+            font-weight: 700;
+            margin-bottom: 0.6rem;
+        }
+
+        .apple-side-title {
+            color: var(--app-text);
+            font-size: 1.5rem;
+            line-height: 1.16;
+            font-weight: 730;
+            margin: 0 0 0.65rem;
+        }
+
+        .apple-side-copy {
+            color: var(--app-muted);
+            font-size: 0.96rem;
+            line-height: 1.48;
+            margin: 0;
+        }
+
+        .apple-store-rail {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 1rem;
+            margin: 0 0 1.45rem;
+        }
+
+        .apple-store-card {
+            min-height: 8.8rem;
+            padding: 1.35rem 1.45rem;
+        }
+
+        .apple-store-card .card-kicker {
+            color: var(--app-faint);
             font-size: 0.78rem;
-            font-weight: 560;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        .apple-store-card .card-title {
+            color: var(--app-text);
+            font-size: 1.36rem;
+            line-height: 1.18;
+            font-weight: 720;
+            margin: 0.62rem 0 0.4rem;
+        }
+
+        .apple-store-card .card-copy {
+            color: var(--app-muted);
+            font-size: 0.92rem;
+            line-height: 1.45;
         }
 
         .apple-section-title {
-            margin: 1.05rem 0 0.45rem;
-            font-size: 1.72rem;
-            line-height: 1.2;
-            font-weight: 720;
+            margin: 1.65rem 0 0.35rem;
+            font-size: clamp(1.72rem, 2.5vw, 2.35rem);
+            line-height: 1.08;
+            font-weight: 760;
             color: var(--app-text);
         }
 
         .apple-section-caption {
-            margin: -0.2rem 0 1rem;
+            margin: 0 0 1.15rem;
             color: var(--app-muted);
-            font-size: 0.98rem;
+            font-size: 1.02rem;
         }
 
         div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stMetric"]) {
-            background: rgba(255, 255, 255, 0.82);
-            border: 1px solid var(--app-border);
-            border-radius: 20px;
-            padding: 1rem 1.05rem;
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.05);
+            background: #ffffff;
+            border: 1px solid rgba(29, 29, 31, 0.06);
+            border-radius: 24px;
+            padding: 1.35rem 1.55rem;
+            box-shadow: var(--app-shadow);
         }
 
         [data-testid="stMetricLabel"] {
@@ -1383,10 +1470,10 @@ def apply_apple_theme():
         }
 
         div[data-testid="stExpander"] {
-            background: rgba(255, 255, 255, 0.78);
-            border: 1px solid var(--app-border);
-            border-radius: 18px;
-            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.045);
+            background: rgba(255, 255, 255, 0.94);
+            border: 1px solid rgba(29, 29, 31, 0.07);
+            border-radius: 22px;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.055);
             overflow: hidden;
         }
 
@@ -1401,7 +1488,7 @@ def apply_apple_theme():
         div[data-baseweb="select"] > div {
             border-radius: 14px !important;
             border-color: rgba(0, 0, 0, 0.08) !important;
-            background: rgba(255, 255, 255, 0.9) !important;
+            background: rgba(255, 255, 255, 0.96) !important;
             box-shadow: none !important;
         }
 
@@ -1442,9 +1529,11 @@ def apply_apple_theme():
         .stFormSubmitButton > button {
             border-radius: 999px !important;
             min-height: 2.8rem;
-            border: 0 !important;
+            border: 1px solid rgba(29, 29, 31, 0.08) !important;
             font-weight: 650 !important;
             transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+            background: #ffffff !important;
+            color: var(--app-text) !important;
         }
 
         .stButton > button[kind="primary"],
@@ -1468,9 +1557,9 @@ def apply_apple_theme():
         }
 
         [data-testid="stFileUploader"] section {
-            border-radius: 20px;
+            border-radius: 22px;
             border: 1px dashed rgba(0, 113, 227, 0.28);
-            background: rgba(255, 255, 255, 0.76);
+            background: rgba(255, 255, 255, 0.92);
         }
 
         .stTabs [data-baseweb="tab-list"] {
@@ -1504,6 +1593,13 @@ def apply_apple_theme():
             overflow: hidden;
         }
 
+        .stDataFrame,
+        [data-testid="stTable"] {
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.045);
+        }
+
         @media (max-width: 760px) {
             .block-container {
                 padding-left: 1rem;
@@ -1511,12 +1607,15 @@ def apply_apple_theme():
             }
 
             .apple-hero {
-                padding: 0.75rem 0 0.9rem;
-                border-radius: 0;
+                grid-template-columns: 1fr;
             }
 
             .apple-hero p {
                 font-size: 1rem;
+            }
+
+            .apple-store-rail {
+                grid-template-columns: 1fr;
             }
         }
         </style>
@@ -1529,13 +1628,37 @@ def render_hero():
     st.markdown(
         """
         <section class="apple-hero">
-            <div class="apple-eyebrow">Hisense International E-commerce</div>
-            <h1>海外爆款内容引擎</h1>
-            <p>基于产品卖点文案库，快速生成可拍摄、可导出的海外电商短视频脚本。</p>
-            <div class="apple-chip-row">
-                <span class="apple-chip">产品卖点库驱动</span>
-                <span class="apple-chip">Amazon Bedrock 生成</span>
-                <span class="apple-chip">Excel 导出</span>
+            <div class="apple-hero-main">
+                <div class="apple-eyebrow">Hisense International E-commerce</div>
+                <h1><span class="apple-accent">从卖点到爆款脚本。</span><br>让内容生产更快一步。</h1>
+                <p>海外爆款内容引擎把产品型号、核心卖点、场景和营销诉求整理成可拍摄、可导出的短视频脚本方案。</p>
+                <div class="apple-chip-row">
+                    <span class="apple-chip">产品卖点库驱动</span>
+                    <span class="apple-chip">Amazon Bedrock 生成</span>
+                    <span class="apple-chip">Excel 导出</span>
+                </div>
+            </div>
+            <div class="apple-hero-side">
+                <div class="apple-side-kicker">FOR INTERNAL TEAMS</div>
+                <div class="apple-side-title">面向国际营销电商团队的内容工作台。</div>
+                <p class="apple-side-copy">统一产品信息、脚本生成、任务队列和视频参考片段，减少反复整理素材与跨团队沟通成本。</p>
+            </div>
+        </section>
+        <section class="apple-store-rail">
+            <div class="apple-store-card">
+                <div class="card-kicker">Knowledge</div>
+                <div class="card-title">卖点库先行。</div>
+                <div class="card-copy">上传后的产品文案库会作为脚本生成的事实来源，减少手工复制和信息遗漏。</div>
+            </div>
+            <div class="apple-store-card">
+                <div class="card-kicker">Creation</div>
+                <div class="card-title">多方案生成。</div>
+                <div class="card-copy">围绕痛点、场景、功能展示等方向快速产出多版脚本，方便业务挑选和复用。</div>
+            </div>
+            <div class="apple-store-card">
+                <div class="card-kicker">Delivery</div>
+                <div class="card-title">导出与追踪。</div>
+                <div class="card-copy">脚本文档可导出，任务队列可追踪，后续可继续接入视频生成和数据库能力。</div>
             </div>
         </section>
         """,
