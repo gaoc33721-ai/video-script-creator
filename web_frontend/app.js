@@ -23,6 +23,10 @@ function setMessage(id, text, kind = "") {
   node.className = `message ${kind}`.trim();
 }
 
+function optionHtml(value, label = value, selected = false) {
+  return `<option value="${escapeAttr(value)}" ${selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+}
+
 async function loadSummary() {
   const summary = await api("/api/summary");
   $("metrics").innerHTML = [
@@ -38,15 +42,16 @@ async function loadSummary() {
 async function loadOptions() {
   state.options = await api("/api/options");
   const category = $("categorySelect");
-  category.innerHTML = state.options.categories.map((item) => `<option>${escapeHtml(item)}</option>`).join("");
+  category.innerHTML = state.options.categories.map((item) => optionHtml(item)).join("");
   updateModels();
 }
 
 function updateModels() {
   const category = $("categorySelect").value;
   const models = state.options.models_by_category[category] || [];
-  $("modelSelect").innerHTML = models.map((item) => `<option>${escapeHtml(item)}</option>`).join("");
+  $("modelSelect").innerHTML = models.map((item) => optionHtml(item, String(item).trim())).join("");
   loadFeatures();
+  updateSelectionSummary();
 }
 
 async function loadFeatures() {
@@ -57,9 +62,10 @@ async function loadFeatures() {
     return;
   }
   const data = await api(`/api/features?category=${encodeURIComponent(category)}&model=${encodeURIComponent(model)}`);
-  $("featureSelect").innerHTML = data.features
-    .map((item, index) => `<option ${index < 3 ? "selected" : ""}>${escapeHtml(item)}</option>`)
-    .join("");
+  $("featureSelect").innerHTML = data.features.length
+    ? data.features.map((item, index) => optionHtml(item, item, index < 3)).join("")
+    : '<option disabled>当前型号未匹配到卖点，请切换型号或更新卖点库</option>';
+  updateSelectionSummary();
 }
 
 function selectedValues(select) {
@@ -101,6 +107,18 @@ async function submitGeneration(event) {
   }
 }
 
+function updateSelectionSummary() {
+  const category = $("categorySelect").value || "未选择";
+  const model = ($("modelSelect").value || "未选择").trim();
+  const features = selectedValues($("featureSelect"));
+  $("selectionSummary").innerHTML = `
+    <div><span>品类</span><strong>${escapeHtml(category)}</strong></div>
+    <div><span>型号</span><strong>${escapeHtml(model)}</strong></div>
+    <div><span>已选卖点</span><strong>${features.length}</strong></div>
+    <ul>${features.slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>暂无卖点</li>"}</ul>
+  `;
+}
+
 async function uploadFile(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -121,7 +139,9 @@ async function uploadFile(event) {
 
 async function loadJobs() {
   const data = await api("/api/jobs");
-  $("jobs").innerHTML = data.jobs.map(renderJob).join("") || '<p class="message">暂无任务。</p>';
+  $("jobs").innerHTML =
+    data.jobs.map(renderJob).join("") ||
+    '<div class="empty-state"><strong>暂无任务</strong><span>提交脚本生成后，进度会显示在这里。</span></div>';
 }
 
 function renderJob(job) {
@@ -155,8 +175,13 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll("`", "&#096;");
+}
+
 $("categorySelect").addEventListener("change", updateModels);
 $("modelSelect").addEventListener("change", loadFeatures);
+$("featureSelect").addEventListener("change", updateSelectionSummary);
 $("generateForm").addEventListener("submit", submitGeneration);
 $("uploadInput").addEventListener("change", uploadFile);
 $("refreshJobs").addEventListener("click", loadJobs);

@@ -22,6 +22,7 @@ jobs:
 
     env:
       APP_NAME: video-script-creator
+      APP_RUNTIME: ${{ vars.APP_RUNTIME || 'api' }}
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
       BEDROCK_AWS_REGION: ${{ vars.BEDROCK_AWS_REGION || 'eu-central-1' }}

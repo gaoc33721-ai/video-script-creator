@@ -62,7 +62,22 @@
           <div id="formMessage" class="message"></div>
         </form>
 
-        <section class="card">
+        <aside class="side-stack">
+          <section class="card selection-card">
+            <h2>当前选择</h2>
+            <div id="selectionSummary" class="selection-summary"></div>
+          </section>
+
+          <section class="card guide-card">
+            <h2>使用流程</h2>
+            <div class="guide-steps">
+              <div><span>1</span><strong>选择产品</strong><small>品类、型号、核心卖点</small></div>
+              <div><span>2</span><strong>提交任务</strong><small>后台生成，不阻塞页面</small></div>
+              <div><span>3</span><strong>查看结果</strong><small>完成后预览并下载 Excel</small></div>
+            </div>
+          </section>
+
+          <section class="card">
           <div class="card-head">
             <div>
               <h2>任务中心</h2>
@@ -71,7 +86,8 @@
             <button id="refreshJobs" type="button">刷新</button>
           </div>
           <div id="jobs" class="jobs"></div>
-        </section>
+          </section>
+        </aside>
       </section>
     </main>
     <script src="/static/app.js"></script>

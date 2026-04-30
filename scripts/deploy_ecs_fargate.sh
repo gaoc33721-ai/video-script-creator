@@ -2,6 +2,7 @@
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-video-script-creator}"
+APP_RUNTIME="${APP_RUNTIME:-api}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-eu-central-1}}"
 BEDROCK_AWS_REGION="${BEDROCK_AWS_REGION:-$AWS_REGION}"
 BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-eu.amazon.nova-pro-v1:0}"
@@ -22,6 +23,12 @@ DATABASE_URL_SECRET_ARN="${DATABASE_URL_SECRET_ARN:-}"
 ALLOWED_HTTP_CIDRS="${ALLOWED_HTTP_CIDRS:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-8501}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
+if [[ "$APP_RUNTIME" == "api" ]]; then
+  DEFAULT_HEALTH_CHECK_PATH="/healthz"
+else
+  DEFAULT_HEALTH_CHECK_PATH="/_stcore/health"
+fi
+HEALTH_CHECK_PATH="${HEALTH_CHECK_PATH:-$DEFAULT_HEALTH_CHECK_PATH}"
 
 export AWS_PAGER=""
 
@@ -187,7 +194,7 @@ if [[ -z "$TG_ARN" || "$TG_ARN" == "None" ]]; then
     --vpc-id "$VPC_ID" \
     --target-type ip \
     --health-check-protocol HTTP \
-    --health-check-path "/_stcore/health" \
+    --health-check-path "$HEALTH_CHECK_PATH" \
     --health-check-interval-seconds 30 \
     --health-check-timeout-seconds 5 \
     --healthy-threshold-count 2 \
@@ -195,6 +202,11 @@ if [[ -z "$TG_ARN" || "$TG_ARN" == "None" ]]; then
     --query "TargetGroups[0].TargetGroupArn" \
     --output text)"
 fi
+
+aws elbv2 modify-target-group \
+  --region "$AWS_REGION" \
+  --target-group-arn "$TG_ARN" \
+  --health-check-path "$HEALTH_CHECK_PATH" >/dev/null
 
 aws elbv2 modify-target-group-attributes \
   --region "$AWS_REGION" \
@@ -395,6 +407,7 @@ TASK_DEF_FILE="$(mktemp)"
 python3 - "$TASK_DEF_FILE" <<PY
 import json, os, sys
 env = [
+    {"name": "APP_RUNTIME", "value": "${APP_RUNTIME}"},
     {"name": "BEDROCK_AWS_REGION", "value": "${BEDROCK_AWS_REGION}"},
     {"name": "BEDROCK_MODEL_ID", "value": "${BEDROCK_MODEL_ID}"},
     {"name": "BEDROCK_MAX_TOKENS", "value": "${BEDROCK_MAX_TOKENS}"},
