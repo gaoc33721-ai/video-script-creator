@@ -1297,8 +1297,8 @@ def apply_apple_theme():
         }
 
         h1 {
-            font-size: clamp(2.3rem, 4.8vw, 4.4rem) !important;
-            line-height: 1.02 !important;
+            font-size: clamp(2rem, 3.1vw, 3rem) !important;
+            line-height: 1.06 !important;
             font-weight: 760 !important;
         }
 
@@ -1308,10 +1308,10 @@ def apply_apple_theme():
 
         .apple-hero {
             display: grid;
-            grid-template-columns: minmax(0, 1.14fr) minmax(18rem, 0.86fr);
-            gap: 1rem;
+            grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.42fr);
+            gap: 0.85rem;
             align-items: stretch;
-            margin: 0 0 1.4rem 0;
+            margin: 0 0 0.9rem 0;
         }
 
         .apple-hero-main,
@@ -1324,16 +1324,16 @@ def apply_apple_theme():
         }
 
         .apple-hero-main {
-            min-height: 15.4rem;
-            padding: 2.35rem 2.55rem;
+            min-height: 9.2rem;
+            padding: 1.35rem 1.65rem;
             background:
                 radial-gradient(circle at 78% 10%, rgba(0, 113, 227, 0.11), transparent 18rem),
                 linear-gradient(135deg, #ffffff 0%, #fbfbfd 58%, #eef6ff 100%);
         }
 
         .apple-hero-side {
-            min-height: 15.4rem;
-            padding: 1.55rem;
+            min-height: 9.2rem;
+            padding: 1.2rem 1.35rem;
             background:
                 radial-gradient(circle at 88% 0%, rgba(255, 149, 0, 0.14), transparent 13rem),
                 #ffffff;
@@ -1343,7 +1343,7 @@ def apply_apple_theme():
             color: var(--app-blue);
             font-size: 0.88rem;
             font-weight: 700;
-            margin-bottom: 0.9rem;
+            margin-bottom: 0.55rem;
         }
 
         .apple-hero h1 {
@@ -1357,61 +1357,61 @@ def apply_apple_theme():
 
         .apple-hero p {
             max-width: 760px;
-            margin: 1rem 0 0;
+            margin: 0.65rem 0 0;
             color: var(--app-muted);
-            font-size: 1.12rem;
-            line-height: 1.55;
+            font-size: 0.98rem;
+            line-height: 1.5;
         }
 
         .apple-chip-row {
             display: flex;
             flex-wrap: wrap;
             gap: 0.55rem;
-            margin-top: 1.2rem;
+            margin-top: 0.85rem;
         }
 
         .apple-chip {
-            padding: 0.5rem 0.78rem;
+            padding: 0.36rem 0.66rem;
             border-radius: 999px;
             color: #3a3a3c;
             background: rgba(255, 255, 255, 0.88);
             border: 1px solid rgba(0, 0, 0, 0.07);
-            font-size: 0.86rem;
+            font-size: 0.8rem;
             font-weight: 650;
         }
 
         .apple-side-kicker {
             color: var(--app-orange);
-            font-size: 0.82rem;
+            font-size: 0.76rem;
             font-weight: 700;
-            margin-bottom: 0.6rem;
+            margin-bottom: 0.45rem;
         }
 
         .apple-side-title {
             color: var(--app-text);
-            font-size: 1.5rem;
+            font-size: 1.08rem;
             line-height: 1.16;
             font-weight: 730;
-            margin: 0 0 0.65rem;
+            margin: 0 0 0.42rem;
         }
 
         .apple-side-copy {
             color: var(--app-muted);
-            font-size: 0.96rem;
-            line-height: 1.48;
+            font-size: 0.84rem;
+            line-height: 1.42;
             margin: 0;
         }
 
         .apple-store-rail {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 1rem;
-            margin: 0 0 1.45rem;
+            gap: 0.85rem;
+            margin: 0 0 1rem;
         }
 
         .apple-store-card {
-            min-height: 8.8rem;
-            padding: 1.35rem 1.45rem;
+            min-height: 6.3rem;
+            padding: 1rem 1.15rem;
         }
 
         .apple-store-card .card-kicker {
@@ -1424,15 +1424,15 @@ def apply_apple_theme():
 
         .apple-store-card .card-title {
             color: var(--app-text);
-            font-size: 1.36rem;
+            font-size: 1.06rem;
             line-height: 1.18;
             font-weight: 720;
-            margin: 0.62rem 0 0.4rem;
+            margin: 0.42rem 0 0.28rem;
         }
 
         .apple-store-card .card-copy {
             color: var(--app-muted);
-            font-size: 0.92rem;
+            font-size: 0.82rem;
             line-height: 1.45;
         }
 
@@ -1630,7 +1630,7 @@ def render_hero():
         <section class="apple-hero">
             <div class="apple-hero-main">
                 <div class="apple-eyebrow">Hisense International E-commerce</div>
-                <h1><span class="apple-accent">从卖点到爆款脚本。</span><br>让内容生产更快一步。</h1>
+                <h1>海外爆款内容引擎</h1>
                 <p>海外爆款内容引擎把产品型号、核心卖点、场景和营销诉求整理成可拍摄、可导出的短视频脚本方案。</p>
                 <div class="apple-chip-row">
                     <span class="apple-chip">产品卖点库驱动</span>
