@@ -1413,6 +1413,21 @@ def apply_apple_theme():
             box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.13) !important;
         }
 
+        /* Hide BaseWeb's invisible measurement/ghost input that can appear as a white overlay on multiselect tags. */
+        div[data-baseweb="select"] [aria-hidden="true"],
+        div[data-baseweb="select"] input[aria-hidden="true"],
+        div[data-baseweb="select"] div[aria-hidden="true"] {
+            opacity: 0 !important;
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            pointer-events: none !important;
+        }
+
         .stButton > button,
         .stDownloadButton > button,
         .stFormSubmitButton > button {
