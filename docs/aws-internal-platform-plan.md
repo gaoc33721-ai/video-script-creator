@@ -197,3 +197,21 @@ create table script_feedback (
   3. 将当前生效产品卖点库导入 `product_feature_versions` 和 `product_features`。
   4. 将数据库连接串写入 Secrets Manager，并在 GitHub Actions 配置 `DATABASE_URL_SECRET_ARN`。
   5. 触发自动部署，确认页面显示 `数据库：已启用`。
+
+## 10. 待办：无 WebSocket 架构切换
+
+- 背景：公司 WiFi/代理环境可能拦截 Streamlit 依赖的 WebSocket，表现为页面已加载但提示 `Streamlit server is not responding`。
+- 目标：将业务主入口切换为普通 HTTP 前端 + FastAPI 后端，使用 HTTPS 请求提交任务、轮询任务状态、下载 Excel，不依赖 WebSocket。
+- 费用影响：
+  - 可继续复用现有 ECS Fargate、ALB、S3、Bedrock，第一阶段不需要新增主要 AWS 资源。
+  - 若后续接入 CloudFront/RDS/Cognito，会产生小额增量费用，但不是解决 WebSocket 兼容性的必要前提。
+- 当前落地状态：
+  - 已新增 `api_app.py` 作为 FastAPI 后端。
+  - 已新增 `web_frontend/` 原生前端页面。
+  - 已新增 `start_server.py`，通过 `APP_RUNTIME=streamlit|api` 控制启动模式。
+  - 默认仍为 `APP_RUNTIME=streamlit`，避免影响当前线上业务。
+- 后续切换步骤：
+  1. 在线上或临时 ECS 服务设置 `APP_RUNTIME=api` 进行灰度验证。
+  2. 验证公司 WiFi 下首页、上传、生成任务、轮询、Excel 下载是否正常。
+  3. 补齐竞品素材配置、Nova Reel、历史记录等高级能力。
+  4. 功能追平后，将正式服务默认入口切换为 FastAPI 前端。

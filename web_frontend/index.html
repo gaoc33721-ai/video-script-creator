@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>海外爆款内容引擎</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Hisense International E-commerce</p>
+          <h1>海外爆款内容引擎</h1>
+          <p class="lede">普通 HTTP 架构试验版，不依赖 Streamlit WebSocket，适合公司网络环境验证。</p>
+        </div>
+        <div class="hero-panel">
+          <strong>生成链路</strong>
+          <span>卖点库选择 -> 任务提交 -> 状态轮询 -> Excel 下载</span>
+        </div>
+      </section>
+
+      <section class="metrics" id="metrics"></section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>产品卖点库</h2>
+            <p>上传新版或旧版 Excel，系统会校验字段并保存为当前知识库。</p>
+          </div>
+          <label class="upload">
+            <input id="uploadInput" type="file" accept=".xlsx,.xls" />
+            上传 Excel
+          </label>
+        </div>
+        <div id="uploadMessage" class="message"></div>
+      </section>
+
+      <section class="grid">
+        <form id="generateForm" class="card form-card">
+          <h2>脚本需求</h2>
+          <div class="field-row">
+            <label>发布渠道<select name="platform"><option>TikTok / Reels / Shorts</option><option>Amazon 主图视频</option><option>独立站详情页</option></select></label>
+            <label>目标市场<select name="target_market"><option>北美 (US/CA)</option><option>欧洲 (UK/DE/FR)</option><option>东南亚</option><option>其他</option></select></label>
+            <label>方案数<select name="variant_count"><option value="2">2</option><option value="3">3</option></select></label>
+          </div>
+          <div class="field-row">
+            <label>产品品类<select id="categorySelect" name="category"></select></label>
+            <label>产品型号<select id="modelSelect" name="model"></select></label>
+          </div>
+          <label>核心卖点<select id="featureSelect" name="selected_features" multiple size="5"></select></label>
+          <div class="field-row">
+            <label>视频用途<select name="video_usage"><option>站外种草</option><option>站内首推</option><option>内部培训</option><option>其他</option></select></label>
+            <label>项目类型<select name="project_type"><option>常规上新</option><option>新品上市</option><option>大促活动</option><option>教程培训</option><option>其他</option></select></label>
+            <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
+          </div>
+          <label>脚本方向<select name="video_type" multiple size="4"><option selected>问题解决/痛点挖掘型</option><option>产品展示/功能介绍型</option><option>开箱体验型</option><option selected>场景化/生活方式型</option><option>测评/对比型</option></select></label>
+          <label>目标受众<input name="target_audience" placeholder="不填则按通用海外消费者处理" /></label>
+          <label>用户痛点<textarea name="pain_points" rows="3"></textarea></label>
+          <label>补充要求<textarea name="custom_requirements" rows="3"></textarea></label>
+          <button type="submit">提交脚本生成任务</button>
+          <div id="formMessage" class="message"></div>
+        </form>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h2>任务中心</h2>
+              <p>通过普通 HTTPS 轮询状态，公司网络更容易放行。</p>
+            </div>
+            <button id="refreshJobs" type="button">刷新</button>
+          </div>
+          <div id="jobs" class="jobs"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

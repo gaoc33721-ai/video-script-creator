@@ -10,7 +10,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_SERVER_ENABLE_CORS=false \
     STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false \
     STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION=false \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    APP_RUNTIME=streamlit
 
 WORKDIR /app
 
@@ -22,13 +23,14 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-COPY app.py storage_adapters.py product_feature_store.py ./
+COPY app.py api_app.py start_server.py healthcheck.py storage_adapters.py product_feature_store.py ./
+COPY web_frontend ./web_frontend
 
 RUN mkdir -p /app/data
 
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"
+    CMD python healthcheck.py
 
-CMD ["streamlit", "run", "app.py"]
+CMD ["python", "start_server.py"]
