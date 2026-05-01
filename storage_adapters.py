@@ -107,21 +107,44 @@ class RuntimeStorage:
             return False
 
     def read_dataframe(self, key: str) -> pd.DataFrame:
+        # Prefer safe Parquet format; fall back to legacy pickle for migration.
+        parquet_key = key.replace(".pkl", ".parquet") if key.endswith(".pkl") else key + ".parquet"
+        if self.exists(parquet_key):
+            try:
+                return pd.read_parquet(io.BytesIO(self.backend.read_bytes(parquet_key)))
+            except Exception:
+                pass
         if not self.exists(key):
             return pd.DataFrame()
         try:
-            return pd.read_pickle(io.BytesIO(self.backend.read_bytes(key)))
+            df = pd.read_pickle(io.BytesIO(self.backend.read_bytes(key)))
+            # Auto-migrate: write parquet copy so pickle is no longer needed.
+            try:
+                buf = io.BytesIO()
+                df.to_parquet(buf, index=False)
+                self.backend.write_bytes(parquet_key, buf.getvalue(), content_type="application/octet-stream")
+            except Exception:
+                pass
+            return df
         except Exception:
             return pd.DataFrame()
 
     def write_dataframe(self, key: str, df: pd.DataFrame) -> bool:
+        parquet_key = key.replace(".pkl", ".parquet") if key.endswith(".pkl") else key + ".parquet"
         try:
             buffer = io.BytesIO()
-            df.to_pickle(buffer)
-            self.backend.write_bytes(key, buffer.getvalue(), content_type="application/octet-stream")
+            df.to_parquet(buffer, index=False)
+            self.backend.write_bytes(parquet_key, buffer.getvalue(), content_type="application/octet-stream")
             return True
         except Exception:
-            return False
+            # Fallback to pickle if pyarrow is not installed.
+            try:
+                buffer = io.BytesIO()
+                df.to_pickle(buffer)
+                self.backend.write_bytes(key, buffer.getvalue(), content_type="application/octet-stream")
+                return True
+            except Exception:
+                return False
 
     def write_file_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:
         return self.backend.write_bytes(key, data, content_type=content_type)

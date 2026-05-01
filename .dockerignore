@@ -12,7 +12,3 @@ __pycache__
 .streamlit
 .vercel
 competitor_unzip
-novel_to_video_mvp/assets
-novel_to_video_mvp/output
-novel_to_video_mvp/*.mp4
-vlog_generator/*.mp4

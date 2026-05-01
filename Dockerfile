@@ -28,6 +28,11 @@ COPY web_frontend ./web_frontend
 
 RUN mkdir -p /app/data
 
+# Security: run as non-root user
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

@@ -10,6 +10,7 @@ import hmac
 import time
 import hashlib
 import xml.etree.ElementTree as ET
+from html import escape as _html_escape
 import urllib.parse
 import uuid
 import threading
@@ -458,9 +459,12 @@ def fetch_trending_topics(platform, target_market, limit=30):
     url = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={geo}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        resp = requests.get(url, headers=headers, timeout=10, verify=False)
+        resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
-        root = ET.fromstring(resp.content)
+        # Disable external entity resolution to prevent XXE attacks.
+        _xml_parser = ET.XMLParser()
+        _xml_parser.entity = {}
+        root = ET.fromstring(resp.content, parser=_xml_parser)
         items = root.findall(".//item")
         topics = []
         for it in items:
@@ -633,7 +637,7 @@ def fetch_competitor_videos_web(product_category, target_market, brands, limit=8
     urls = []
     for q in queries:
         try:
-            resp = requests.get(url, params={"q": q}, headers=headers, timeout=10, verify=False)
+            resp = requests.get(url, params={"q": q}, headers=headers, timeout=10)
             resp.raise_for_status()
             html = resp.text
             for m in re.finditer(r'href="https://duckduckgo\.com/l/\?uddg=([^"&]+)', html):
@@ -1667,9 +1671,9 @@ def render_hero():
 
 
 def render_section_title(title, caption=""):
-    st.markdown(f'<div class="apple-section-title">{title}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="apple-section-title">{_html_escape(str(title))}</div>', unsafe_allow_html=True)
     if caption:
-        st.markdown(f'<div class="apple-section-caption">{caption}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="apple-section-caption">{_html_escape(str(caption))}</div>', unsafe_allow_html=True)
 
 
 apply_apple_theme()
@@ -2048,10 +2052,9 @@ def generate_script_bedrock(user_prompt, temperature=0.7, top_p=0.9, max_tokens=
         content_blocks = response.get("output", {}).get("message", {}).get("content", [])
         return "\n".join([block.get("text", "") for block in content_blocks if block.get("text")]).strip()
     except Exception as e:
-        return (
-            f"Bedrock API 调用失败: {str(e)}\n"
-            f"请检查 AWS 凭证、区域 {BEDROCK_AWS_REGION}、模型权限 {BEDROCK_MODEL_ID} 是否已配置。"
-        )
+        import logging as _logging
+        _logging.getLogger(__name__).error("Bedrock API call failed: %s", e, exc_info=True)
+        return "脚本生成服务暂时不可用，请稍后重试。如持续失败请联系管理员。"
 
 
 _SCRIPT_JOB_LOCK = threading.Lock()
