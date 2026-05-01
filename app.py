@@ -2315,6 +2315,7 @@ with st.expander("任务中心", expanded=True):
                     "创建时间": j.get("created_at", ""),
                     "产品": f"{(j.get('request') or {}).get('产品品类', '')} / {(j.get('request') or {}).get('产品型号', '')}",
                     "状态": status_label.get(j.get("status", ""), j.get("status", "")),
+                    "完成时间": j.get("completed_at", "") if j.get("status") in ("succeeded", "failed", "cancelled") else "",
                     "进度": f"{int(j.get('progress', 0) or 0)}%",
                     "当前步骤": j.get("current_step", ""),
                     "失败原因": j.get("error_message", ""),

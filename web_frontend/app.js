@@ -191,6 +191,7 @@ function renderJob(job) {
       ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><a href="/api/jobs/${job.id}/download">下载 Excel</a>`
       : "";
   const error = job.error_message ? `<div class="message error">${escapeHtml(job.error_message)}</div>` : "";
+  const completedAt = job.completed_at ? `<div class="message">完成时间：${escapeHtml(job.completed_at)}</div>` : "";
   return `
     <article class="job">
       <div class="job-head">
@@ -199,6 +200,7 @@ function renderJob(job) {
       </div>
       <div class="progress"><div style="width:${Number(job.progress || 0)}%"></div></div>
       <div class="message">${escapeHtml(job.current_step || "")}</div>
+      ${completedAt}
       ${error}
       ${variants}
     </article>

@@ -575,9 +575,10 @@ def _run_generation(job_id: str):
             current_step="已完成",
             variants=variants,
             error_message="",
+            completed_at=dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
         )
     except Exception as exc:
-        _update_job(job_id, status="failed", progress=100, current_step="失败", error_message=str(exc))
+        _update_job(job_id, status="failed", progress=100, current_step="失败", error_message=str(exc), completed_at=dt.datetime.utcnow().isoformat(timespec="seconds") + "Z")
 
 
 @app.get("/", response_class=HTMLResponse)
