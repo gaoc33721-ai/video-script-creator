@@ -24,7 +24,22 @@ PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
 
 CACHE_META_KEY = "cache_meta.json"
 HTTP_JOBS_KEY = "http_script_jobs.json"
-TABLE_HEADER_LINE = "| 结构分段 | 功能点 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |"
+TABLE_COLUMNS = [
+    "结构分段",
+    "功能点",
+    "表现手法",
+    "旁白（英文）",
+    "字幕-显示卖点名及描述（英文）",
+    "特色效果",
+    "拍摄角度",
+    "运镜方式",
+    "竞品链接",
+    "竞品盖帽",
+    "音效",
+    "时长",
+]
+TABLE_HEADER_LINE = "| " + " | ".join(TABLE_COLUMNS) + " |"
+TABLE_SEPARATOR_LINE = "| " + " | ".join([":---"] * len(TABLE_COLUMNS)) + " |"
 SYSTEM_PROMPT = f"""##角色
 你是“海外爆款内容引擎”，为海信海外电商产品策划推广提供视频脚本生成服务。你需要基于海信的产品卖点，撰写不同类型的视频脚本，以支持导出为 Word 或 Excel 形式的 Markdown 表格输出。
 
@@ -42,7 +57,7 @@ SYSTEM_PROMPT = f"""##角色
 必须以标准 Markdown 表格形式输出，绝对不要包裹在 ```markdown 或 ``` 代码块中。
 表格必须统一使用以下 12 列，并逐字使用该表头：
 {TABLE_HEADER_LINE}
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+{TABLE_SEPARATOR_LINE}
 
 ##额外输出
 表格后必须追加：
@@ -150,6 +165,58 @@ def _strip_code_fences(text: str) -> str:
     return cleaned.strip()
 
 
+def _has_expected_table(content: str) -> bool:
+    text = str(content or "")
+    return TABLE_HEADER_LINE in text and TABLE_SEPARATOR_LINE in text and "总时长" in text
+
+
+def _extract_first_md_table(text: str):
+    if not text:
+        return [], ""
+    lines = str(text).splitlines()
+    table = []
+    started = False
+    end_idx = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not started:
+            if stripped.startswith("|") and stripped.count("|") >= 2:
+                started = True
+                table.append(line)
+            continue
+        if stripped.startswith("|") and stripped.count("|") >= 2:
+            table.append(line)
+        else:
+            end_idx = idx
+            break
+    remainder = "\n".join(lines[end_idx:]).strip() if end_idx is not None else ""
+    return table, remainder
+
+
+def _parse_md_table_to_df(table_lines):
+    if not table_lines or len(table_lines) < 2:
+        return pd.DataFrame(columns=TABLE_COLUMNS)
+    rows = []
+    for line in table_lines:
+        stripped = line.strip().strip("|")
+        cells = [cell.strip() for cell in stripped.split("|")]
+        rows.append(cells)
+    header = rows[0]
+    body = rows[2:] if len(rows) >= 3 else []
+    normalized = []
+    for row in body:
+        if len(row) < len(header):
+            row = row + [""] * (len(header) - len(row))
+        if len(row) > len(header):
+            row = row[: len(header)]
+        normalized.append(row)
+    df = pd.DataFrame(normalized, columns=header)
+    for column in TABLE_COLUMNS:
+        if column not in df.columns:
+            df[column] = ""
+    return df[TABLE_COLUMNS]
+
+
 def _infer_variant_label(content: str) -> str:
     text = str(content or "")
     if re.search(r"痛点|烦恼|麻烦|困扰|对比|前后", text, flags=re.IGNORECASE):
@@ -213,23 +280,59 @@ def _call_bedrock(prompt: str, temperature=0.7, top_p=0.9) -> str:
     return response["output"]["message"]["content"][0]["text"]
 
 
+def _repair_to_expected_table(original_content: str, req: GenerateRequest, features: list[dict]) -> str:
+    feature_lines = "\n".join(
+        f"- {item['name']}: {item['tagline']}。{item['description']}" for item in features
+    )
+    repair_prompt = f"""
+请把下面这段视频脚本内容改写成固定字段的 Markdown 表格。
+
+硬性要求：
+1. 第一行必须逐字等于：
+{TABLE_HEADER_LINE}
+2. 第二行必须逐字等于：
+{TABLE_SEPARATOR_LINE}
+3. 后续每一行都必须有且只有 12 个字段，字段顺序不得变更、不得新增、不得删除。
+4. 字段必须保持为：{", ".join(TABLE_COLUMNS)}
+5. 最后一行必须是“总时长”统计。
+6. 只输出表格和表格后的“整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings”，不要输出解释。
+7. 旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是英文，其余列以中文为主。
+8. 不要编造产品卖点；如没有竞品链接，竞品链接和竞品盖帽留空。
+
+产品信息：
+- 产品品类：{req.category}
+- 产品型号：{req.model}
+- 期望时长：{req.expected_duration} 秒
+- 脚本方向：{" / ".join(req.video_type or [])}
+- 核心卖点：
+{feature_lines}
+
+原始内容：
+{original_content}
+""".strip()
+    return _strip_code_fences(_call_bedrock(repair_prompt, temperature=0.2, top_p=0.7))
+
+
 def _build_excel_bytes(job: dict) -> bytes:
-    rows = []
     request = job.get("request", {})
-    for variant in job.get("variants", []):
-        rows.append(
-            {
-                "方案": variant.get("name", ""),
-                "产品品类": request.get("category", ""),
-                "产品型号": request.get("model", ""),
-                "目标市场": request.get("target_market", ""),
-                "发布渠道": request.get("platform", ""),
-                "脚本内容": variant.get("content", ""),
-            }
-        )
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        pd.DataFrame(rows).to_excel(writer, index=False, sheet_name="脚本方案")
+        pd.DataFrame([request]).to_excel(writer, index=False, sheet_name="配置")
+        appendix_rows = []
+        for index, variant in enumerate(job.get("variants", []), start=1):
+            table_lines, remainder = _extract_first_md_table(variant.get("content", ""))
+            df = _parse_md_table_to_df(table_lines)
+            if df.empty:
+                df = pd.DataFrame(columns=TABLE_COLUMNS)
+            df.to_excel(writer, index=False, sheet_name=f"方案{index}")
+            appendix_rows.append(
+                {
+                    "方案": variant.get("name", f"方案{index}"),
+                    "方案标签": variant.get("label", ""),
+                    "表格后附加内容": remainder,
+                }
+            )
+        pd.DataFrame(appendix_rows).to_excel(writer, index=False, sheet_name="附加信息")
     return buffer.getvalue()
 
 
@@ -251,11 +354,16 @@ def _run_generation(job_id: str):
             prompt = _build_prompt(req, features, i)
             _update_job(job_id, progress=int((i / total) * 80) + 10, current_step=f"生成方案 {i + 1}/{total}")
             content = _strip_code_fences(_call_bedrock(prompt))
-            if TABLE_HEADER_LINE not in content or "总时长" not in content:
+            if not _has_expected_table(content):
                 retry_prompt = prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
                 retry_content = _strip_code_fences(_call_bedrock(retry_prompt, temperature=0.3, top_p=0.8))
-                if TABLE_HEADER_LINE in retry_content and "总时长" in retry_content:
+                if _has_expected_table(retry_content):
                     content = retry_content
+            if not _has_expected_table(content):
+                _update_job(job_id, progress=int((i / total) * 80) + 15, current_step=f"修复方案 {i + 1} 为表格格式")
+                repaired = _repair_to_expected_table(content, req, features)
+                if _has_expected_table(repaired):
+                    content = repaired
             variants.append({"name": f"方案{i + 1}", "label": _infer_variant_label(content), "content": content.strip()})
         _update_job(
             job_id,
