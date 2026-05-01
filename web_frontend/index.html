@@ -100,6 +100,23 @@
         </div>
         <div id="resultTabs" class="result-tabs"></div>
         <div id="resultBody" class="result-body"></div>
+        <section id="videoSection" class="video-section">
+          <div class="video-head">
+            <div>
+              <h3>生成 Nova Reel 视频参考片段</h3>
+              <p>确认上方脚本方案无误后，可选择一个方案生成 6 秒视频片段供业务参考。</p>
+            </div>
+          </div>
+          <label>选择要生成视频片段的脚本方案<select id="videoVariantSelect"></select></label>
+          <label>将提交给 Nova Reel 的视频 Prompt<textarea id="videoPrompt" rows="5" readonly></textarea></label>
+          <p id="videoCost" class="video-cost"></p>
+          <div class="video-actions">
+            <button id="submitVideo" type="button">生成此方案的视频参考片段</button>
+            <button id="refreshVideo" type="button" class="secondary">刷新视频生成状态</button>
+          </div>
+          <div id="videoMessage" class="message"></div>
+          <div id="videoJobs" class="video-jobs"></div>
+        </section>
       </section>
     </main>
     <script src="/static/app.js"></script>

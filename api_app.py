@@ -1,8 +1,10 @@
 import datetime as dt
 import io
 import os
+import random
 import re
 import threading
+import urllib.parse
 import uuid
 
 import boto3
@@ -24,6 +26,7 @@ PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
 
 CACHE_META_KEY = "cache_meta.json"
 HTTP_JOBS_KEY = "http_script_jobs.json"
+NOVA_REEL_JOBS_KEY = "nova_reel_poc_jobs.json"
 TABLE_COLUMNS = [
     "结构分段",
     "功能点",
@@ -82,6 +85,10 @@ BEDROCK_AWS_REGION = (
 )
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
+NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
+NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
+NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
+NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
 
 app = FastAPI(title="海外爆款内容引擎 API")
 job_lock = threading.Lock()
@@ -105,6 +112,11 @@ class GenerateRequest(BaseModel):
     target_audience: str = ""
     pain_points: str = ""
     custom_requirements: str = ""
+
+
+class NovaReelSubmitRequest(BaseModel):
+    script_job_id: str
+    variant_index: int = Field(default=0, ge=0)
 
 
 def _read_json(key, default_value):
@@ -278,6 +290,171 @@ def _call_bedrock(prompt: str, temperature=0.7, top_p=0.9) -> str:
         },
     )
     return response["output"]["message"]["content"][0]["text"]
+
+
+def _load_nova_reel_jobs():
+    data = _read_json(NOVA_REEL_JOBS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_nova_reel_jobs(jobs):
+    return _write_json(NOVA_REEL_JOBS_KEY, jobs[:200])
+
+
+def _safe_ascii_slug(text):
+    raw = str(text or "").strip()
+    if "微波" in raw:
+        raw = "microwave"
+    elif "烤箱" in raw:
+        raw = "oven"
+    elif "空气" in raw or "炸锅" in raw:
+        raw = "air_fryer"
+    slug = re.sub(r"\s+", "_", raw)
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", slug).strip("_")
+    return slug[:60] if slug else "unknown"
+
+
+def _s3_output_base_uri():
+    if NOVA_REEL_OUTPUT_S3_URI:
+        return NOVA_REEL_OUTPUT_S3_URI
+    bucket = os.getenv("S3_BUCKET") or os.getenv("APP_S3_BUCKET")
+    prefix = os.getenv("S3_PREFIX", "").strip("/")
+    if not bucket:
+        return ""
+    parts = [f"s3://{bucket}"]
+    if prefix:
+        parts.append(prefix)
+    parts.append("nova-reel-poc")
+    return "/".join(parts)
+
+
+def _category_en(category):
+    value = str(category or "")
+    if "微波" in value:
+        return "microwave oven"
+    if "烤箱" in value:
+        return "built-in oven"
+    if "空气" in value or "炸锅" in value:
+        return "air fryer"
+    return "home appliance"
+
+
+def _extract_variant_video_prompt(content):
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    patterns = [
+        r"整体AI视频生成Prompt\s*（English）\s*[:：]\s*(.*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)",
+        r"整体AI视频生成Prompt\s*\(English\)\s*[:：]\s*(.*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)",
+        r"Overall AI Video Generation Prompt\s*[:：]\s*(.*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            prompt = re.sub(r"^\s*[-•]\s*", "", match.group(1).strip(), flags=re.MULTILINE)
+            prompt = re.sub(r"\s+", " ", prompt).strip()
+            if prompt:
+                return prompt[:500]
+    return ""
+
+
+def _build_variant_nova_reel_prompt(variant, category, model, selected_features):
+    extracted = _extract_variant_video_prompt((variant or {}).get("content", ""))
+    if extracted:
+        return extracted
+    feature_text = "; ".join([str(x).strip() for x in selected_features if str(x).strip()])
+    if not feature_text:
+        feature_text = "product benefits and lifestyle usage"
+    return (
+        f"Six-second premium e-commerce reference video for a Hisense {_category_en(category)}, model {model}. "
+        f"Show a realistic product-focused scene based on this script variant, highlighting: {feature_text}. "
+        "Modern bright kitchen, cinematic soft daylight, smooth camera movement, realistic product proportions, "
+        "no text overlay, no logo distortion, no extra brands."
+    )[:500]
+
+
+def _nova_reel_job_output_uri(category, model):
+    base_uri = _s3_output_base_uri()
+    if not base_uri:
+        return ""
+    stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return f"{base_uri.rstrip('/')}/{stamp}_{_safe_ascii_slug(category)}_{_safe_ascii_slug(model)}_{uuid.uuid4().hex[:8]}/"
+
+
+def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
+    output_s3_uri = _nova_reel_job_output_uri(category, model)
+    if not output_s3_uri:
+        raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 STORAGE_BACKEND=s3/S3_BUCKET，或设置 NOVA_REEL_OUTPUT_S3_URI。")
+    from botocore.config import Config
+
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=NOVA_REEL_AWS_REGION,
+        config=Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2}),
+    )
+    response = client.start_async_invoke(
+        modelId=NOVA_REEL_MODEL_ID,
+        modelInput={
+            "taskType": "TEXT_VIDEO",
+            "textToVideoParams": {"text": prompt},
+            "videoGenerationConfig": {
+                "durationSeconds": int(duration_seconds),
+                "fps": 24,
+                "dimension": "1280x720",
+                "seed": random.randint(0, 2147483646),
+            },
+        },
+        outputDataConfig={"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
+        clientRequestToken=str(uuid.uuid4()),
+    )
+    return response["invocationArn"], output_s3_uri
+
+
+def _query_nova_reel_job(invocation_arn):
+    from botocore.config import Config
+
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=NOVA_REEL_AWS_REGION,
+        config=Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2}),
+    )
+    return client.get_async_invoke(invocationArn=invocation_arn)
+
+
+def _video_uri_from_bedrock_job(job):
+    output_uri = (
+        ((job or {}).get("outputDataConfig") or {})
+        .get("s3OutputDataConfig", {})
+        .get("s3Uri", "")
+    )
+    if not output_uri:
+        output_uri = (job or {}).get("output_s3_uri", "")
+    return f"{output_uri.rstrip('/')}/output.mp4" if output_uri else ""
+
+
+def _presigned_url_for_s3_uri(s3_uri, expires_in=3600):
+    if not str(s3_uri or "").startswith("s3://"):
+        return ""
+    parsed = urllib.parse.urlparse(s3_uri)
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+    if not bucket or not key:
+        return ""
+    try:
+        client = boto3.client("s3", region_name=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"))
+        return client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
+    except Exception:
+        return ""
+
+
+def _public_nova_reel_job(job):
+    public = dict(job or {})
+    public["preview_url"] = _presigned_url_for_s3_uri(public.get("video_s3_uri", ""))
+    return public
 
 
 def _repair_to_expected_table(original_content: str, req: GenerateRequest, features: list[dict]) -> str:
@@ -480,6 +657,110 @@ def job(job_id: str):
     if not found:
         raise HTTPException(status_code=404, detail="任务不存在。")
     return found
+
+
+@app.get("/api/nova-reel/jobs")
+def nova_reel_jobs(script_job_id: str = ""):
+    jobs = _load_nova_reel_jobs()
+    if script_job_id:
+        jobs = [item for item in jobs if item.get("script_job_id") == script_job_id]
+    return {
+        "jobs": [_public_nova_reel_job(item) for item in jobs[:30]],
+        "model_id": NOVA_REEL_MODEL_ID,
+        "region": NOVA_REEL_AWS_REGION,
+        "estimated_usd_per_second": NOVA_REEL_ESTIMATED_USD_PER_SECOND,
+    }
+
+
+@app.post("/api/nova-reel/submit")
+def submit_nova_reel(req: NovaReelSubmitRequest):
+    script_job = next((item for item in _load_jobs() if item.get("id") == req.script_job_id), None)
+    if not script_job:
+        raise HTTPException(status_code=404, detail="Script job not found.")
+    if script_job.get("status") != "succeeded":
+        raise HTTPException(status_code=400, detail="Script job is not completed yet.")
+    variants = script_job.get("variants") or []
+    if req.variant_index >= len(variants):
+        raise HTTPException(status_code=400, detail="Script variant not found.")
+
+    request_payload = script_job.get("request") or {}
+    variant = variants[req.variant_index]
+    prompt = _build_variant_nova_reel_prompt(
+        variant,
+        request_payload.get("category", ""),
+        request_payload.get("model", ""),
+        request_payload.get("selected_features", []),
+    )
+    try:
+        invocation_arn, output_s3_uri = _start_nova_reel_job(
+            request_payload.get("category", ""),
+            request_payload.get("model", ""),
+            prompt,
+            duration_seconds=6,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    video_job = {
+        "id": uuid.uuid4().hex[:12],
+        "script_job_id": script_job.get("id"),
+        "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "updated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "category": request_payload.get("category", ""),
+        "model": request_payload.get("model", ""),
+        "variant_index": req.variant_index,
+        "variant_name": variant.get("name", f"方案{req.variant_index + 1}"),
+        "variant_label": variant.get("label", ""),
+        "prompt": prompt,
+        "duration_seconds": 6,
+        "status": "InProgress",
+        "failure_message": "",
+        "invocation_arn": invocation_arn,
+        "output_s3_uri": output_s3_uri,
+        "video_s3_uri": "",
+        "model_id": NOVA_REEL_MODEL_ID,
+        "region": NOVA_REEL_AWS_REGION,
+    }
+    jobs = _load_nova_reel_jobs()
+    jobs.insert(0, video_job)
+    _save_nova_reel_jobs(jobs)
+    return {"job": _public_nova_reel_job(video_job)}
+
+
+@app.post("/api/nova-reel/refresh")
+def refresh_nova_reel_jobs(script_job_id: str = ""):
+    jobs = _load_nova_reel_jobs()
+    changed = False
+    for item in jobs:
+        if script_job_id and item.get("script_job_id") != script_job_id:
+            continue
+        if item.get("status") in {"Completed", "Failed"}:
+            continue
+        invocation_arn = item.get("invocation_arn", "")
+        if not invocation_arn:
+            continue
+        try:
+            result = _query_nova_reel_job(invocation_arn)
+            status = result.get("status") or item.get("status", "")
+            item["status"] = status
+            item["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            item["failure_message"] = result.get("failureMessage") or result.get("failure_message") or ""
+            output_s3_uri = (
+                ((result.get("outputDataConfig") or {}).get("s3OutputDataConfig") or {}).get("s3Uri")
+                or item.get("output_s3_uri", "")
+            )
+            item["output_s3_uri"] = output_s3_uri
+            if status == "Completed":
+                item["video_s3_uri"] = _video_uri_from_bedrock_job(result)
+            changed = True
+        except Exception as exc:
+            item["failure_message"] = str(exc)
+            item["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            changed = True
+    if changed:
+        _save_nova_reel_jobs(jobs)
+    filtered = [item for item in jobs if not script_job_id or item.get("script_job_id") == script_job_id]
+    return {"jobs": [_public_nova_reel_job(item) for item in filtered[:30]]}
 
 
 @app.get("/api/jobs/{job_id}/download")

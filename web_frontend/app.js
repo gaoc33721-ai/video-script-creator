@@ -7,6 +7,8 @@ const state = {
   activeJobId: "",
   renderedJobId: "",
   activeVariantIndex: 0,
+  currentResultJob: null,
+  videoJobs: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -216,6 +218,9 @@ function hideResults() {
   $("resultSection").classList.add("hidden");
   $("resultTabs").innerHTML = "";
   $("resultBody").innerHTML = "";
+  $("videoJobs").innerHTML = "";
+  $("videoMessage").textContent = "";
+  state.currentResultJob = null;
 }
 
 function renderResult(job, variantIndex = 0) {
@@ -234,12 +239,125 @@ function renderResult(job, variantIndex = 0) {
     .join("");
   const current = variants[state.activeVariantIndex];
   $("resultBody").innerHTML = renderVariantContent(current);
+  state.currentResultJob = job;
+  renderVideoPanel(job);
   $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderVariantContent(variant) {
   const label = variant.label ? `<div class="result-label">方案定位：${escapeHtml(variant.label)}</div>` : "";
   return `${label}<div class="script-markdown">${markdownToHtml(variant.content || "")}</div>`;
+}
+
+function extractVideoPrompt(content) {
+  const text = String(content || "");
+  const patterns = [
+    /整体AI视频生成Prompt\s*（English）\s*[:：]\s*([\s\S]*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)/i,
+    /整体AI视频生成Prompt\s*\(English\)\s*[:：]\s*([\s\S]*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)/i,
+    /Overall AI Video Generation Prompt\s*[:：]\s*([\s\S]*?)(?:\n\s*Negative Prompt|\n\s*Recommended Settings|$)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return match[1].replace(/^\s*[-•]\s*/gm, "").replace(/\s+/g, " ").trim();
+    }
+  }
+  return "";
+}
+
+function fallbackVideoPrompt(job) {
+  const request = job.request || {};
+  const features = (request.selected_features || []).filter(Boolean).join("; ") || "product benefits and lifestyle usage";
+  return `Six-second premium e-commerce reference video for a Hisense product, model ${request.model || ""}. Show a realistic product-focused scene based on this script variant, highlighting: ${features}. Modern bright kitchen, cinematic soft daylight, smooth camera movement, realistic product proportions, no text overlay, no logo distortion, no extra brands.`;
+}
+
+async function renderVideoPanel(job) {
+  const variants = job.variants || [];
+  if (!variants.length) return;
+  $("videoVariantSelect").innerHTML = variants
+    .map((variant, index) => optionHtml(String(index), variant.name || `方案${index + 1}`, index === state.activeVariantIndex))
+    .join("");
+  updateVideoPrompt();
+  await loadVideoJobs(job.id);
+}
+
+function updateVideoPrompt() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  const variants = job.variants || [];
+  const selectedIndex = Number($("videoVariantSelect").value || state.activeVariantIndex || 0);
+  const variant = variants[selectedIndex] || variants[0] || {};
+  $("videoPrompt").value = extractVideoPrompt(variant.content || "") || fallbackVideoPrompt(job);
+  $("videoCost").textContent = "本次会提交 1 条 6 秒 Nova Reel 任务，按 $0.08/秒估算约 $0.48，实际以 AWS 账单为准。";
+}
+
+async function loadVideoJobs(scriptJobId) {
+  if (!scriptJobId) return;
+  try {
+    const data = await api(`/api/nova-reel/jobs?script_job_id=${encodeURIComponent(scriptJobId)}`);
+    state.videoJobs = data.jobs || [];
+    if (typeof data.estimated_usd_per_second === "number") {
+      const seconds = 6;
+      $("videoCost").textContent = `本次会提交 1 条 ${seconds} 秒 Nova Reel 任务，按 $${data.estimated_usd_per_second}/秒估算约 $${(seconds * data.estimated_usd_per_second).toFixed(2)}，实际以 AWS 账单为准。`;
+    }
+    renderVideoJobs(state.videoJobs);
+  } catch (error) {
+    setMessage("videoMessage", error.message, "error");
+  }
+}
+
+function renderVideoJobs(jobs) {
+  $("videoJobs").innerHTML =
+    (jobs || []).map((job) => {
+      const preview = job.preview_url
+        ? `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
+        : "";
+      const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
+      return `
+        <article class="video-job">
+          <div class="job-head">
+            <span>${escapeHtml(job.variant_name || "视频任务")}</span>
+            <span>${escapeHtml(job.status || "")}</span>
+          </div>
+          <div class="message">${escapeHtml(job.model || "")} · ${escapeHtml(job.model_id || "")} · ${escapeHtml(job.created_at || "")}</div>
+          ${failure}
+          ${preview}
+        </article>
+      `;
+    }).join("") || '<div class="empty-state"><strong>暂无视频任务</strong><span>确认脚本后，可在这里提交 Nova Reel 参考片段。</span></div>';
+}
+
+async function submitVideoGeneration() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  setMessage("videoMessage", "正在提交 Nova Reel 视频任务...");
+  try {
+    await api("/api/nova-reel/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        script_job_id: job.id,
+        variant_index: Number($("videoVariantSelect").value || 0),
+      }),
+    });
+    setMessage("videoMessage", "视频任务已提交，稍后点击刷新查看状态。", "ok");
+    await loadVideoJobs(job.id);
+  } catch (error) {
+    setMessage("videoMessage", error.message, "error");
+  }
+}
+
+async function refreshVideoGeneration() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  setMessage("videoMessage", "正在刷新视频生成状态...");
+  try {
+    const data = await api(`/api/nova-reel/refresh?script_job_id=${encodeURIComponent(job.id)}`, { method: "POST" });
+    renderVideoJobs(data.jobs || []);
+    setMessage("videoMessage", "视频状态已刷新。", "ok");
+  } catch (error) {
+    setMessage("videoMessage", error.message, "error");
+  }
 }
 
 function markdownToHtml(markdown) {
@@ -343,6 +461,9 @@ $("resultTabs").addEventListener("click", async (event) => {
   const job = await api(`/api/jobs/${encodeURIComponent(state.renderedJobId)}`);
   renderResult(job, Number(tab.dataset.index || 0));
 });
+$("videoVariantSelect").addEventListener("change", updateVideoPrompt);
+$("submitVideo").addEventListener("click", submitVideoGeneration);
+$("refreshVideo").addEventListener("click", refreshVideoGeneration);
 
 renderVideoTypePicker();
 Promise.all([loadSummary(), loadOptions(), loadJobs()]).catch((error) => {
