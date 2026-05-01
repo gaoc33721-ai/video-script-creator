@@ -24,6 +24,40 @@ PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
 
 CACHE_META_KEY = "cache_meta.json"
 HTTP_JOBS_KEY = "http_script_jobs.json"
+TABLE_HEADER_LINE = "| 结构分段 | 功能点 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 特色效果 | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 音效 | 时长 |"
+SYSTEM_PROMPT = f"""##角色
+你是“海外爆款内容引擎”，为海信海外电商产品策划推广提供视频脚本生成服务。你需要基于海信的产品卖点，撰写不同类型的视频脚本，以支持导出为 Word 或 Excel 形式的 Markdown 表格输出。
+
+##限制与优化规范
+1. 时长精确控制：脚本总时长需尽量贴近用户给定的“期望视频时长(秒)”。表格的“时长”列必须给出确切秒数，并在表格最后一行增加“总时长”统计。
+2. 结构模块化与落地：采用步骤拆解式结构，逻辑务实清晰，可交给国内视频团队拍摄执行。
+3. 强调交互与对比镜头：表现手法/拍摄角度/运镜方式中要体现 UI 面板、按键特写、操作反馈和使用前后对比。
+4. 品牌 Slogan 收尾：最后一段必须是产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
+5. 语言规范：旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是纯英文；其余列必须以中文为主，便于国内制作团队执行。
+6. 产品卖点必须严格符合用户提供的信息，不可捏造。
+7. 竞品链接/竞品盖帽字段保留；没有可用竞品链接时留空，不要编造。
+8. 如需 AI 视频生成 Prompt，请放入表现手法/特色效果/运镜方式等中文描述字段中，以英文括号附带。
+
+##格式要求
+必须以标准 Markdown 表格形式输出，绝对不要包裹在 ```markdown 或 ``` 代码块中。
+表格必须统一使用以下 12 列，并逐字使用该表头：
+{TABLE_HEADER_LINE}
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+
+##额外输出
+表格后必须追加：
+
+整体AI视频生成Prompt（English）:
+- 用一段完整英文描述整支视频的统一风格、镜头语言、光影、场景、产品露出和品牌调性。
+- 必须包含：4k, cinematic lighting, shallow depth of field, smooth camera movement。
+- 必须包含品牌收尾：Hisense Designed to Ease, Crafted to Cheer.
+
+Negative Prompt（English，选填）:
+- 输出一行即可。
+
+Recommended Settings（选填）:
+- 输出一行即可。
+"""
 
 BEDROCK_AWS_REGION = (
     os.getenv("BEDROCK_AWS_REGION")
@@ -109,15 +143,43 @@ def _feature_rows(df: pd.DataFrame, model: str, selected_features: list[str]) ->
     return payload
 
 
+def _strip_code_fences(text: str) -> str:
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(r"^\s*```(?:markdown|md)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+    return cleaned.strip()
+
+
+def _infer_variant_label(content: str) -> str:
+    text = str(content or "")
+    if re.search(r"痛点|烦恼|麻烦|困扰|对比|前后", text, flags=re.IGNORECASE):
+        return "偏痛点转化"
+    if re.search(r"场景|生活|家庭|厨房|日常", text, flags=re.IGNORECASE):
+        return "场景化种草"
+    if re.search(r"功能|展示|介绍|演示|操作", text, flags=re.IGNORECASE):
+        return "功能展示"
+    return "通用脚本"
+
+
 def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int) -> str:
     feature_lines = "\n".join(
         f"- {item['name']}: {item['tagline']}。{item['description']}" for item in features
     )
     direction = req.video_type[variant_index % len(req.video_type)] if req.video_type else "场景化/生活方式型"
+    variant_no = variant_index + 1
     return f"""
-请为海信海外电商团队生成一版短视频脚本。
+请生成【方案{variant_no}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
+- 必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
+- 表格必须包含并使用如下表头（逐字一致）：
+{TABLE_HEADER_LINE}
+- 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
+- 与其他方案保持明显差异：开场 hook、表现手法、镜头组织至少两处不同。
+- 竞品链接与竞品盖帽：当前暂无可用竞品链接，请两列留空，不要编造。
+- 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列必须以中文为主。
+- 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
+- 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
 
-基础信息：
+输入参数：
 - 发布渠道：{req.platform}
 - 目标市场：{req.target_market}
 - 产品品类：{req.category}
@@ -129,15 +191,10 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 目标受众：{req.target_audience or "通用海外消费者"}
 - 用户痛点：{req.pain_points or "结合产品卖点自行提炼"}
 - 补充要求：{req.custom_requirements or "无"}
+- 建议视频类型：{direction}
 
-产品卖点：
+核心卖点：
 {feature_lines or "- 请围绕产品核心功能和使用场景撰写。"}
-
-输出要求：
-1. 使用中文说明脚本结构，保留必要英文口播或字幕建议。
-2. 包含开场钩子、场景画面、镜头动作、旁白/字幕、卖点承接、结尾 CTA。
-3. 控制为可拍摄、可交付给视频团队执行的脚本文档。
-4. 不要编造竞品链接，不要输出无关解释。
 """.strip()
 
 
@@ -145,11 +202,7 @@ def _call_bedrock(prompt: str, temperature=0.7, top_p=0.9) -> str:
     client = boto3.client("bedrock-runtime", region_name=BEDROCK_AWS_REGION)
     response = client.converse(
         modelId=BEDROCK_MODEL_ID,
-        system=[
-            {
-                "text": "你是海外爆款内容引擎，面向国际营销电商团队生成可拍摄、可导出的短视频脚本。"
-            }
-        ],
+        system=[{"text": SYSTEM_PROMPT}],
         messages=[{"role": "user", "content": [{"text": prompt}]}],
         inferenceConfig={
             "maxTokens": BEDROCK_MAX_TOKENS,
@@ -197,8 +250,13 @@ def _run_generation(job_id: str):
         for i in range(total):
             prompt = _build_prompt(req, features, i)
             _update_job(job_id, progress=int((i / total) * 80) + 10, current_step=f"生成方案 {i + 1}/{total}")
-            content = _call_bedrock(prompt)
-            variants.append({"name": f"方案{i + 1}", "content": content.strip()})
+            content = _strip_code_fences(_call_bedrock(prompt))
+            if TABLE_HEADER_LINE not in content or "总时长" not in content:
+                retry_prompt = prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
+                retry_content = _strip_code_fences(_call_bedrock(retry_prompt, temperature=0.3, top_p=0.8))
+                if TABLE_HEADER_LINE in retry_content and "总时长" in retry_content:
+                    content = retry_content
+            variants.append({"name": f"方案{i + 1}", "label": _infer_variant_label(content), "content": content.strip()})
         _update_job(
             job_id,
             status="succeeded",

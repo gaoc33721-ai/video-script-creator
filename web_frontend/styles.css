@@ -436,6 +436,121 @@ button,
   line-height: 1.5;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.download-link,
+.load-result {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.load-result {
+  margin-right: 8px;
+  min-height: 36px;
+}
+
+.result-card {
+  scroll-margin-top: 24px;
+}
+
+.result-tabs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.result-tab {
+  min-height: 42px;
+  border: 1px solid var(--border);
+  background: #fbfbfd;
+  color: var(--text);
+}
+
+.result-tab.active {
+  border-color: rgba(0, 170, 166, 0.42);
+  background: var(--brand-tint);
+  color: var(--brand-dark);
+  box-shadow: 0 8px 22px rgba(0, 170, 166, 0.12);
+}
+
+.result-label {
+  display: inline-flex;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--brand-tint);
+  color: var(--brand-dark);
+  font-weight: 700;
+}
+
+.script-markdown {
+  color: #2c2c2e;
+  line-height: 1.65;
+}
+
+.script-markdown p {
+  margin: 10px 0;
+}
+
+.script-markdown h3 {
+  margin: 22px 0 10px;
+  font-size: 22px;
+}
+
+.script-markdown ul {
+  margin: 8px 0 16px;
+  padding-left: 24px;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 10px 0 20px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #fff;
+}
+
+.table-wrap table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table-wrap th,
+.table-wrap td {
+  max-width: 260px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.table-wrap th {
+  position: sticky;
+  top: 0;
+  background: var(--brand-tint);
+  color: var(--text);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.table-wrap td {
+  background: #fff;
+}
+
 @media (max-width: 980px) {
   .hero,
   .grid,

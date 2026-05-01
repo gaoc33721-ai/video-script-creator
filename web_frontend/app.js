@@ -4,6 +4,9 @@ const state = {
   selectedFeatures: [],
   videoTypes: ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
   selectedVideoTypes: ["问题解决/痛点挖掘型", "场景化/生活方式型"],
+  activeJobId: "",
+  renderedJobId: "",
+  activeVariantIndex: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -125,6 +128,7 @@ function formPayload(form) {
 
 async function submitGeneration(event) {
   event.preventDefault();
+  hideResults();
   setMessage("formMessage", "任务提交中...");
   try {
     const result = await api("/api/generate", {
@@ -132,7 +136,9 @@ async function submitGeneration(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(formPayload(event.currentTarget)),
     });
-    setMessage("formMessage", `已提交任务 ${result.job_id}，可在任务中心查看。`, "ok");
+    state.activeJobId = result.job_id;
+    state.renderedJobId = "";
+    setMessage("formMessage", `已提交任务 ${result.job_id}，生成完成后会自动显示在下方。`, "ok");
     await loadJobs();
   } catch (error) {
     setMessage("formMessage", error.message, "error");
@@ -174,14 +180,13 @@ async function loadJobs() {
   $("jobs").innerHTML =
     data.jobs.map(renderJob).join("") ||
     '<div class="empty-state"><strong>暂无任务</strong><span>提交脚本生成后，进度会显示在这里。</span></div>';
+  revealCompletedResult(data.jobs);
 }
 
 function renderJob(job) {
   const variants =
     job.status === "succeeded"
-      ? `<a href="/api/jobs/${job.id}/download">下载 Excel</a>${(job.variants || [])
-          .map((item) => `<details><summary>${escapeHtml(item.name)}</summary><div class="variant">${escapeHtml(item.content)}</div></details>`)
-          .join("")}`
+      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><a href="/api/jobs/${job.id}/download">下载 Excel</a>`
       : "";
   const error = job.error_message ? `<div class="message error">${escapeHtml(job.error_message)}</div>` : "";
   return `
@@ -195,6 +200,102 @@ function renderJob(job) {
       ${error}
       ${variants}
     </article>
+  `;
+}
+
+function revealCompletedResult(jobs) {
+  const completed = (jobs || []).find((job) => {
+    if (job.status !== "succeeded" || !(job.variants || []).length) return false;
+    return state.activeJobId ? job.id === state.activeJobId : true;
+  });
+  if (!completed || completed.id === state.renderedJobId) return;
+  renderResult(completed);
+}
+
+function hideResults() {
+  $("resultSection").classList.add("hidden");
+  $("resultTabs").innerHTML = "";
+  $("resultBody").innerHTML = "";
+}
+
+function renderResult(job, variantIndex = 0) {
+  const variants = job.variants || [];
+  if (!variants.length) return;
+  state.renderedJobId = job.id;
+  state.activeVariantIndex = Math.max(0, Math.min(variantIndex, variants.length - 1));
+  $("resultSection").classList.remove("hidden");
+  $("downloadResult").href = `/api/jobs/${job.id}/download`;
+  $("resultTabs").innerHTML = variants
+    .map((variant, index) => {
+      const active = index === state.activeVariantIndex;
+      const label = variant.label ? `｜${variant.label}` : "";
+      return `<button class="result-tab ${active ? "active" : ""}" type="button" data-index="${index}">${escapeHtml(variant.name || `方案${index + 1}`)}${escapeHtml(label)}</button>`;
+    })
+    .join("");
+  const current = variants[state.activeVariantIndex];
+  $("resultBody").innerHTML = renderVariantContent(current);
+  $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderVariantContent(variant) {
+  const label = variant.label ? `<div class="result-label">方案定位：${escapeHtml(variant.label)}</div>` : "";
+  return `${label}<div class="script-markdown">${markdownToHtml(variant.content || "")}</div>`;
+}
+
+function markdownToHtml(markdown) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const html = [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (isMarkdownTableStart(lines, index)) {
+      const tableLines = [];
+      while (index < lines.length && lines[index].trim().startsWith("|")) {
+        tableLines.push(lines[index]);
+        index++;
+      }
+      index--;
+      html.push(renderMarkdownTable(tableLines));
+    } else if (!line.trim()) {
+      html.push("");
+    } else if (/^#{1,4}\s+/.test(line)) {
+      html.push(`<h3>${escapeHtml(line.replace(/^#{1,4}\s+/, ""))}</h3>`);
+    } else if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        items.push(`<li>${escapeHtml(lines[index].replace(/^\s*[-*]\s+/, ""))}</li>`);
+        index++;
+      }
+      index--;
+      html.push(`<ul>${items.join("")}</ul>`);
+    } else {
+      html.push(`<p>${escapeHtml(line)}</p>`);
+    }
+  }
+  return html.join("");
+}
+
+function isMarkdownTableStart(lines, index) {
+  return (
+    lines[index] &&
+    lines[index].trim().startsWith("|") &&
+    lines[index + 1] &&
+    /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])
+  );
+}
+
+function renderMarkdownTable(lines) {
+  const rows = lines
+    .filter((line, index) => index !== 1)
+    .map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()));
+  if (!rows.length) return "";
+  const [header, ...body] = rows;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>${header.map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead>
+        <tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -229,6 +330,19 @@ $("videoTypePicker").addEventListener("click", (event) => {
 $("generateForm").addEventListener("submit", submitGeneration);
 $("uploadInput").addEventListener("change", uploadFile);
 $("refreshJobs").addEventListener("click", loadJobs);
+$("jobs").addEventListener("click", async (event) => {
+  const button = event.target.closest(".load-result");
+  if (!button) return;
+  const job = await api(`/api/jobs/${encodeURIComponent(button.dataset.jobId)}`);
+  state.activeJobId = job.id;
+  renderResult(job);
+});
+$("resultTabs").addEventListener("click", async (event) => {
+  const tab = event.target.closest(".result-tab");
+  if (!tab || !state.renderedJobId) return;
+  const job = await api(`/api/jobs/${encodeURIComponent(state.renderedJobId)}`);
+  renderResult(job, Number(tab.dataset.index || 0));
+});
 
 renderVideoTypePicker();
 Promise.all([loadSummary(), loadOptions(), loadJobs()]).catch((error) => {
