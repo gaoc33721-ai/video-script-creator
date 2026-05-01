@@ -1,5 +1,9 @@
 const state = {
   options: { categories: [], models_by_category: {} },
+  features: [],
+  selectedFeatures: [],
+  videoTypes: ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
+  selectedVideoTypes: ["问题解决/痛点挖掘型", "场景化/生活方式型"],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -25,6 +29,15 @@ function setMessage(id, text, kind = "") {
 
 function optionHtml(value, label = value, selected = false) {
   return `<option value="${escapeAttr(value)}" ${selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+}
+
+function checkItemHtml(value, selected) {
+  return `
+    <button class="check-item ${selected ? "selected" : ""}" type="button" data-value="${escapeAttr(value)}" aria-pressed="${selected}">
+      <span class="check-sign" aria-hidden="true">✓</span>
+      <span>${escapeHtml(value)}</span>
+    </button>
+  `;
 }
 
 async function loadSummary() {
@@ -58,18 +71,37 @@ async function loadFeatures() {
   const category = $("categorySelect").value;
   const model = $("modelSelect").value;
   if (!category || !model) {
-    $("featureSelect").innerHTML = "";
+    state.features = [];
+    state.selectedFeatures = [];
+    renderFeaturePicker();
     return;
   }
   const data = await api(`/api/features?category=${encodeURIComponent(category)}&model=${encodeURIComponent(model)}`);
-  $("featureSelect").innerHTML = data.features.length
-    ? data.features.map((item, index) => optionHtml(item, item, index < 3)).join("")
-    : '<option disabled>当前型号未匹配到卖点，请切换型号或更新卖点库</option>';
+  state.features = data.features;
+  state.selectedFeatures = data.features.slice(0, 3);
+  renderFeaturePicker();
   updateSelectionSummary();
 }
 
-function selectedValues(select) {
-  return Array.from(select.selectedOptions).map((option) => option.value);
+function toggleValue(list, value) {
+  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+}
+
+function renderFeaturePicker() {
+  const picker = $("featurePicker");
+  if (!state.features.length) {
+    picker.innerHTML = '<div class="check-empty">当前型号未匹配到卖点，请切换型号或更新卖点库</div>';
+    return;
+  }
+  picker.innerHTML = state.features
+    .map((item) => checkItemHtml(item, state.selectedFeatures.includes(item)))
+    .join("");
+}
+
+function renderVideoTypePicker() {
+  $("videoTypePicker").innerHTML = state.videoTypes
+    .map((item) => checkItemHtml(item, state.selectedVideoTypes.includes(item)))
+    .join("");
 }
 
 function formPayload(form) {
@@ -80,9 +112,9 @@ function formPayload(form) {
     variant_count: Number(data.get("variant_count") || 2),
     category: data.get("category"),
     model: data.get("model"),
-    selected_features: selectedValues($("featureSelect")),
+    selected_features: state.selectedFeatures,
     video_usage: data.get("video_usage"),
-    video_type: selectedValues(form.elements.video_type),
+    video_type: state.selectedVideoTypes,
     expected_duration: Number(data.get("expected_duration") || 30),
     project_type: data.get("project_type"),
     target_audience: data.get("target_audience") || "",
@@ -110,7 +142,7 @@ async function submitGeneration(event) {
 function updateSelectionSummary() {
   const category = $("categorySelect").value || "未选择";
   const model = ($("modelSelect").value || "未选择").trim();
-  const features = selectedValues($("featureSelect"));
+  const features = state.selectedFeatures;
   $("selectionSummary").innerHTML = `
     <div><span>品类</span><strong>${escapeHtml(category)}</strong></div>
     <div><span>型号</span><strong>${escapeHtml(model)}</strong></div>
@@ -181,11 +213,24 @@ function escapeAttr(value) {
 
 $("categorySelect").addEventListener("change", updateModels);
 $("modelSelect").addEventListener("change", loadFeatures);
-$("featureSelect").addEventListener("change", updateSelectionSummary);
+$("featurePicker").addEventListener("click", (event) => {
+  const item = event.target.closest(".check-item");
+  if (!item) return;
+  state.selectedFeatures = toggleValue(state.selectedFeatures, item.dataset.value);
+  renderFeaturePicker();
+  updateSelectionSummary();
+});
+$("videoTypePicker").addEventListener("click", (event) => {
+  const item = event.target.closest(".check-item");
+  if (!item) return;
+  state.selectedVideoTypes = toggleValue(state.selectedVideoTypes, item.dataset.value);
+  renderVideoTypePicker();
+});
 $("generateForm").addEventListener("submit", submitGeneration);
 $("uploadInput").addEventListener("change", uploadFile);
 $("refreshJobs").addEventListener("click", loadJobs);
 
+renderVideoTypePicker();
 Promise.all([loadSummary(), loadOptions(), loadJobs()]).catch((error) => {
   setMessage("formMessage", error.message, "error");
 });

@@ -48,13 +48,13 @@
             <label>产品品类<select id="categorySelect" name="category"></select></label>
             <label>产品型号<select id="modelSelect" name="model"></select></label>
           </div>
-          <label>核心卖点<select id="featureSelect" name="selected_features" multiple size="5"></select></label>
+          <label>核心卖点<div id="featurePicker" class="check-list"></div></label>
           <div class="field-row">
             <label>视频用途<select name="video_usage"><option>站外种草</option><option>站内首推</option><option>内部培训</option><option>其他</option></select></label>
             <label>项目类型<select name="project_type"><option>常规上新</option><option>新品上市</option><option>大促活动</option><option>教程培训</option><option>其他</option></select></label>
             <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
           </div>
-          <label>脚本方向<select name="video_type" multiple size="4"><option selected>问题解决/痛点挖掘型</option><option>产品展示/功能介绍型</option><option>开箱体验型</option><option selected>场景化/生活方式型</option><option>测评/对比型</option></select></label>
+          <label>脚本方向<div id="videoTypePicker" class="check-list compact"></div></label>
           <label>目标受众<input name="target_audience" placeholder="不填则按通用海外消费者处理" /></label>
           <label>用户痛点<textarea name="pain_points" rows="3"></textarea></label>
           <label>补充要求<textarea name="custom_requirements" rows="3"></textarea></label>
