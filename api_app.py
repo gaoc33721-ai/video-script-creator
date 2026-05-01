@@ -1,4 +1,5 @@
 import datetime as dt
+import hmac
 import io
 import os
 import random
@@ -9,7 +10,8 @@ import uuid
 
 import boto3
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -91,6 +93,30 @@ NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
 
 app = FastAPI(title="海外爆款内容引擎 API")
+
+# --- Security: CORS ---
+_allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins or ["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
+)
+
+# --- Security: simple token auth (reuses APP_ACCESS_PASSWORD) ---
+_API_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
+_API_ACCESS_CONTROL = os.getenv("APP_ACCESS_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+async def _verify_access(authorization: str = Header(default="")):
+    """Dependency that gates mutating endpoints behind APP_ACCESS_PASSWORD."""
+    if not _API_ACCESS_CONTROL or not _API_ACCESS_PASSWORD:
+        return
+    if not authorization or not hmac.compare_digest(authorization.encode("utf-8"), _API_ACCESS_PASSWORD.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="未授权访问。")
+
+# --- Security: upload size limit ---
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+
 job_lock = threading.Lock()
 
 static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
@@ -583,11 +609,13 @@ def summary():
     }
 
 
-@app.post("/api/upload")
+@app.post("/api/upload", dependencies=[Depends(_verify_access)])
 async def upload_product_features(file: UploadFile = File(...)):
     if not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="请上传 Excel 文件。")
     data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"文件过大，最大允许 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB。")
     try:
         df = pd.read_excel(io.BytesIO(data))
         df_filtered = filter_product_features(df)
@@ -624,7 +652,7 @@ def features(category: str, model: str):
     return {"features": names}
 
 
-@app.post("/api/generate")
+@app.post("/api/generate", dependencies=[Depends(_verify_access)])
 def generate(req: GenerateRequest):
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -672,7 +700,7 @@ def nova_reel_jobs(script_job_id: str = ""):
     }
 
 
-@app.post("/api/nova-reel/submit")
+@app.post("/api/nova-reel/submit", dependencies=[Depends(_verify_access)])
 def submit_nova_reel(req: NovaReelSubmitRequest):
     script_job = next((item for item in _load_jobs() if item.get("id") == req.script_job_id), None)
     if not script_job:

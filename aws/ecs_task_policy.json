@@ -11,7 +11,11 @@
         "bedrock:GetAsyncInvoke",
         "bedrock:ListAsyncInvokes"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/eu.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-reel-v1:1",
+        "arn:aws:bedrock:*:*:inference-profile/eu.amazon.nova-pro-v1:0"
+      ]
     },
     {
       "Sid": "ReadWriteAppBucketObjects",
