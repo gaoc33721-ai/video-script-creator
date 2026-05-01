@@ -4,10 +4,12 @@
   --card: #fff;
   --text: #1d1d1f;
   --muted: #6e6e73;
-  --blue: #0071e3;
-  --orange: #f56300;
+  --brand: #00aaa6;
+  --brand-dark: #008d8a;
+  --brand-soft: rgba(0, 170, 166, 0.12);
+  --brand-tint: #e9faf8;
   --border: rgba(29, 29, 31, 0.1);
-  --shadow: 0 18px 42px rgba(0, 0, 0, 0.08);
+  --shadow: 0 18px 42px rgba(0, 94, 91, 0.08);
 }
 
 * {
@@ -46,7 +48,7 @@ body {
 
 .hero > div:first-child {
   padding: 28px 32px;
-  background: linear-gradient(135deg, #fff 0%, #fbfbfd 62%, #eef6ff 100%);
+  background: linear-gradient(135deg, #fff 0%, #fbfbfd 62%, var(--brand-tint) 100%);
 }
 
 .hero-panel {
@@ -70,7 +72,7 @@ body {
 
 .eyebrow {
   margin: 0 0 8px;
-  color: var(--blue);
+  color: var(--brand-dark);
   font-weight: 700;
 }
 
@@ -183,7 +185,7 @@ button,
   padding: 0 18px;
   border: 0;
   border-radius: 999px;
-  background: var(--blue);
+  background: var(--brand);
   color: #fff;
   font-weight: 700;
   cursor: pointer;
@@ -203,7 +205,7 @@ button,
 }
 
 .message.ok {
-  color: #248a3d;
+  color: var(--brand-dark);
 }
 
 .jobs {
@@ -246,14 +248,15 @@ button,
 }
 
 .check-item:hover {
-  background: #fff;
-  border-color: var(--border);
+  background: var(--brand-tint);
+  border-color: rgba(0, 170, 166, 0.24);
 }
 
 .check-item.selected {
-  background: #1d1d1f;
-  color: #fff;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12);
+  background: linear-gradient(135deg, rgba(0, 170, 166, 0.16), rgba(0, 170, 166, 0.08));
+  border-color: rgba(0, 170, 166, 0.42);
+  color: var(--text);
+  box-shadow: 0 8px 22px rgba(0, 170, 166, 0.14);
 }
 
 .check-sign {
@@ -272,7 +275,7 @@ button,
 
 .check-item.selected .check-sign {
   border-color: #fff;
-  background: var(--blue);
+  background: var(--brand);
   color: #fff;
 }
 
@@ -287,7 +290,7 @@ button,
 
 .selection-card {
   background:
-    radial-gradient(circle at 92% 0%, rgba(0, 113, 227, 0.1), transparent 13rem),
+    radial-gradient(circle at 92% 0%, var(--brand-soft), transparent 13rem),
     #fff;
 }
 
@@ -335,7 +338,7 @@ button,
 
 .guide-card {
   background:
-    radial-gradient(circle at 100% 0%, rgba(245, 99, 0, 0.12), transparent 13rem),
+    radial-gradient(circle at 100% 0%, var(--brand-soft), transparent 13rem),
     #fff;
 }
 
@@ -360,7 +363,7 @@ button,
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--orange);
+  background: var(--brand);
   color: #fff;
   font-weight: 800;
   font-size: 13px;
@@ -422,7 +425,7 @@ button,
 
 .progress > div {
   height: 100%;
-  background: var(--blue);
+  background: var(--brand);
 }
 
 .variant {
