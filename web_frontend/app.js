@@ -9,6 +9,7 @@ const state = {
   activeVariantIndex: 0,
   currentResultJob: null,
   videoJobs: [],
+  jobsExpanded: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -179,10 +180,27 @@ async function uploadFile(event) {
 
 async function loadJobs() {
   const data = await api("/api/jobs");
-  $("jobs").innerHTML =
-    data.jobs.map(renderJob).join("") ||
-    '<div class="empty-state"><strong>暂无任务</strong><span>提交脚本生成后，进度会显示在这里。</span></div>';
-  revealCompletedResult(data.jobs);
+  const jobs = data.jobs || [];
+  if (!jobs.length) {
+    $("jobs").innerHTML = '<div class="empty-state"><strong>暂无任务</strong><span>提交脚本生成后，进度会显示在这里。</span></div>';
+    return;
+  }
+  const defaultVisible = 3;
+  const expanded = state.jobsExpanded || false;
+  const visible = expanded ? jobs : jobs.slice(0, defaultVisible);
+  let html = visible.map(renderJob).join("");
+  if (jobs.length > defaultVisible) {
+    const label = expanded ? "收起历史任务" : `展开全部（共 ${jobs.length} 条）`;
+    html += `<button class="jobs-toggle" type="button" id="toggleJobs">${escapeHtml(label)}</button>`;
+  }
+  $("jobs").innerHTML = html;
+  if (jobs.length > defaultVisible) {
+    $("toggleJobs").addEventListener("click", () => {
+      state.jobsExpanded = !state.jobsExpanded;
+      loadJobs();
+    });
+  }
+  revealCompletedResult(jobs);
 }
 
 function renderJob(job) {

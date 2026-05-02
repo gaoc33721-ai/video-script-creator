@@ -2295,7 +2295,7 @@ if st.button("提交脚本生成任务", type="primary", use_container_width=Tru
     st.success(f"已提交生成任务：{job['id']}。可以刷新任务中心查看进度，页面可继续操作。")
     st.rerun()
 
-with st.expander("任务中心", expanded=True):
+with st.expander("任务中心", expanded=any(j.get("status") in ("pending", "running") for j in load_script_jobs())):
     jobs = load_script_jobs()
     if not jobs:
         st.caption("暂无脚本生成任务。")
@@ -2308,6 +2308,9 @@ with st.expander("任务中心", expanded=True):
             "cancel_requested": "取消中",
             "cancelled": "已取消",
         }
+        _default_job_display = 5
+        _show_all_jobs = st.checkbox(f"显示全部任务（共 {len(jobs)} 条）", value=False) if len(jobs) > _default_job_display else False
+        _display_jobs = jobs if _show_all_jobs else jobs[:_default_job_display]
         st.dataframe(
             pd.DataFrame([
                 {
@@ -2320,7 +2323,7 @@ with st.expander("任务中心", expanded=True):
                     "当前步骤": j.get("current_step", ""),
                     "失败原因": j.get("error_message", ""),
                 }
-                for j in jobs[:12]
+                for j in _display_jobs
             ]),
             use_container_width=True,
             hide_index=True,

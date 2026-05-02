@@ -428,6 +428,26 @@ button,
   background: var(--brand);
 }
 
+.jobs-toggle {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  margin-top: 4px;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--brand);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.jobs-toggle:hover {
+  background: var(--brand-tint);
+}
+
 .variant {
   margin-top: 12px;
   white-space: pre-wrap;
