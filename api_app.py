@@ -172,7 +172,10 @@ def _update_job(job_id, **fields):
         for job in jobs:
             if job.get("id") == job_id:
                 job.update(fields)
-                job["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                job["updated_at"] = now
+                if fields.get("status") in {"succeeded", "failed"}:
+                    job["completed_at"] = now
                 break
         _save_jobs(jobs)
 

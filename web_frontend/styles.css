@@ -415,6 +415,12 @@ button,
   font-weight: 700;
 }
 
+.job-time {
+  margin: 6px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .progress {
   height: 8px;
   margin: 12px 0;
