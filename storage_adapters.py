@@ -148,3 +148,6 @@ class RuntimeStorage:
 
     def write_file_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:
         return self.backend.write_bytes(key, data, content_type=content_type)
+
+    def read_file_bytes(self, key: str) -> bytes:
+        return self.backend.read_bytes(key)

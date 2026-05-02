@@ -684,6 +684,69 @@ button,
   color: #2c2c2e;
 }
 
+.storyboard-actions {
+  display: flex;
+  margin-top: 14px;
+}
+
+.storyboard-generate {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+  background: var(--brand);
+  box-shadow: 0 10px 24px rgba(0, 170, 166, 0.16);
+}
+
+.storyboard-generate:disabled {
+  cursor: progress;
+  opacity: 0.78;
+}
+
+.storyboard-image-slot {
+  margin-top: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(0, 170, 166, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.storyboard-image-slot.empty,
+.storyboard-image-slot.loading,
+.storyboard-image-slot.error,
+.storyboard-image-placeholder {
+  padding: 14px;
+}
+
+.storyboard-image-slot.loading {
+  color: var(--brand-dark);
+  background: var(--brand-tint);
+}
+
+.storyboard-image-slot.error {
+  color: #d70015;
+  background: #fff2f2;
+  border-color: rgba(215, 0, 21, 0.18);
+}
+
+.storyboard-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #f5f5f7;
+}
+
+.storyboard-image-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .storyboard-card details {
   margin-top: 12px;
   padding: 10px 12px;

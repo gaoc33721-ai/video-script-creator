@@ -9,6 +9,9 @@ const state = {
   activeVariantIndex: 0,
   currentResultJob: null,
   videoJobs: [],
+  canvasJobs: [],
+  storyboardShots: [],
+  canvasGenerating: new Set(),
   jobsExpanded: false,
   jobFilter: "all",
   jobSearch: "",
@@ -290,10 +293,22 @@ function renderResult(job, variantIndex = 0) {
     .join("");
   const current = variants[state.activeVariantIndex];
   $("resultBody").innerHTML = renderVariantContent(current);
-  $("storyboardCards").innerHTML = renderStoryboardCards(current.content || "");
   state.currentResultJob = job;
+  state.canvasJobs = [];
+  state.storyboardShots = [];
+  rerenderStoryboardCards();
+  loadCanvasJobs(job.id).catch((error) => {
+    console.warn("Failed to load Nova Canvas jobs", error);
+  });
   renderVideoPanel(job);
   $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function rerenderStoryboardCards() {
+  const job = state.currentResultJob;
+  const variants = (job && job.variants) || [];
+  const current = variants[state.activeVariantIndex] || {};
+  $("storyboardCards").innerHTML = renderStoryboardCards(current.content || "");
 }
 
 function renderVariantContent(variant) {
@@ -307,6 +322,7 @@ function renderStoryboardCards(content) {
     const segment = row[0] || "";
     return segment && !segment.includes("总时长") && !segment.toLowerCase().includes("total");
   });
+  state.storyboardShots = [];
   if (!shotRows.length) {
     return '<div class="empty-state"><strong>暂无分镜</strong><span>脚本表格生成后，这里会自动拆出拍摄参考卡片。</span></div>';
   }
@@ -324,6 +340,8 @@ function renderStoryboardCards(content) {
       const sound = row[10] || "";
       const duration = row[11] || "";
       const prompt = buildStoryboardImagePrompt({ segment, feature, method, effect, angle, movement, subtitle });
+      state.storyboardShots.push({ segment, feature, method, effect, angle, movement, subtitle, prompt });
+      const isGenerating = state.canvasGenerating.has(index);
       return `
         <article class="storyboard-card">
           <div class="storyboard-meta">
@@ -338,6 +356,12 @@ function renderStoryboardCards(content) {
             <div><dt>旁白/字幕</dt><dd>${escapeHtml([voiceover, subtitle].filter(Boolean).join(" / "))}</dd></div>
             <div><dt>效果/音效</dt><dd>${escapeHtml([effect, sound].filter(Boolean).join(" / ") || "自然产品展示")}</dd></div>
           </dl>
+          <div class="storyboard-actions">
+            <button class="storyboard-generate" type="button" data-shot-index="${index}" ${isGenerating ? "disabled" : ""}>
+              ${isGenerating ? "正在生成参考图..." : "生成静态分镜参考图"}
+            </button>
+          </div>
+          ${renderCanvasJobForShot(index)}
           <details>
             <summary>参考图 Prompt</summary>
             <p>${escapeHtml(prompt)}</p>
@@ -346,6 +370,79 @@ function renderStoryboardCards(content) {
       `;
     })
     .join("");
+}
+
+function renderCanvasJobForShot(shotIndex) {
+  if (state.canvasGenerating.has(shotIndex)) {
+    return '<div class="storyboard-image-slot loading">Nova Canvas 正在生成中，通常需要几十秒。</div>';
+  }
+  const job = (state.canvasJobs || []).find((item) => {
+    return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
+  });
+  if (!job) {
+    return '<div class="storyboard-image-slot empty">生成后会在这里显示 16:9 静态分镜图。</div>';
+  }
+  if (job.status === "failed") {
+    return `<div class="storyboard-image-slot error">${escapeHtml(job.failure_message || "参考图生成失败")}</div>`;
+  }
+  const image = job.preview_url
+    ? `<img class="storyboard-image" src="${escapeAttr(job.preview_url)}" alt="Nova Canvas storyboard reference" loading="lazy" />`
+    : '<div class="storyboard-image-placeholder">图片已生成，预览链接暂不可用。</div>';
+  return `
+    <div class="storyboard-image-slot ready">
+      ${image}
+      <div class="storyboard-image-meta">
+        <span>${escapeHtml(job.model_id || "Nova Canvas")}</span>
+        <span>${escapeHtml(formatDateTime(job.updated_at || job.created_at))}</span>
+      </div>
+    </div>
+  `;
+}
+
+async function loadCanvasJobs(scriptJobId) {
+  if (!scriptJobId) return;
+  const data = await api(
+    `/api/nova-canvas/jobs?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
+  );
+  state.canvasJobs = data.jobs || [];
+  rerenderStoryboardCards();
+}
+
+async function submitCanvasImage(shotIndex) {
+  const job = state.currentResultJob;
+  const shot = state.storyboardShots[shotIndex];
+  if (!job || !shot) return;
+  state.canvasGenerating.add(shotIndex);
+  rerenderStoryboardCards();
+  try {
+    await api("/api/nova-canvas/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        script_job_id: job.id,
+        variant_index: state.activeVariantIndex,
+        shot_index: shotIndex,
+        prompt: shot.prompt,
+      }),
+    });
+    await loadCanvasJobs(job.id);
+  } catch (error) {
+    state.canvasJobs = [
+      {
+        id: `failed-${Date.now()}`,
+        script_job_id: job.id,
+        variant_index: state.activeVariantIndex,
+        shot_index: shotIndex,
+        status: "failed",
+        failure_message: error.message,
+        created_at: new Date().toISOString(),
+      },
+      ...(state.canvasJobs || []),
+    ];
+  } finally {
+    state.canvasGenerating.delete(shotIndex);
+    rerenderStoryboardCards();
+  }
 }
 
 function parseFirstMarkdownTable(markdown) {
@@ -617,6 +714,11 @@ $("resultTabs").addEventListener("click", async (event) => {
   if (!tab || !state.renderedJobId) return;
   const job = await api(`/api/jobs/${encodeURIComponent(state.renderedJobId)}`);
   renderResult(job, Number(tab.dataset.index || 0));
+});
+$("storyboardCards").addEventListener("click", (event) => {
+  const button = event.target.closest(".storyboard-generate");
+  if (!button) return;
+  submitCanvasImage(Number(button.dataset.shotIndex || 0));
 });
 $("videoVariantSelect").addEventListener("change", updateVideoPrompt);
 $("submitVideo").addEventListener("click", submitVideoGeneration);

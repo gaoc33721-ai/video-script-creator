@@ -1,6 +1,8 @@
+import base64
 import datetime as dt
 import hmac
 import io
+import json
 import os
 import random
 import re
@@ -29,6 +31,7 @@ PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
 CACHE_META_KEY = "cache_meta.json"
 HTTP_JOBS_KEY = "http_script_jobs.json"
 NOVA_REEL_JOBS_KEY = "nova_reel_poc_jobs.json"
+NOVA_CANVAS_JOBS_KEY = "nova_canvas_storyboard_jobs.json"
 TABLE_COLUMNS = [
     "结构分段",
     "功能点",
@@ -91,6 +94,9 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
+NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-east-1")
+NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "amazon.nova-canvas-v1:0")
+NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.04"))
 
 app = FastAPI(title="海外爆款内容引擎 API")
 
@@ -143,6 +149,13 @@ class GenerateRequest(BaseModel):
 class NovaReelSubmitRequest(BaseModel):
     script_job_id: str
     variant_index: int = Field(default=0, ge=0)
+
+
+class NovaCanvasSubmitRequest(BaseModel):
+    script_job_id: str
+    variant_index: int = Field(default=0, ge=0)
+    shot_index: int = Field(default=0, ge=0)
+    prompt: str = Field(min_length=10, max_length=1200)
 
 
 def _read_json(key, default_value):
@@ -330,6 +343,67 @@ def _save_nova_reel_jobs(jobs):
     return _write_json(NOVA_REEL_JOBS_KEY, jobs[:200])
 
 
+def _load_nova_canvas_jobs():
+    data = _read_json(NOVA_CANVAS_JOBS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_nova_canvas_jobs(jobs):
+    return _write_json(NOVA_CANVAS_JOBS_KEY, jobs[:500])
+
+
+def _nova_canvas_image_key(script_job_id, variant_index, shot_index):
+    stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return (
+        "nova-canvas-storyboards/"
+        f"{_safe_ascii_slug(script_job_id)}/"
+        f"variant_{int(variant_index) + 1}_shot_{int(shot_index) + 1}_{stamp}_{uuid.uuid4().hex[:8]}.png"
+    )
+
+
+def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
+    from botocore.config import Config
+
+    seed = random.randint(0, 858993459)
+    body = {
+        "taskType": "TEXT_IMAGE",
+        "textToImageParams": {
+            "text": str(prompt or "")[:1200],
+            "negativeText": (
+                "competitor brands, distorted logo, unreadable text, low quality, "
+                "deformed product, extra products, watermark, cluttered composition"
+            ),
+        },
+        "imageGenerationConfig": {
+            "numberOfImages": 1,
+            "quality": "standard",
+            "height": 720,
+            "width": 1280,
+            "cfgScale": 6.5,
+            "seed": seed,
+        },
+    }
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=NOVA_CANVAS_AWS_REGION,
+        config=Config(connect_timeout=5, read_timeout=180, retries={"max_attempts": 2}),
+    )
+    response = client.invoke_model(
+        modelId=NOVA_CANVAS_MODEL_ID,
+        body=json.dumps(body).encode("utf-8"),
+        contentType="application/json",
+        accept="application/json",
+    )
+    payload = json.loads(response["body"].read())
+    images = payload.get("images") or []
+    if not images:
+        raise RuntimeError(payload.get("message") or payload.get("error") or "Nova Canvas did not return an image.")
+    image_bytes = base64.b64decode(images[0])
+    image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
+    image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
+    return image_key, image_uri, seed
+
+
 def _safe_ascii_slug(text):
     raw = str(text or "").strip()
     if "微波" in raw:
@@ -483,6 +557,15 @@ def _presigned_url_for_s3_uri(s3_uri, expires_in=3600):
 def _public_nova_reel_job(job):
     public = dict(job or {})
     public["preview_url"] = _presigned_url_for_s3_uri(public.get("video_s3_uri", ""))
+    return public
+
+
+def _public_nova_canvas_job(job):
+    public = dict(job or {})
+    preview_url = _presigned_url_for_s3_uri(public.get("image_uri", ""), expires_in=3600)
+    if not preview_url and public.get("image_key"):
+        preview_url = f"/api/nova-canvas/images/{public.get('id')}"
+    public["preview_url"] = preview_url
     return public
 
 
@@ -702,6 +785,93 @@ def nova_reel_jobs(script_job_id: str = ""):
         "region": NOVA_REEL_AWS_REGION,
         "estimated_usd_per_second": NOVA_REEL_ESTIMATED_USD_PER_SECOND,
     }
+
+
+@app.get("/api/nova-canvas/jobs")
+def nova_canvas_jobs(script_job_id: str = "", variant_index: int = -1):
+    jobs = _load_nova_canvas_jobs()
+    if script_job_id:
+        jobs = [item for item in jobs if item.get("script_job_id") == script_job_id]
+    if variant_index >= 0:
+        jobs = [item for item in jobs if int(item.get("variant_index", -1)) == int(variant_index)]
+    return {
+        "jobs": [_public_nova_canvas_job(item) for item in jobs[:80]],
+        "model_id": NOVA_CANVAS_MODEL_ID,
+        "region": NOVA_CANVAS_AWS_REGION,
+        "estimated_usd_per_image": NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE,
+    }
+
+
+@app.post("/api/nova-canvas/submit", dependencies=[Depends(_verify_access)])
+def submit_nova_canvas(req: NovaCanvasSubmitRequest):
+    script_job = next((item for item in _load_jobs() if item.get("id") == req.script_job_id), None)
+    if not script_job:
+        raise HTTPException(status_code=404, detail="Script job not found.")
+    if script_job.get("status") != "succeeded":
+        raise HTTPException(status_code=400, detail="Script job is not completed yet.")
+    variants = script_job.get("variants") or []
+    if req.variant_index >= len(variants):
+        raise HTTPException(status_code=400, detail="Script variant not found.")
+
+    request_payload = script_job.get("request") or {}
+    variant = variants[req.variant_index]
+    now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    image_job = {
+        "id": uuid.uuid4().hex[:12],
+        "script_job_id": script_job.get("id"),
+        "created_at": now,
+        "updated_at": now,
+        "category": request_payload.get("category", ""),
+        "model": request_payload.get("model", ""),
+        "variant_index": req.variant_index,
+        "variant_name": variant.get("name", f"Variant {req.variant_index + 1}"),
+        "variant_label": variant.get("label", ""),
+        "shot_index": req.shot_index,
+        "prompt": str(req.prompt or "")[:1200],
+        "status": "succeeded",
+        "failure_message": "",
+        "image_key": "",
+        "image_uri": "",
+        "model_id": NOVA_CANVAS_MODEL_ID,
+        "region": NOVA_CANVAS_AWS_REGION,
+        "seed": None,
+    }
+    try:
+        image_key, image_uri, seed = _start_nova_canvas_image(
+            image_job["prompt"],
+            req.script_job_id,
+            req.variant_index,
+            req.shot_index,
+        )
+        image_job["image_key"] = image_key
+        image_job["image_uri"] = image_uri
+        image_job["seed"] = seed
+    except Exception as exc:
+        image_job["status"] = "failed"
+        image_job["failure_message"] = str(exc)
+        with job_lock:
+            jobs = _load_nova_canvas_jobs()
+            jobs.insert(0, image_job)
+            _save_nova_canvas_jobs(jobs)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    with job_lock:
+        jobs = _load_nova_canvas_jobs()
+        jobs.insert(0, image_job)
+        _save_nova_canvas_jobs(jobs)
+    return {"job": _public_nova_canvas_job(image_job)}
+
+
+@app.get("/api/nova-canvas/images/{image_job_id}")
+def nova_canvas_image(image_job_id: str):
+    job = next((item for item in _load_nova_canvas_jobs() if item.get("id") == image_job_id), None)
+    if not job or not job.get("image_key"):
+        raise HTTPException(status_code=404, detail="Image not found.")
+    try:
+        data = STORAGE.read_file_bytes(job["image_key"])
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Image not found.") from exc
+    return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
 
 
 @app.post("/api/nova-reel/submit", dependencies=[Depends(_verify_access)])
