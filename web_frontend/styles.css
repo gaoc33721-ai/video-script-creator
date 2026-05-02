@@ -214,6 +214,41 @@ button,
   gap: 12px;
 }
 
+.job-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 10px;
+  margin: -4px 0 16px;
+}
+
+.job-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.job-filters button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  background: #fbfbfd;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.job-filters button.active {
+  border-color: rgba(0, 170, 166, 0.4);
+  background: var(--brand);
+  color: #fff;
+}
+
+.job-tools input {
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
 .check-list {
   display: grid;
   gap: 8px;
@@ -577,6 +612,99 @@ button,
   background: #fff;
 }
 
+.storyboard-section {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.storyboard-head {
+  margin-bottom: 16px;
+}
+
+.storyboard-head h3 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.storyboard-head p {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.storyboard-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.storyboard-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(0, 170, 166, 0.12), transparent 9rem),
+    #fbfbfd;
+}
+
+.storyboard-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--brand-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.storyboard-card h4 {
+  margin: 12px 0 6px;
+  font-size: 20px;
+}
+
+.storyboard-feature {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.storyboard-card dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.storyboard-card dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.storyboard-card dd {
+  margin: 3px 0 0;
+  color: #2c2c2e;
+}
+
+.storyboard-card details {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed rgba(0, 170, 166, 0.32);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.storyboard-card summary {
+  color: var(--brand-dark);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.storyboard-card details p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .video-section {
   margin-top: 28px;
   padding-top: 24px;
@@ -646,7 +774,9 @@ button.secondary {
   .metrics,
   .field-row,
   .selection-summary,
-  .guide-steps {
+  .guide-steps,
+  .job-tools,
+  .storyboard-cards {
     grid-template-columns: 1fr;
   }
 }

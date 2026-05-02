@@ -85,6 +85,15 @@
             </div>
             <button id="refreshJobs" type="button">刷新</button>
           </div>
+          <div class="job-tools">
+            <div id="jobFilters" class="job-filters" aria-label="任务状态筛选">
+              <button type="button" class="active" data-filter="all">全部</button>
+              <button type="button" data-filter="running">进行中</button>
+              <button type="button" data-filter="succeeded">已完成</button>
+              <button type="button" data-filter="failed">失败</button>
+            </div>
+            <input id="jobSearch" type="search" placeholder="搜索型号 / 任务ID" />
+          </div>
           <div id="jobs" class="jobs"></div>
           </section>
         </aside>
@@ -100,6 +109,15 @@
         </div>
         <div id="resultTabs" class="result-tabs"></div>
         <div id="resultBody" class="result-body"></div>
+        <section id="storyboardSection" class="storyboard-section">
+          <div class="storyboard-head">
+            <div>
+              <h3>分镜拍摄参考</h3>
+              <p>系统会从脚本表格中自动拆出镜头卡片，方便业务和拍摄团队快速对齐画面。</p>
+            </div>
+          </div>
+          <div id="storyboardCards" class="storyboard-cards"></div>
+        </section>
         <section id="videoSection" class="video-section">
           <div class="video-head">
             <div>

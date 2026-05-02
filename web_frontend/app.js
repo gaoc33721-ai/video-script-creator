@@ -10,6 +10,8 @@ const state = {
   currentResultJob: null,
   videoJobs: [],
   jobsExpanded: false,
+  jobFilter: "all",
+  jobSearch: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -180,9 +182,10 @@ async function uploadFile(event) {
 
 async function loadJobs() {
   const data = await api("/api/jobs");
-  const jobs = data.jobs || [];
+  const jobs = filterJobs(data.jobs || []);
+  updateJobFilterButtons();
   if (!jobs.length) {
-    $("jobs").innerHTML = '<div class="empty-state"><strong>暂无任务</strong><span>提交脚本生成后，进度会显示在这里。</span></div>';
+    $("jobs").innerHTML = '<div class="empty-state"><strong>暂无匹配任务</strong><span>可调整筛选条件，或提交新的脚本生成任务。</span></div>';
     return;
   }
   const defaultVisible = 3;
@@ -201,6 +204,31 @@ async function loadJobs() {
     });
   }
   revealCompletedResult(jobs);
+}
+
+function filterJobs(jobs) {
+  const keyword = state.jobSearch.trim().toLowerCase();
+  return (jobs || []).filter((job) => {
+    const status = String(job.status || "");
+    const statusMatched =
+      state.jobFilter === "all" ||
+      status === state.jobFilter ||
+      (state.jobFilter === "running" && ["pending", "running"].includes(status));
+    if (!statusMatched) return false;
+    if (!keyword) return true;
+    const request = job.request || {};
+    const haystack = [job.id, status, request.model, request.category, request.platform, request.target_market]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(keyword);
+  });
+}
+
+function updateJobFilterButtons() {
+  document.querySelectorAll("#jobFilters button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.filter === state.jobFilter);
+  });
 }
 
 function renderJob(job) {
@@ -262,6 +290,7 @@ function renderResult(job, variantIndex = 0) {
     .join("");
   const current = variants[state.activeVariantIndex];
   $("resultBody").innerHTML = renderVariantContent(current);
+  $("storyboardCards").innerHTML = renderStoryboardCards(current.content || "");
   state.currentResultJob = job;
   renderVideoPanel(job);
   $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -270,6 +299,91 @@ function renderResult(job, variantIndex = 0) {
 function renderVariantContent(variant) {
   const label = variant.label ? `<div class="result-label">方案定位：${escapeHtml(variant.label)}</div>` : "";
   return `${label}<div class="script-markdown">${markdownToHtml(variant.content || "")}</div>`;
+}
+
+function renderStoryboardCards(content) {
+  const rows = parseFirstMarkdownTable(content);
+  const shotRows = rows.filter((row) => {
+    const segment = row[0] || "";
+    return segment && !segment.includes("总时长") && !segment.toLowerCase().includes("total");
+  });
+  if (!shotRows.length) {
+    return '<div class="empty-state"><strong>暂无分镜</strong><span>脚本表格生成后，这里会自动拆出拍摄参考卡片。</span></div>';
+  }
+  return shotRows
+    .slice(0, 12)
+    .map((row, index) => {
+      const segment = row[0] || `镜头 ${index + 1}`;
+      const feature = row[1] || "";
+      const method = row[2] || "";
+      const voiceover = row[3] || "";
+      const subtitle = row[4] || "";
+      const effect = row[5] || "";
+      const angle = row[6] || "";
+      const movement = row[7] || "";
+      const sound = row[10] || "";
+      const duration = row[11] || "";
+      const prompt = buildStoryboardImagePrompt({ segment, feature, method, effect, angle, movement, subtitle });
+      return `
+        <article class="storyboard-card">
+          <div class="storyboard-meta">
+            <span>镜头 ${String(index + 1).padStart(2, "0")}</span>
+            <strong>${escapeHtml(duration || "-")}</strong>
+          </div>
+          <h4>${escapeHtml(segment)}</h4>
+          <p class="storyboard-feature">${escapeHtml(feature)}</p>
+          <dl>
+            <div><dt>画面表现</dt><dd>${escapeHtml(method || "按脚本场景执行")}</dd></div>
+            <div><dt>拍摄方式</dt><dd>${escapeHtml([angle, movement].filter(Boolean).join(" / ") || "稳定镜头")}</dd></div>
+            <div><dt>旁白/字幕</dt><dd>${escapeHtml([voiceover, subtitle].filter(Boolean).join(" / "))}</dd></div>
+            <div><dt>效果/音效</dt><dd>${escapeHtml([effect, sound].filter(Boolean).join(" / ") || "自然产品展示")}</dd></div>
+          </dl>
+          <details>
+            <summary>参考图 Prompt</summary>
+            <p>${escapeHtml(prompt)}</p>
+          </details>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function parseFirstMarkdownTable(markdown) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const tableLines = [];
+  let started = false;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!started && isMarkdownTableStart(lines, index)) {
+      started = true;
+    }
+    if (started && trimmed.startsWith("|")) {
+      tableLines.push(line);
+      continue;
+    }
+    if (started) break;
+  }
+  if (tableLines.length < 3) return [];
+  return tableLines
+    .slice(2)
+    .map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()));
+}
+
+function buildStoryboardImagePrompt({ segment, feature, method, effect, angle, movement, subtitle }) {
+  return [
+    "Premium e-commerce storyboard reference image for a Hisense home appliance video.",
+    `Shot: ${segment}.`,
+    feature ? `Product benefit: ${feature}.` : "",
+    method ? `Visual action: ${method}.` : "",
+    angle ? `Camera angle: ${angle}.` : "",
+    movement ? `Camera movement: ${movement}.` : "",
+    effect ? `Visual mood and effect: ${effect}.` : "",
+    subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
+    "Clean modern home setting, realistic product proportions, soft cinematic lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function extractVideoPrompt(content) {
@@ -479,6 +593,18 @@ $("videoTypePicker").addEventListener("click", (event) => {
 $("generateForm").addEventListener("submit", submitGeneration);
 $("uploadInput").addEventListener("change", uploadFile);
 $("refreshJobs").addEventListener("click", loadJobs);
+$("jobFilters").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-filter]");
+  if (!button) return;
+  state.jobFilter = button.dataset.filter || "all";
+  state.jobsExpanded = false;
+  loadJobs();
+});
+$("jobSearch").addEventListener("input", (event) => {
+  state.jobSearch = event.target.value || "";
+  state.jobsExpanded = false;
+  loadJobs();
+});
 $("jobs").addEventListener("click", async (event) => {
   const button = event.target.closest(".load-result");
   if (!button) return;
