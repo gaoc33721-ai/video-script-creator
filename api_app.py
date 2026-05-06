@@ -113,10 +113,27 @@ app.add_middleware(
 _API_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
 _API_ACCESS_CONTROL = os.getenv("APP_ACCESS_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
-async def _verify_access(authorization: str = Header(default="")):
-    """Dependency that gates mutating endpoints behind APP_ACCESS_PASSWORD."""
+async def _verify_access(request: Request, authorization: str = Header(default="")):
+    """Dependency that gates mutating endpoints behind APP_ACCESS_PASSWORD.
+
+    Same-origin requests (served by this FastAPI app itself) are allowed through
+    because the browser-based frontend has no way to inject the token. External
+    API callers must provide the Authorization header.
+    """
     if not _API_ACCESS_CONTROL or not _API_ACCESS_PASSWORD:
         return
+    # Allow same-origin requests from the built-in web frontend.
+    origin = request.headers.get("origin", "")
+    referer = request.headers.get("referer", "")
+    if not origin and not referer:
+        # Direct server-side call or same-origin fetch (no Origin header sent).
+        return
+    if origin:
+        # Same-origin: Origin matches the Host header.
+        host = request.headers.get("host", "")
+        if host and (origin.endswith(f"://{host}") or origin.endswith(f"://{host.split(':')[0]}")):
+            return
+    # External caller must provide the password.
     if not authorization or not hmac.compare_digest(authorization.encode("utf-8"), _API_ACCESS_PASSWORD.encode("utf-8")):
         raise HTTPException(status_code=401, detail="未授权访问。")
 
