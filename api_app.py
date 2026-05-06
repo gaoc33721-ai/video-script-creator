@@ -379,7 +379,9 @@ def _nova_canvas_image_key(script_job_id, variant_index, shot_index):
 
 
 def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
+    import time as _time
     from botocore.config import Config
+    from botocore.exceptions import ClientError
 
     seed = random.randint(0, 858993459)
     body = {
@@ -403,14 +405,32 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
     client = boto3.client(
         "bedrock-runtime",
         region_name=NOVA_CANVAS_AWS_REGION,
-        config=Config(connect_timeout=5, read_timeout=180, retries={"max_attempts": 2}),
+        config=Config(connect_timeout=5, read_timeout=180, retries={"max_attempts": 3, "mode": "adaptive"}),
     )
-    response = client.invoke_model(
-        modelId=NOVA_CANVAS_MODEL_ID,
-        body=json.dumps(body).encode("utf-8"),
-        contentType="application/json",
-        accept="application/json",
-    )
+    # Retry with exponential backoff for throttling (503 / ThrottlingException).
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.invoke_model(
+                modelId=NOVA_CANVAS_MODEL_ID,
+                body=json.dumps(body).encode("utf-8"),
+                contentType="application/json",
+                accept="application/json",
+            )
+            break
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+            if error_code in ("ThrottlingException", "ServiceUnavailableException", "ModelTimeoutException") or status_code == 503:
+                if attempt < max_retries - 1:
+                    _time.sleep(2 ** attempt + random.uniform(0, 1))
+                    continue
+            raise RuntimeError(
+                f"Nova Canvas 生成失败：{error_code or 'Unknown'} (HTTP {status_code})。"
+                "请确认模型 amazon.nova-canvas-v1:0 在 us-east-1 区域已开通访问权限，"
+                "或稍后重试（可能是限流）。"
+            ) from exc
+
     payload = json.loads(response["body"].read())
     images = payload.get("images") or []
     if not images:
