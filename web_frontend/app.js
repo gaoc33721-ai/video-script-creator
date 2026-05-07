@@ -506,6 +506,7 @@ function fallbackVideoPrompt(job) {
 }
 
 async function renderVideoPanel(job) {
+  if (!$("videoVariantSelect")) return; // Video section hidden
   const variants = job.variants || [];
   if (!variants.length) return;
   $("videoVariantSelect").innerHTML = variants
@@ -516,6 +517,7 @@ async function renderVideoPanel(job) {
 }
 
 function updateVideoPrompt() {
+  if (!$("videoVariantSelect") || !$("videoPrompt")) return; // Video section hidden
   const job = state.currentResultJob;
   if (!job) return;
   const variants = job.variants || [];
@@ -720,9 +722,10 @@ $("storyboardCards").addEventListener("click", (event) => {
   if (!button) return;
   submitCanvasImage(Number(button.dataset.shotIndex || 0));
 });
-$("videoVariantSelect").addEventListener("change", updateVideoPrompt);
-$("submitVideo").addEventListener("click", submitVideoGeneration);
-$("refreshVideo").addEventListener("click", refreshVideoGeneration);
+// Nova Reel video section hidden - guard against missing elements
+if ($("videoVariantSelect")) $("videoVariantSelect").addEventListener("change", updateVideoPrompt);
+if ($("submitVideo")) $("submitVideo").addEventListener("click", submitVideoGeneration);
+if ($("refreshVideo")) $("refreshVideo").addEventListener("click", refreshVideoGeneration);
 
 renderVideoTypePicker();
 Promise.all([loadSummary(), loadOptions(), loadJobs()]).catch((error) => {

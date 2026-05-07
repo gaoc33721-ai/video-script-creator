@@ -433,27 +433,46 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
             # Bedrock image model not available, fall through to Pollinations.
             pass
 
-    # --- Attempt 2: Pollinations.ai (free, always available) ---
+    # --- Attempt 2: Pollinations.ai (free, always available from public internet) ---
     if image_bytes is None:
         encoded_prompt = urllib.parse.quote(str(prompt or "product photo")[:500])
         pollinations_url = (
             f"https://image.pollinations.ai/prompt/{encoded_prompt}"
             f"?width=1280&height=720&seed={seed}&nologo=true"
         )
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(2):
             try:
-                resp = _requests.get(pollinations_url, timeout=60)
+                resp = _requests.get(pollinations_url, timeout=90, verify=False)
                 if resp.status_code == 200 and len(resp.content) > 1000:
                     image_bytes = resp.content
                     break
             except Exception:
                 pass
-            if attempt < max_retries - 1:
-                _time.sleep(2 ** attempt + 1)
+            if attempt < 1:
+                _time.sleep(3)
+
+    # --- Attempt 3: Generate a simple placeholder with text overlay ---
+    if image_bytes is None:
+        try:
+            from PIL import Image as _PILImage, ImageDraw as _PILDraw, ImageFont as _PILFont
+            img = _PILImage.new("RGB", (1280, 720), color=(245, 245, 247))
+            draw = _PILDraw.Draw(img)
+            # Draw centered text
+            short_text = str(prompt or "Storyboard")[:80]
+            try:
+                font = _PILFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+            except Exception:
+                font = _PILFont.load_default()
+            draw.text((80, 320), short_text, fill=(100, 100, 100), font=font)
+            draw.text((80, 370), f"[Placeholder - image service unavailable]", fill=(180, 180, 180), font=font)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            image_bytes = buf.getvalue()
+        except Exception:
+            pass
 
     if not image_bytes:
-        raise RuntimeError("分镜图生成失败：Bedrock 图像模型不可用，Pollinations.ai 备选也未能生成图片。请稍后重试。")
+        raise RuntimeError("分镜图生成失败：所有图像生成方式均不可用。请检查网络连接或稍后重试。")
 
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
