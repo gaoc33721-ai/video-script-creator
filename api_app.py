@@ -95,7 +95,7 @@ NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
 NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-east-1")
-NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "amazon.nova-canvas-v1:0")
+NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "amazon.titan-image-generator-v2:0")
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.04"))
 
 app = FastAPI(title="海外爆款内容引擎 API")
@@ -387,7 +387,7 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
     body = {
         "taskType": "TEXT_IMAGE",
         "textToImageParams": {
-            "text": str(prompt or "")[:1200],
+            "text": str(prompt or "")[:512],
             "negativeText": (
                 "competitor brands, distorted logo, unreadable text, low quality, "
                 "deformed product, extra products, watermark, cluttered composition"
@@ -395,10 +395,9 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
         },
         "imageGenerationConfig": {
             "numberOfImages": 1,
-            "quality": "standard",
             "height": 720,
             "width": 1280,
-            "cfgScale": 6.5,
+            "cfgScale": 7.0,
             "seed": seed,
         },
     }
@@ -426,15 +425,15 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
                     _time.sleep(2 ** attempt + random.uniform(0, 1))
                     continue
             raise RuntimeError(
-                f"Nova Canvas 生成失败：{error_code or 'Unknown'} (HTTP {status_code})。"
-                "请确认模型 amazon.nova-canvas-v1:0 在 us-east-1 区域已开通访问权限，"
-                "或稍后重试（可能是限流）。"
+                f"分镜图生成失败：{error_code or 'Unknown'} (HTTP {status_code})。"
+                f"模型：{NOVA_CANVAS_MODEL_ID}，区域：{NOVA_CANVAS_AWS_REGION}。"
+                "请确认该模型在对应区域已开通访问权限。"
             ) from exc
 
     payload = json.loads(response["body"].read())
     images = payload.get("images") or []
     if not images:
-        raise RuntimeError(payload.get("message") or payload.get("error") or "Nova Canvas did not return an image.")
+        raise RuntimeError(payload.get("message") or payload.get("error") or "图像模型未返回图片。")
     image_bytes = base64.b64decode(images[0])
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")

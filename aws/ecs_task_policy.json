@@ -15,6 +15,7 @@
         "arn:aws:bedrock:*::foundation-model/eu.amazon.nova-pro-v1:0",
         "arn:aws:bedrock:*::foundation-model/amazon.nova-reel-v1:1",
         "arn:aws:bedrock:*::foundation-model/amazon.nova-canvas-v1:0",
+        "arn:aws:bedrock:*::foundation-model/amazon.titan-image-generator-v2:0",
         "arn:aws:bedrock:*:*:inference-profile/eu.amazon.nova-pro-v1:0"
       ]
     },
