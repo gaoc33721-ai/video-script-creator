@@ -379,62 +379,82 @@ def _nova_canvas_image_key(script_job_id, variant_index, shot_index):
 
 
 def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
+    """Generate a storyboard reference image.
+
+    Strategy:
+    1. Try Bedrock image model (Nova Canvas / Titan Image Generator) if configured.
+    2. Fall back to Pollinations.ai (free, no auth required) if Bedrock fails.
+    """
     import time as _time
-    from botocore.config import Config
-    from botocore.exceptions import ClientError
+    import requests as _requests
 
     seed = random.randint(0, 858993459)
-    body = {
-        "taskType": "TEXT_IMAGE",
-        "textToImageParams": {
-            "text": str(prompt or "")[:512],
-            "negativeText": (
-                "competitor brands, distorted logo, unreadable text, low quality, "
-                "deformed product, extra products, watermark, cluttered composition"
-            ),
-        },
-        "imageGenerationConfig": {
-            "numberOfImages": 1,
-            "height": 720,
-            "width": 1280,
-            "cfgScale": 7.0,
-            "seed": seed,
-        },
-    }
-    client = boto3.client(
-        "bedrock-runtime",
-        region_name=NOVA_CANVAS_AWS_REGION,
-        config=Config(connect_timeout=5, read_timeout=180, retries={"max_attempts": 3, "mode": "adaptive"}),
-    )
-    # Retry with exponential backoff for throttling (503 / ThrottlingException).
-    max_retries = 3
-    for attempt in range(max_retries):
+    image_bytes = None
+
+    # --- Attempt 1: Bedrock image model ---
+    if NOVA_CANVAS_MODEL_ID and NOVA_CANVAS_MODEL_ID != "none":
         try:
+            from botocore.config import Config
+            from botocore.exceptions import ClientError
+
+            body = {
+                "taskType": "TEXT_IMAGE",
+                "textToImageParams": {
+                    "text": str(prompt or "")[:512],
+                    "negativeText": (
+                        "competitor brands, distorted logo, unreadable text, low quality, "
+                        "deformed product, extra products, watermark, cluttered composition"
+                    ),
+                },
+                "imageGenerationConfig": {
+                    "numberOfImages": 1,
+                    "height": 720,
+                    "width": 1280,
+                    "cfgScale": 7.0,
+                    "seed": seed,
+                },
+            }
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=NOVA_CANVAS_AWS_REGION,
+                config=Config(connect_timeout=5, read_timeout=180, retries={"max_attempts": 2, "mode": "adaptive"}),
+            )
             response = client.invoke_model(
                 modelId=NOVA_CANVAS_MODEL_ID,
                 body=json.dumps(body).encode("utf-8"),
                 contentType="application/json",
                 accept="application/json",
             )
-            break
-        except ClientError as exc:
-            error_code = exc.response.get("Error", {}).get("Code", "")
-            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
-            if error_code in ("ThrottlingException", "ServiceUnavailableException", "ModelTimeoutException") or status_code == 503:
-                if attempt < max_retries - 1:
-                    _time.sleep(2 ** attempt + random.uniform(0, 1))
-                    continue
-            raise RuntimeError(
-                f"分镜图生成失败：{error_code or 'Unknown'} (HTTP {status_code})。"
-                f"模型：{NOVA_CANVAS_MODEL_ID}，区域：{NOVA_CANVAS_AWS_REGION}。"
-                "请确认该模型在对应区域已开通访问权限。"
-            ) from exc
+            payload = json.loads(response["body"].read())
+            images = payload.get("images") or []
+            if images:
+                image_bytes = base64.b64decode(images[0])
+        except Exception:
+            # Bedrock image model not available, fall through to Pollinations.
+            pass
 
-    payload = json.loads(response["body"].read())
-    images = payload.get("images") or []
-    if not images:
-        raise RuntimeError(payload.get("message") or payload.get("error") or "图像模型未返回图片。")
-    image_bytes = base64.b64decode(images[0])
+    # --- Attempt 2: Pollinations.ai (free, always available) ---
+    if image_bytes is None:
+        encoded_prompt = urllib.parse.quote(str(prompt or "product photo")[:500])
+        pollinations_url = (
+            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            f"?width=1280&height=720&seed={seed}&nologo=true"
+        )
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = _requests.get(pollinations_url, timeout=60)
+                if resp.status_code == 200 and len(resp.content) > 1000:
+                    image_bytes = resp.content
+                    break
+            except Exception:
+                pass
+            if attempt < max_retries - 1:
+                _time.sleep(2 ** attempt + 1)
+
+    if not image_bytes:
+        raise RuntimeError("分镜图生成失败：Bedrock 图像模型不可用，Pollinations.ai 备选也未能生成图片。请稍后重试。")
+
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
     return image_key, image_uri, seed
