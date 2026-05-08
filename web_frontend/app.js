@@ -1,4 +1,7 @@
 const state = {
+  authEnabled: true,
+  appReady: false,
+  jobsTimer: null,
   options: { categories: [], models_by_category: {} },
   features: [],
   selectedFeatures: [],
@@ -20,16 +23,92 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const response = await fetch(path, { ...options, credentials: "same-origin" });
   if (!response.ok) {
     let message = response.statusText;
     try {
       const body = await response.json();
       message = body.detail || message;
     } catch (_) {}
+    if (response.status === 401) {
+      clearAuth(message);
+    }
     throw new Error(message);
   }
   return response.json();
+}
+
+function showAuth(message = "") {
+  $("authScreen").classList.remove("hidden");
+  $("appShell").classList.add("hidden");
+  if (message) setMessage("authMessage", message, "error");
+  setTimeout(() => $("authPassword").focus(), 0);
+}
+
+function showApp() {
+  $("authScreen").classList.add("hidden");
+  $("appShell").classList.remove("hidden");
+}
+
+function clearAuth(message = "请重新输入访问密码。") {
+  showAuth(message);
+}
+
+async function submitAuth(event) {
+  event.preventDefault();
+  const password = $("authPassword").value.trim();
+  if (!password && state.authEnabled) {
+    setMessage("authMessage", "请输入访问密码。", "error");
+    return;
+  }
+  $("authSubmit").disabled = true;
+  setMessage("authMessage", "正在校验...");
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!response.ok) {
+      let message = response.statusText;
+      try {
+        const body = await response.json();
+        message = body.detail || message;
+      } catch (_) {}
+      throw new Error(message);
+    }
+    $("authPassword").value = "";
+    setMessage("authMessage", "");
+    showApp();
+    await startApp();
+  } catch (error) {
+    setMessage("authMessage", error.message, "error");
+  } finally {
+    $("authSubmit").disabled = false;
+  }
+}
+
+async function initializeAuth() {
+  try {
+    const response = await fetch("/api/auth/status", { credentials: "same-origin" });
+    const status = response.ok ? await response.json() : { enabled: true };
+    state.authEnabled = Boolean(status.enabled);
+    if (!state.authEnabled) {
+      showApp();
+      await startApp();
+      return;
+    }
+    const check = await fetch("/api/auth/check", { credentials: "same-origin" });
+    if (check.ok) {
+      showApp();
+      await startApp();
+      return;
+    }
+    showAuth();
+  } catch (error) {
+    clearAuth(error.message || "请重新输入访问密码。");
+  }
 }
 
 function setMessage(id, text, kind = "") {
@@ -237,7 +316,7 @@ function updateJobFilterButtons() {
 function renderJob(job) {
   const variants =
     job.status === "succeeded"
-      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><a href="/api/jobs/${job.id}/download">下载 Excel</a>`
+      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><a href="/api/jobs/${escapeAttr(job.id)}/download">下载 Excel</a>`
       : "";
   const error = job.error_message ? `<div class="message error">${escapeHtml(job.error_message)}</div>` : "";
   const finishedAt =
@@ -385,8 +464,9 @@ function renderCanvasJobForShot(shotIndex) {
   if (job.status === "failed") {
     return `<div class="storyboard-image-slot error">${escapeHtml(job.failure_message || "参考图生成失败")}</div>`;
   }
-  const image = job.preview_url
-    ? `<img class="storyboard-image" src="${escapeAttr(job.preview_url)}" alt="Nova Canvas storyboard reference" loading="lazy" />`
+  const imageUrl = job.preview_url || "";
+  const image = imageUrl
+    ? `<img class="storyboard-image" src="${escapeAttr(imageUrl)}" alt="Nova Canvas storyboard reference" loading="lazy" />`
     : '<div class="storyboard-image-placeholder">图片已生成，预览链接暂不可用。</div>';
   return `
     <div class="storyboard-image-slot ready">
@@ -674,6 +754,22 @@ function formatDateTime(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+async function startApp() {
+  if (state.appReady) return;
+  state.appReady = true;
+  renderVideoTypePicker();
+  try {
+    await Promise.all([loadSummary(), loadOptions(), loadJobs()]);
+    if (!state.jobsTimer) {
+      state.jobsTimer = setInterval(loadJobs, 5000);
+    }
+  } catch (error) {
+    state.appReady = false;
+    setMessage("formMessage", error.message, "error");
+  }
+}
+
+$("authForm").addEventListener("submit", submitAuth);
 $("categorySelect").addEventListener("change", updateModels);
 $("modelSelect").addEventListener("change", loadFeatures);
 $("featurePicker").addEventListener("click", (event) => {
@@ -727,8 +823,4 @@ if ($("videoVariantSelect")) $("videoVariantSelect").addEventListener("change", 
 if ($("submitVideo")) $("submitVideo").addEventListener("click", submitVideoGeneration);
 if ($("refreshVideo")) $("refreshVideo").addEventListener("click", refreshVideoGeneration);
 
-renderVideoTypePicker();
-Promise.all([loadSummary(), loadOptions(), loadJobs()]).catch((error) => {
-  setMessage("formMessage", error.message, "error");
-});
-setInterval(loadJobs, 5000);
+initializeAuth();

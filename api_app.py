@@ -7,6 +7,7 @@ import os
 import random
 import re
 import threading
+import time
 import urllib.parse
 import uuid
 
@@ -14,7 +15,7 @@ import boto3
 import pandas as pd
 from fastapi import FastAPI, Depends, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -109,34 +110,91 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
-# --- Security: simple token auth (reuses APP_ACCESS_PASSWORD) ---
+# --- Security: simple password auth backed by env or Secrets Manager ---
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
 _API_ACCESS_PASSWORD = os.getenv("APP_ACCESS_PASSWORD", "")
-_API_ACCESS_CONTROL = os.getenv("APP_ACCESS_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+_API_ACCESS_PASSWORD_SECRET_ID = (
+    os.getenv("APP_ACCESS_PASSWORD_SECRET_ID")
+    or os.getenv("APP_ACCESS_PASSWORD_SECRET_ARN")
+    or os.getenv("APP_ACCESS_PASSWORD_SECRET_NAME")
+)
+_API_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "300"))
+_API_ACCESS_CONTROL_SETTING = os.getenv("APP_ACCESS_CONTROL_ENABLED", "auto").strip().lower()
+_API_ACCESS_COOKIE_NAME = os.getenv("APP_ACCESS_COOKIE_NAME", "video_script_access")
+_API_ACCESS_COOKIE_SECURE = os.getenv("APP_ACCESS_COOKIE_SECURE", "false").strip().lower() in _TRUTHY
+_access_password_cache = {"value": _API_ACCESS_PASSWORD, "expires_at": 0.0}
+
+def _secret_region():
+    return os.getenv("APP_ACCESS_PASSWORD_SECRET_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or BEDROCK_AWS_REGION
+
+
+def _extract_secret_password(secret_value: str) -> str:
+    text = str(secret_value or "").strip()
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            for key in ("password", "APP_ACCESS_PASSWORD", "app_access_password", "value"):
+                if payload.get(key):
+                    return str(payload[key]).strip()
+    except Exception:
+        pass
+    return text
+
+
+def _current_access_password() -> str:
+    if not _API_ACCESS_PASSWORD_SECRET_ID:
+        return _API_ACCESS_PASSWORD
+    now = time.monotonic()
+    cached_value = str(_access_password_cache.get("value") or "")
+    if cached_value and now < float(_access_password_cache.get("expires_at") or 0):
+        return cached_value
+    try:
+        client = boto3.client("secretsmanager", region_name=_secret_region())
+        response = client.get_secret_value(SecretId=_API_ACCESS_PASSWORD_SECRET_ID)
+        value = _extract_secret_password(response.get("SecretString", ""))
+        if value:
+            _access_password_cache["value"] = value
+            _access_password_cache["expires_at"] = now + max(_API_ACCESS_PASSWORD_CACHE_TTL, 5)
+            return value
+    except Exception:
+        pass
+    return cached_value or _API_ACCESS_PASSWORD
+
+
+def _access_control_active() -> bool:
+    configured = bool(_API_ACCESS_PASSWORD or _API_ACCESS_PASSWORD_SECRET_ID)
+    if _API_ACCESS_CONTROL_SETTING in _TRUTHY:
+        return True
+    if _API_ACCESS_CONTROL_SETTING in _FALSY:
+        return False
+    return configured
+
+
+def _clean_access_token(raw_value: str) -> str:
+    token = str(raw_value or "").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
+def _is_valid_access_token(raw_value: str) -> bool:
+    expected = _current_access_password()
+    token = _clean_access_token(raw_value)
+    if not expected:
+        return False
+    return hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8"))
+
 
 async def _verify_access(request: Request, authorization: str = Header(default="")):
-    """Dependency that gates mutating endpoints behind APP_ACCESS_PASSWORD.
-
-    Same-origin requests (served by this FastAPI app itself) are allowed through
-    because the browser-based frontend has no way to inject the token. External
-    API callers must provide the Authorization header.
-    """
-    if not _API_ACCESS_CONTROL or not _API_ACCESS_PASSWORD:
+    """Dependency that gates platform APIs behind the shared access password."""
+    if not _access_control_active():
         return
-    # Allow same-origin requests from the built-in web frontend.
-    origin = request.headers.get("origin", "")
-    referer = request.headers.get("referer", "")
-    if not origin and not referer:
-        # Direct server-side call or same-origin fetch (no Origin header sent).
-        return
-    if origin:
-        # Same-origin: Origin matches the Host header.
-        host = request.headers.get("host", "")
-        if host and (origin.endswith(f"://{host}") or origin.endswith(f"://{host.split(':')[0]}")):
-            return
-    # External caller must provide the password.
-    if not authorization or not hmac.compare_digest(authorization.encode("utf-8"), _API_ACCESS_PASSWORD.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="未授权访问。")
-
+    token = authorization or request.cookies.get(_API_ACCESS_COOKIE_NAME, "")
+    if not _is_valid_access_token(token):
+        raise HTTPException(status_code=401, detail="访问密码不正确或已过期。")
 # --- Security: upload size limit ---
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 
@@ -161,6 +219,10 @@ class GenerateRequest(BaseModel):
     target_audience: str = ""
     pain_points: str = ""
     custom_requirements: str = ""
+
+
+class AuthLoginRequest(BaseModel):
+    password: str = Field(default="", max_length=256)
 
 
 class NovaReelSubmitRequest(BaseModel):
@@ -756,7 +818,44 @@ def healthz():
     return {"ok": True}
 
 
-@app.get("/api/summary")
+@app.get("/api/auth/status")
+def auth_status():
+    return {"enabled": _access_control_active()}
+
+
+@app.post("/api/auth/login")
+def auth_login(req: AuthLoginRequest):
+    if not _access_control_active():
+        return {"ok": True}
+    if not _current_access_password():
+        raise HTTPException(status_code=503, detail="访问密码尚未配置。")
+    if not _is_valid_access_token(req.password):
+        raise HTTPException(status_code=401, detail="访问密码不正确。")
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        key=_API_ACCESS_COOKIE_NAME,
+        value=req.password,
+        httponly=True,
+        secure=_API_ACCESS_COOKIE_SECURE,
+        samesite="lax",
+        max_age=60 * 60 * 8,
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(key=_API_ACCESS_COOKIE_NAME, samesite="lax")
+    return response
+
+
+@app.get("/api/auth/check", dependencies=[Depends(_verify_access)])
+def auth_check():
+    return {"ok": True}
+
+
+@app.get("/api/summary", dependencies=[Depends(_verify_access)])
 def summary():
     df = _load_products()
     meta = _read_json(CACHE_META_KEY, {})
@@ -787,7 +886,7 @@ async def upload_product_features(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"解析文件失败：{exc}") from exc
 
 
-@app.get("/api/options")
+@app.get("/api/options", dependencies=[Depends(_verify_access)])
 def options():
     df = _load_products()
     if df.empty:
@@ -800,7 +899,7 @@ def options():
     return {"categories": categories, "models_by_category": models_by_category}
 
 
-@app.get("/api/features")
+@app.get("/api/features", dependencies=[Depends(_verify_access)])
 def features(category: str, model: str):
     df = _load_products()
     if df.empty:
@@ -836,12 +935,12 @@ def generate(req: GenerateRequest):
     return {"job_id": job_id}
 
 
-@app.get("/api/jobs")
+@app.get("/api/jobs", dependencies=[Depends(_verify_access)])
 def jobs():
     return {"jobs": _load_jobs()[:30]}
 
 
-@app.get("/api/jobs/{job_id}")
+@app.get("/api/jobs/{job_id}", dependencies=[Depends(_verify_access)])
 def job(job_id: str):
     found = next((item for item in _load_jobs() if item.get("id") == job_id), None)
     if not found:
@@ -849,7 +948,7 @@ def job(job_id: str):
     return found
 
 
-@app.get("/api/nova-reel/jobs")
+@app.get("/api/nova-reel/jobs", dependencies=[Depends(_verify_access)])
 def nova_reel_jobs(script_job_id: str = ""):
     jobs = _load_nova_reel_jobs()
     if script_job_id:
@@ -862,7 +961,7 @@ def nova_reel_jobs(script_job_id: str = ""):
     }
 
 
-@app.get("/api/nova-canvas/jobs")
+@app.get("/api/nova-canvas/jobs", dependencies=[Depends(_verify_access)])
 def nova_canvas_jobs(script_job_id: str = "", variant_index: int = -1):
     jobs = _load_nova_canvas_jobs()
     if script_job_id:
@@ -937,7 +1036,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     return {"job": _public_nova_canvas_job(image_job)}
 
 
-@app.get("/api/nova-canvas/images/{image_job_id}")
+@app.get("/api/nova-canvas/images/{image_job_id}", dependencies=[Depends(_verify_access)])
 def nova_canvas_image(image_job_id: str):
     job = next((item for item in _load_nova_canvas_jobs() if item.get("id") == image_job_id), None)
     if not job or not job.get("image_key"):
@@ -1004,7 +1103,7 @@ def submit_nova_reel(req: NovaReelSubmitRequest):
     return {"job": _public_nova_reel_job(video_job)}
 
 
-@app.post("/api/nova-reel/refresh")
+@app.post("/api/nova-reel/refresh", dependencies=[Depends(_verify_access)])
 def refresh_nova_reel_jobs(script_job_id: str = ""):
     jobs = _load_nova_reel_jobs()
     changed = False
@@ -1040,7 +1139,7 @@ def refresh_nova_reel_jobs(script_job_id: str = ""):
     return {"jobs": [_public_nova_reel_job(item) for item in filtered[:30]]}
 
 
-@app.get("/api/jobs/{job_id}/download")
+@app.get("/api/jobs/{job_id}/download", dependencies=[Depends(_verify_access)])
 def download(job_id: str):
     found = next((item for item in _load_jobs() if item.get("id") == job_id), None)
     if not found:
