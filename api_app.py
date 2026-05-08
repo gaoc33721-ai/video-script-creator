@@ -122,7 +122,6 @@ _API_ACCESS_PASSWORD_SECRET_ID = (
 _API_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "300"))
 _API_ACCESS_CONTROL_SETTING = os.getenv("APP_ACCESS_CONTROL_ENABLED", "auto").strip().lower()
 _API_ACCESS_COOKIE_NAME = os.getenv("APP_ACCESS_COOKIE_NAME", "video_script_access")
-_API_ACCESS_COOKIE_SECURE = os.getenv("APP_ACCESS_COOKIE_SECURE", "false").strip().lower() in _TRUTHY
 _access_password_cache = {"value": _API_ACCESS_PASSWORD, "expires_at": 0.0}
 
 def _secret_region():
@@ -192,7 +191,7 @@ async def _verify_access(request: Request, authorization: str = Header(default="
     """Dependency that gates platform APIs behind the shared access password."""
     if not _access_control_active():
         return
-    token = authorization or request.cookies.get(_API_ACCESS_COOKIE_NAME, "")
+    token = authorization
     if not _is_valid_access_token(token):
         raise HTTPException(status_code=401, detail="访问密码不正确或已过期。")
 # --- Security: upload size limit ---
@@ -838,14 +837,7 @@ def auth_login(req: AuthLoginRequest):
     if not _is_valid_access_token(req.password):
         raise HTTPException(status_code=401, detail="访问密码不正确。")
     response = JSONResponse({"ok": True})
-    response.set_cookie(
-        key=_API_ACCESS_COOKIE_NAME,
-        value=req.password,
-        httponly=True,
-        secure=_API_ACCESS_COOKIE_SECURE,
-        samesite="lax",
-        max_age=60 * 60 * 8,
-    )
+    response.delete_cookie(key=_API_ACCESS_COOKIE_NAME, samesite="lax")
     return response
 
 

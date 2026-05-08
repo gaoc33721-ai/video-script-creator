@@ -1,7 +1,9 @@
 const state = {
   authEnabled: true,
+  authToken: "",
   appReady: false,
   jobsTimer: null,
+  protectedObjectUrls: new Map(),
   options: { categories: [], models_by_category: {} },
   features: [],
   selectedFeatures: [],
@@ -22,8 +24,20 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+function authHeaders(headers = {}) {
+  const nextHeaders = new Headers(headers);
+  if (state.authToken) {
+    nextHeaders.set("Authorization", `Bearer ${state.authToken}`);
+  }
+  return nextHeaders;
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, { ...options, credentials: "same-origin" });
+  const response = await fetch(path, {
+    ...options,
+    credentials: "same-origin",
+    headers: authHeaders(options.headers || {}),
+  });
   if (!response.ok) {
     let message = response.statusText;
     try {
@@ -38,6 +52,49 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+async function fetchProtectedBlob(path) {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const body = await response.json();
+      message = body.detail || message;
+    } catch (_) {}
+    if (response.status === 401) {
+      clearAuth(message);
+    }
+    throw new Error(message);
+  }
+  return {
+    blob: await response.blob(),
+    contentDisposition: response.headers.get("Content-Disposition") || "",
+  };
+}
+
+function filenameFromDisposition(contentDisposition, fallback) {
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) return decodeURIComponent(utf8Match[1]);
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch ? plainMatch[1] : fallback;
+}
+
+async function downloadJob(jobId) {
+  if (!jobId) return;
+  const path = `/api/jobs/${encodeURIComponent(jobId)}/download`;
+  const { blob, contentDisposition } = await fetchProtectedBlob(path);
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filenameFromDisposition(contentDisposition, `video-script-${jobId}.xlsx`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
 function showAuth(message = "") {
   $("authScreen").classList.remove("hidden");
   $("appShell").classList.add("hidden");
@@ -50,7 +107,19 @@ function showApp() {
   $("appShell").classList.remove("hidden");
 }
 
+function clearProtectedObjectUrls() {
+  state.protectedObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.protectedObjectUrls.clear();
+}
+
 function clearAuth(message = "请重新输入访问密码。") {
+  state.authToken = "";
+  if (state.jobsTimer) {
+    clearInterval(state.jobsTimer);
+    state.jobsTimer = null;
+  }
+  state.appReady = false;
+  clearProtectedObjectUrls();
   showAuth(message);
 }
 
@@ -78,6 +147,7 @@ async function submitAuth(event) {
       } catch (_) {}
       throw new Error(message);
     }
+    state.authToken = password;
     $("authPassword").value = "";
     setMessage("authMessage", "");
     showApp();
@@ -99,12 +169,7 @@ async function initializeAuth() {
       await startApp();
       return;
     }
-    const check = await fetch("/api/auth/check", { credentials: "same-origin" });
-    if (check.ok) {
-      showApp();
-      await startApp();
-      return;
-    }
+    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
     showAuth();
   } catch (error) {
     clearAuth(error.message || "请重新输入访问密码。");
@@ -316,7 +381,7 @@ function updateJobFilterButtons() {
 function renderJob(job) {
   const variants =
     job.status === "succeeded"
-      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><a href="/api/jobs/${escapeAttr(job.id)}/download">下载 Excel</a>`
+      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><button class="download-job download-link" type="button" data-job-id="${escapeAttr(job.id)}">下载 Excel</button>`
       : "";
   const error = job.error_message ? `<div class="message error">${escapeHtml(job.error_message)}</div>` : "";
   const finishedAt =
@@ -362,7 +427,8 @@ function renderResult(job, variantIndex = 0) {
   state.renderedJobId = job.id;
   state.activeVariantIndex = Math.max(0, Math.min(variantIndex, variants.length - 1));
   $("resultSection").classList.remove("hidden");
-  $("downloadResult").href = `/api/jobs/${job.id}/download`;
+  $("downloadResult").href = "#";
+  $("downloadResult").dataset.jobId = job.id;
   $("resultTabs").innerHTML = variants
     .map((variant, index) => {
       const active = index === state.activeVariantIndex;
@@ -388,6 +454,7 @@ function rerenderStoryboardCards() {
   const variants = (job && job.variants) || [];
   const current = variants[state.activeVariantIndex] || {};
   $("storyboardCards").innerHTML = renderStoryboardCards(current.content || "");
+  hydrateProtectedImages();
 }
 
 function renderVariantContent(variant) {
@@ -451,6 +518,41 @@ function renderStoryboardCards(content) {
     .join("");
 }
 
+function renderProtectedImage(imageUrl) {
+  const objectUrl = state.protectedObjectUrls.get(imageUrl);
+  if (objectUrl) {
+    return `<img class="storyboard-image" src="${escapeAttr(objectUrl)}" alt="Nova Canvas storyboard reference" loading="lazy" />`;
+  }
+  return `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(imageUrl)}">图片正在加载。</div>`;
+}
+
+async function hydrateProtectedImages() {
+  const nodes = Array.from(document.querySelectorAll("[data-protected-image]"));
+  await Promise.all(
+    nodes.map(async (node) => {
+      const imageUrl = node.dataset.protectedImage || "";
+      if (!imageUrl) return;
+      try {
+        let objectUrl = state.protectedObjectUrls.get(imageUrl);
+        if (!objectUrl) {
+          const { blob } = await fetchProtectedBlob(imageUrl);
+          objectUrl = URL.createObjectURL(blob);
+          state.protectedObjectUrls.set(imageUrl, objectUrl);
+        }
+        const image = document.createElement("img");
+        image.className = "storyboard-image";
+        image.src = objectUrl;
+        image.alt = "Nova Canvas storyboard reference";
+        image.loading = "lazy";
+        node.replaceWith(image);
+      } catch (error) {
+        node.textContent = error.message || "图片加载失败。";
+        node.classList.add("error");
+      }
+    })
+  );
+}
+
 function renderCanvasJobForShot(shotIndex) {
   if (state.canvasGenerating.has(shotIndex)) {
     return '<div class="storyboard-image-slot loading">Nova Canvas 正在生成中，通常需要几十秒。</div>';
@@ -466,7 +568,7 @@ function renderCanvasJobForShot(shotIndex) {
   }
   const imageUrl = job.preview_url || "";
   const image = imageUrl
-    ? `<img class="storyboard-image" src="${escapeAttr(imageUrl)}" alt="Nova Canvas storyboard reference" loading="lazy" />`
+    ? renderProtectedImage(imageUrl)
     : '<div class="storyboard-image-placeholder">图片已生成，预览链接暂不可用。</div>';
   return `
     <div class="storyboard-image-slot ready">
@@ -801,11 +903,28 @@ $("jobSearch").addEventListener("input", (event) => {
   loadJobs();
 });
 $("jobs").addEventListener("click", async (event) => {
+  const downloadButton = event.target.closest(".download-job");
+  if (downloadButton) {
+    try {
+      await downloadJob(downloadButton.dataset.jobId);
+    } catch (error) {
+      setMessage("formMessage", error.message, "error");
+    }
+    return;
+  }
   const button = event.target.closest(".load-result");
   if (!button) return;
   const job = await api(`/api/jobs/${encodeURIComponent(button.dataset.jobId)}`);
   state.activeJobId = job.id;
   renderResult(job);
+});
+$("downloadResult").addEventListener("click", async (event) => {
+  event.preventDefault();
+  try {
+    await downloadJob($("downloadResult").dataset.jobId);
+  } catch (error) {
+    setMessage("formMessage", error.message, "error");
+  }
 });
 $("resultTabs").addEventListener("click", async (event) => {
   const tab = event.target.closest(".result-tab");
