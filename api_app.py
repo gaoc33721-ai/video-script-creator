@@ -809,8 +809,14 @@ def index():
     path = os.path.join(static_dir, "index.html")
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as handle:
-            return handle.read()
-    return "<h1>海外爆款内容引擎 API</h1>"
+            return HTMLResponse(
+                handle.read(),
+                headers={"Cache-Control": "no-store, max-age=0"},
+            )
+    return HTMLResponse(
+        "<h1>海外爆款内容引擎 API</h1>",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.get("/healthz")
