@@ -519,11 +519,23 @@ function renderStoryboardCards(content) {
 }
 
 function renderProtectedImage(imageUrl) {
+  if (isExternalImageUrl(imageUrl)) {
+    return `<img class="storyboard-image" src="${escapeAttr(imageUrl)}" alt="Nova Canvas storyboard reference" loading="lazy" referrerpolicy="no-referrer" />`;
+  }
   const objectUrl = state.protectedObjectUrls.get(imageUrl);
   if (objectUrl) {
     return `<img class="storyboard-image" src="${escapeAttr(objectUrl)}" alt="Nova Canvas storyboard reference" loading="lazy" />`;
   }
   return `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(imageUrl)}">图片正在加载。</div>`;
+}
+
+function isExternalImageUrl(imageUrl) {
+  try {
+    const url = new URL(imageUrl, window.location.origin);
+    return url.origin !== window.location.origin;
+  } catch (_) {
+    return false;
+  }
 }
 
 async function hydrateProtectedImages() {
