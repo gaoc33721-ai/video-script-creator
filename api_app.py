@@ -464,9 +464,8 @@ def _storyboard_category_context(category, model, detection_text=""):
             "subject": "Hisense front-loading washer-dryer combo or front-loading laundry appliances",
             "setting": "a modern laundry room or utility room, never a kitchen",
             "must": (
-                "The frame must clearly show laundry appliances, laundry baskets or clothes as relevant to the shot. "
-                "If the script mentions switching between washer and dryer, show a user moving wet clothes between "
-                "two front-loading laundry machines in a laundry room."
+                "The frame must clearly show front-loading laundry appliances and laundry-room cues such as folded towels, "
+                "a laundry basket, hanging clothes, or a utility shelf as relevant to the shot."
             ),
             "negative": (
                 "kitchen, stove, stovetop, oven, microwave, refrigerator, kettle, cookware, food preparation, "
@@ -509,11 +508,39 @@ def _storyboard_requires_user(prompt):
 def _storyboard_switching_laundry(prompt):
     raw = str(prompt or "")
     lower = raw.lower()
-    return (
-        ("switch" in lower or "\u5207\u6362" in raw or "\u95f4" in raw)
-        and ("washer" in lower or "\u6d17" in raw)
-        and ("dryer" in lower or "\u70d8" in raw)
+    has_washer = "washer" in lower or "\u6d17" in raw
+    has_dryer = "dryer" in lower or "\u70d8" in raw
+    if not (has_washer and has_dryer):
+        return False
+
+    english_patterns = (
+        r"\bswitch(?:ing|es|ed)?\s+(?:back\s+and\s+forth\s+)?between\s+"
+        r"(?:the\s+)?(?:washer|washing machine)\s+and\s+(?:the\s+)?dryer\b",
+        r"\bbetween\s+(?:the\s+)?(?:washer|washing machine)\s+and\s+"
+        r"(?:the\s+)?dryer\b.{0,80}\bswitch(?:ing|es|ed)?\b",
+        r"\b(?:move|moving|transfer|transferring)\b.{0,80}\bfrom\s+"
+        r"(?:the\s+)?(?:washer|washing machine)\s+to\s+(?:the\s+)?dryer\b",
     )
+    if any(re.search(pattern, lower) for pattern in english_patterns):
+        return True
+
+    chinese_appliance_pair = (
+        r"(?:\u6d17\u8863\u673a|\u6d17\u8863|\u6d17).{0,12}(?:\u70d8\u5e72\u673a|\u70d8\u5e72|\u70d8)"
+        r"|(?:\u70d8\u5e72\u673a|\u70d8\u5e72|\u70d8).{0,12}(?:\u6d17\u8863\u673a|\u6d17\u8863|\u6d17)"
+    )
+    chinese_between = r"(?:\u4e4b\u95f4|\u4e24\u673a|\u4e2d\u95f4)"
+    chinese_action = r"(?:\u5207\u6362|\u6765\u56de|\u8f6c\u79fb|\u642c|\u62ff|\u79fb)"
+    if re.search(rf"(?:{chinese_appliance_pair}).{{0,16}}{chinese_between}.{{0,16}}{chinese_action}", raw):
+        return True
+    if re.search(rf"{chinese_between}.{{0,16}}{chinese_action}.{{0,16}}(?:{chinese_appliance_pair})", raw):
+        return True
+    if re.search(
+        r"(?:\u4ece|\u628a).{0,16}(?:\u6d17\u8863\u673a|\u6d17\u8863|\u6d17).{0,16}"
+        r"(?:\u8f6c\u79fb|\u642c|\u62ff|\u79fb).{0,16}(?:\u70d8\u5e72\u673a|\u70d8\u5e72|\u70d8)",
+        raw,
+    ):
+        return True
+    return False
 
 
 def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0):
