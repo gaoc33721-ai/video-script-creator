@@ -96,8 +96,8 @@ NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
 NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-west-2")
-NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.stable-image-core-v1:1")
-NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.04"))
+NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.stable-image-ultra-v1:1")
+NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
 
 app = FastAPI(title="海外爆款内容引擎 API")
 
@@ -233,7 +233,7 @@ class NovaCanvasSubmitRequest(BaseModel):
     script_job_id: str
     variant_index: int = Field(default=0, ge=0)
     shot_index: int = Field(default=0, ge=0)
-    prompt: str = Field(min_length=10, max_length=1200)
+    prompt: str = Field(min_length=10, max_length=2000)
 
 
 def _read_json(key, default_value):
@@ -439,13 +439,140 @@ def _nova_canvas_image_key(script_job_id, variant_index, shot_index):
     )
 
 
-def _bedrock_image_request_body(prompt, seed):
-    model_id = str(NOVA_CANVAS_MODEL_ID or "")
-    prompt_text = str(prompt or "premium e-commerce storyboard reference image")[:1200]
-    negative_prompt = (
-        "competitor brands, distorted logo, unreadable text, low quality, "
-        "deformed product, extra products, watermark, cluttered composition"
+def _is_laundry_storyboard(text):
+    raw = str(text or "").lower()
+    if "dishwasher" in raw or "\u6d17\u7897" in raw:
+        return False
+    return any(
+        token in raw
+        for token in (
+            "washer",
+            "dryer",
+            "laundry",
+            "washing machine",
+            "\u6d17",
+            "\u70d8",
+            "\u8863",
+        )
     )
+
+
+def _storyboard_category_context(category, model, detection_text=""):
+    raw = f"{category or ''} {model or ''} {detection_text or ''}".lower()
+    if _is_laundry_storyboard(raw):
+        return {
+            "subject": "Hisense front-loading washer-dryer combo or front-loading laundry appliances",
+            "setting": "a modern laundry room or utility room, never a kitchen",
+            "must": (
+                "The frame must clearly show laundry appliances, laundry baskets or clothes as relevant to the shot. "
+                "If the script mentions switching between washer and dryer, show a user moving wet clothes between "
+                "two front-loading laundry machines in a laundry room."
+            ),
+            "negative": (
+                "kitchen, stove, stovetop, oven, microwave, refrigerator, kettle, cookware, food preparation, "
+                "dining room, cooking appliance, kitchen island"
+            ),
+        }
+    return {
+        "subject": f"Hisense {category or 'home appliance'} {model or ''}".strip(),
+        "setting": "a realistic premium home environment that matches the product category",
+        "must": "The frame must show the selected product category as the main subject and follow the shot action.",
+        "negative": "wrong product category, unrelated room, unrelated appliance",
+    }
+
+
+def _storyboard_action_constraints(prompt):
+    raw = str(prompt or "")
+    lower = raw.lower()
+    constraints = []
+    if _storyboard_requires_user(raw):
+        constraints.append(
+            "A visible adult user must be present in the foreground and actively interacting with the product or the laundry task."
+        )
+    if _storyboard_switching_laundry(raw):
+        constraints.append(
+            "Show the pain point literally: the user is centered between two front-loading laundry machines, holding a laundry basket full of wet clothes and moving clothes from washer to dryer."
+        )
+    if "top-down" in lower or "overhead" in lower or "\u4fef\u62cd" in raw:
+        constraints.append("Use a high-angle overhead or three-quarter top-down camera view, not a straight eye-level kitchen view.")
+    if "fixed" in lower or "\u56fa\u5b9a" in raw:
+        constraints.append("Use a stable locked-off composition with no motion blur.")
+    return " ".join(constraints)
+
+
+def _storyboard_requires_user(prompt):
+    raw = str(prompt or "")
+    lower = raw.lower()
+    return any(token in lower for token in ("user", "person", "woman", "man")) or "\u7528\u6237" in raw
+
+
+def _storyboard_switching_laundry(prompt):
+    raw = str(prompt or "")
+    lower = raw.lower()
+    return (
+        ("switch" in lower or "\u5207\u6362" in raw or "\u95f4" in raw)
+        and ("washer" in lower or "\u6d17" in raw)
+        and ("dryer" in lower or "\u70d8" in raw)
+    )
+
+
+def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0):
+    raw_prompt = str(prompt or "").strip()[:900]
+    context = _storyboard_category_context(category, model, detection_text=raw_prompt)
+    action_constraints = _storyboard_action_constraints(raw_prompt)
+    lines = [
+        "Create one premium 16:9 photorealistic e-commerce storyboard still.",
+        f"Required product and place: {context['subject']} in {context['setting']}.",
+        f"Shot number: {int(shot_index) + 1}.",
+        f"Mandatory primary scene: {action_constraints or context['must']}",
+        f"Product evidence that must remain visible: {context['must']}" if action_constraints else "",
+        f"Storyboard details to preserve: {raw_prompt}",
+        (
+            "Visual style: clean commercial lighting, realistic product proportions, believable human pose, natural colors, "
+            "no UI mockups, no text overlay, no watermarks, no competitor brands, no wrong product category."
+        ),
+    ]
+    return "\n".join(line for line in lines if line).strip()[:3000]
+
+
+def _image_negative_prompt(prompt, category="", model=""):
+    context = _storyboard_category_context(category, model, detection_text=prompt)
+    terms = [
+        "competitor brands",
+        "distorted logo",
+        "unreadable text",
+        "text overlay",
+        "watermark",
+        "low quality",
+        "blurry",
+        "cartoon",
+        "cgi look",
+        "deformed product",
+        "extra products",
+        "cluttered composition",
+        context["negative"],
+    ]
+    if _is_laundry_storyboard(f"{category} {model} {prompt}"):
+        terms.extend(
+            [
+                "kitchen cabinets as the main scene",
+                "person cooking",
+                "woman standing in a kitchen",
+                "range hood",
+                "cooktop",
+            ]
+        )
+    if _storyboard_requires_user(prompt):
+        terms.extend(["empty room", "empty appliance showroom", "appliance-only lineup with no user"])
+    if _storyboard_switching_laundry(prompt):
+        terms.extend(["three washing machines", "more than two laundry machines", "appliance showroom lineup"])
+    return ", ".join(item for item in terms if item)
+
+
+def _bedrock_image_request_body(prompt, seed, category="", model=""):
+    model_id = str(NOVA_CANVAS_MODEL_ID or "")
+    prompt_text = str(prompt or "premium e-commerce storyboard reference image")[:3000]
+    negative_prompt = _image_negative_prompt(prompt_text, category=category, model=model)
     if model_id.startswith("stability."):
         return {
             "prompt": prompt_text,
@@ -491,7 +618,7 @@ def _decode_bedrock_image_payload(payload):
     return None
 
 
-def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
+def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index, category="", model=""):
     """Generate a storyboard reference image.
 
     Strategy:
@@ -510,7 +637,7 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
         try:
             from botocore.config import Config
 
-            body = _bedrock_image_request_body(prompt, seed)
+            body = _bedrock_image_request_body(prompt, seed, category=category, model=model)
             client = boto3.client(
                 "bedrock-runtime",
                 region_name=NOVA_CANVAS_AWS_REGION,
@@ -1028,6 +1155,13 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     request_payload = script_job.get("request") or {}
     variant = variants[req.variant_index]
     now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    raw_prompt = str(req.prompt or "")[:2000]
+    generation_prompt = _enhance_storyboard_image_prompt(
+        raw_prompt,
+        category=request_payload.get("category", ""),
+        model=request_payload.get("model", ""),
+        shot_index=req.shot_index,
+    )
     image_job = {
         "id": uuid.uuid4().hex[:12],
         "script_job_id": script_job.get("id"),
@@ -1039,7 +1173,8 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "variant_name": variant.get("name", f"Variant {req.variant_index + 1}"),
         "variant_label": variant.get("label", ""),
         "shot_index": req.shot_index,
-        "prompt": str(req.prompt or "")[:1200],
+        "prompt": raw_prompt,
+        "generation_prompt": generation_prompt,
         "status": "succeeded",
         "failure_message": "",
         "image_key": "",
@@ -1050,10 +1185,12 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     }
     try:
         image_key, image_uri, seed = _start_nova_canvas_image(
-            image_job["prompt"],
+            generation_prompt,
             req.script_job_id,
             req.variant_index,
             req.shot_index,
+            category=image_job["category"],
+            model=image_job["model"],
         )
         image_job["image_key"] = image_key
         image_job["image_uri"] = image_uri

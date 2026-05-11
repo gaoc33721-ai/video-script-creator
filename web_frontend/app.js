@@ -472,6 +472,9 @@ function renderStoryboardCards(content) {
   if (!shotRows.length) {
     return '<div class="empty-state"><strong>暂无分镜</strong><span>脚本表格生成后，这里会自动拆出拍摄参考卡片。</span></div>';
   }
+  const request = (state.currentResultJob && state.currentResultJob.request) || {};
+  const productCategory = request.category || ($("categorySelect") ? $("categorySelect").value : "");
+  const productModel = request.model || ($("modelSelect") ? $("modelSelect").value : "");
   return shotRows
     .slice(0, 12)
     .map((row, index) => {
@@ -485,7 +488,17 @@ function renderStoryboardCards(content) {
       const movement = row[7] || "";
       const sound = row[10] || "";
       const duration = row[11] || "";
-      const prompt = buildStoryboardImagePrompt({ segment, feature, method, effect, angle, movement, subtitle });
+      const prompt = buildStoryboardImagePrompt({
+        category: productCategory,
+        model: productModel,
+        segment,
+        feature,
+        method,
+        effect,
+        angle,
+        movement,
+        subtitle,
+      });
       state.storyboardShots.push({ segment, feature, method, effect, angle, movement, subtitle, prompt });
       const isGenerating = state.canvasGenerating.has(index);
       return `
@@ -686,9 +699,12 @@ function parseFirstMarkdownTable(markdown) {
     .map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()));
 }
 
-function buildStoryboardImagePrompt({ segment, feature, method, effect, angle, movement, subtitle }) {
+function buildStoryboardImagePrompt({ category, model, segment, feature, method, effect, angle, movement, subtitle }) {
   return [
-    "Premium e-commerce storyboard reference image for a Hisense home appliance video.",
+    "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
+    "Follow the storyboard exactly; do not invent another product category, room, or action.",
+    category ? `Product category from brief: ${category}.` : "",
+    model ? `Product model from brief: Hisense ${model}.` : "",
     `Shot: ${segment}.`,
     feature ? `Product benefit: ${feature}.` : "",
     method ? `Visual action: ${method}.` : "",
@@ -696,7 +712,7 @@ function buildStoryboardImagePrompt({ segment, feature, method, effect, angle, m
     movement ? `Camera movement: ${movement}.` : "",
     effect ? `Visual mood and effect: ${effect}.` : "",
     subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
-    "Clean modern home setting, realistic product proportions, soft cinematic lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
+    "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
   ]
     .filter(Boolean)
     .join(" ");
