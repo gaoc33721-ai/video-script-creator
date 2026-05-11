@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260508-memory-auth" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260511-canvas-fix" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -151,6 +151,13 @@
         -->
       </section>
     </main>
-    <script src="/static/app.js?v=20260508-memory-auth"></script>
+    <div id="imagePreviewModal" class="image-preview-modal hidden" aria-hidden="true" role="dialog" aria-modal="true">
+      <button class="image-preview-backdrop" type="button" data-preview-close aria-label="关闭预览"></button>
+      <div class="image-preview-panel">
+        <button class="image-preview-close" type="button" data-preview-close aria-label="关闭预览">×</button>
+        <img id="imagePreviewImage" alt="Storyboard reference" />
+      </div>
+    </div>
+    <script src="/static/app.js?v=20260511-canvas-fix"></script>
   </body>
 </html>

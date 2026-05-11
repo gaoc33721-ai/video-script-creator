@@ -95,8 +95,8 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
-NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-east-1")
-NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "amazon.titan-image-generator-v2:0")
+NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-west-2")
+NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.stable-image-core-v1:1")
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.04"))
 
 app = FastAPI(title="海外爆款内容引擎 API")
@@ -439,6 +439,58 @@ def _nova_canvas_image_key(script_job_id, variant_index, shot_index):
     )
 
 
+def _bedrock_image_request_body(prompt, seed):
+    model_id = str(NOVA_CANVAS_MODEL_ID or "")
+    prompt_text = str(prompt or "premium e-commerce storyboard reference image")[:1200]
+    negative_prompt = (
+        "competitor brands, distorted logo, unreadable text, low quality, "
+        "deformed product, extra products, watermark, cluttered composition"
+    )
+    if model_id.startswith("stability."):
+        return {
+            "prompt": prompt_text,
+            "negative_prompt": negative_prompt,
+            "mode": "text-to-image",
+            "aspect_ratio": "16:9",
+            "output_format": "png",
+            "seed": seed,
+        }
+    return {
+        "taskType": "TEXT_IMAGE",
+        "textToImageParams": {
+            "text": prompt_text[:512],
+            "negativeText": negative_prompt,
+        },
+        "imageGenerationConfig": {
+            "numberOfImages": 1,
+            "height": 720,
+            "width": 1280,
+            "cfgScale": 7.0,
+            "seed": seed,
+        },
+    }
+
+
+def _decode_bedrock_image_payload(payload):
+    images = payload.get("images") or []
+    if images:
+        first = images[0]
+        if isinstance(first, str):
+            return base64.b64decode(first)
+        if isinstance(first, dict):
+            encoded = first.get("base64") or first.get("image")
+            if encoded:
+                return base64.b64decode(encoded)
+    artifacts = payload.get("artifacts") or []
+    if artifacts:
+        first = artifacts[0]
+        if isinstance(first, dict):
+            encoded = first.get("base64") or first.get("image")
+            if encoded:
+                return base64.b64decode(encoded)
+    return None
+
+
 def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
     """Generate a storyboard reference image.
 
@@ -451,30 +503,14 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
 
     seed = random.randint(0, 858993459)
     image_bytes = None
+    failures = []
 
     # --- Attempt 1: Bedrock image model ---
     if NOVA_CANVAS_MODEL_ID and NOVA_CANVAS_MODEL_ID != "none":
         try:
             from botocore.config import Config
-            from botocore.exceptions import ClientError
 
-            body = {
-                "taskType": "TEXT_IMAGE",
-                "textToImageParams": {
-                    "text": str(prompt or "")[:512],
-                    "negativeText": (
-                        "competitor brands, distorted logo, unreadable text, low quality, "
-                        "deformed product, extra products, watermark, cluttered composition"
-                    ),
-                },
-                "imageGenerationConfig": {
-                    "numberOfImages": 1,
-                    "height": 720,
-                    "width": 1280,
-                    "cfgScale": 7.0,
-                    "seed": seed,
-                },
-            }
+            body = _bedrock_image_request_body(prompt, seed)
             client = boto3.client(
                 "bedrock-runtime",
                 region_name=NOVA_CANVAS_AWS_REGION,
@@ -487,12 +523,11 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
                 accept="application/json",
             )
             payload = json.loads(response["body"].read())
-            images = payload.get("images") or []
-            if images:
-                image_bytes = base64.b64decode(images[0])
-        except Exception:
-            # Bedrock image model not available, fall through to Pollinations.
-            pass
+            image_bytes = _decode_bedrock_image_payload(payload)
+            if not image_bytes:
+                failures.append(f"Bedrock returned no image: {str(payload)[:300]}")
+        except Exception as exc:
+            failures.append(f"Bedrock {NOVA_CANVAS_MODEL_ID} in {NOVA_CANVAS_AWS_REGION}: {exc}")
 
     # --- Attempt 2: Pollinations.ai (free, always available from public internet) ---
     if image_bytes is None:
@@ -507,10 +542,15 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index):
                 if resp.status_code == 200 and len(resp.content) > 1000:
                     image_bytes = resp.content
                     break
-            except Exception:
-                pass
+                failures.append(f"Pollinations HTTP {resp.status_code}")
+            except Exception as exc:
+                failures.append(f"Pollinations: {exc}")
             if attempt < 1:
                 _time.sleep(3)
+
+    if image_bytes is None:
+        detail = " | ".join(failures[-3:]) if failures else "no image provider configured"
+        raise RuntimeError(f"Storyboard image generation failed: {detail}")
 
     # --- Attempt 3: Generate a simple placeholder with text overlay ---
     if image_bytes is None:

@@ -520,11 +520,11 @@ function renderStoryboardCards(content) {
 
 function renderProtectedImage(imageUrl) {
   if (isExternalImageUrl(imageUrl)) {
-    return `<img class="storyboard-image" src="${escapeAttr(imageUrl)}" alt="Nova Canvas storyboard reference" loading="lazy" referrerpolicy="no-referrer" />`;
+    return `<img class="storyboard-image" src="${escapeAttr(imageUrl)}" alt="Storyboard reference" loading="lazy" referrerpolicy="no-referrer" data-storyboard-preview="true" title="双击放大查看" />`;
   }
   const objectUrl = state.protectedObjectUrls.get(imageUrl);
   if (objectUrl) {
-    return `<img class="storyboard-image" src="${escapeAttr(objectUrl)}" alt="Nova Canvas storyboard reference" loading="lazy" />`;
+    return `<img class="storyboard-image" src="${escapeAttr(objectUrl)}" alt="Storyboard reference" loading="lazy" data-storyboard-preview="true" title="双击放大查看" />`;
   }
   return `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(imageUrl)}">图片正在加载。</div>`;
 }
@@ -554,8 +554,10 @@ async function hydrateProtectedImages() {
         const image = document.createElement("img");
         image.className = "storyboard-image";
         image.src = objectUrl;
-        image.alt = "Nova Canvas storyboard reference";
+        image.alt = "Storyboard reference";
         image.loading = "lazy";
+        image.dataset.storyboardPreview = "true";
+        image.title = "双击放大查看";
         node.replaceWith(image);
       } catch (error) {
         node.textContent = error.message || "图片加载失败。";
@@ -563,6 +565,29 @@ async function hydrateProtectedImages() {
       }
     })
   );
+}
+
+function openStoryboardImagePreview(image) {
+  const modal = $("imagePreviewModal");
+  const preview = $("imagePreviewImage");
+  if (!modal || !preview || !image) return;
+  const imageUrl = image.currentSrc || image.src;
+  if (!imageUrl) return;
+  preview.src = imageUrl;
+  preview.alt = image.alt || "Storyboard reference";
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("preview-open");
+}
+
+function closeStoryboardImagePreview() {
+  const modal = $("imagePreviewModal");
+  const preview = $("imagePreviewImage");
+  if (!modal || !preview) return;
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+  preview.removeAttribute("src");
+  document.body.classList.remove("preview-open");
 }
 
 function renderCanvasJobForShot(shotIndex) {
@@ -948,6 +973,23 @@ $("storyboardCards").addEventListener("click", (event) => {
   const button = event.target.closest(".storyboard-generate");
   if (!button) return;
   submitCanvasImage(Number(button.dataset.shotIndex || 0));
+});
+$("storyboardCards").addEventListener("dblclick", (event) => {
+  const image = event.target.closest("[data-storyboard-preview]");
+  if (!image) return;
+  openStoryboardImagePreview(image);
+});
+if ($("imagePreviewModal")) {
+  $("imagePreviewModal").addEventListener("click", (event) => {
+    if (event.target.matches("[data-preview-close]")) {
+      closeStoryboardImagePreview();
+    }
+  });
+}
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeStoryboardImagePreview();
+  }
 });
 // Nova Reel video section hidden - guard against missing elements
 if ($("videoVariantSelect")) $("videoVariantSelect").addEventListener("change", updateVideoPrompt);
