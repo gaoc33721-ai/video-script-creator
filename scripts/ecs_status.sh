@@ -2,12 +2,20 @@
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-video-script-creator}"
+APP_RUNTIME="${APP_RUNTIME:-api}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-eu-central-1}}"
 CLUSTER_NAME="${CLUSTER_NAME:-${APP_NAME}-cluster}"
 SERVICE_NAME="${SERVICE_NAME:-$APP_NAME}"
 LOG_GROUP="${LOG_GROUP:-/ecs/${APP_NAME}}"
 ALB_NAME="${ALB_NAME:-${APP_NAME}-alb}"
 SINCE="${SINCE:-30m}"
+
+if [[ "$APP_RUNTIME" == "api" ]]; then
+  DEFAULT_HEALTH_CHECK_PATH="/healthz"
+else
+  DEFAULT_HEALTH_CHECK_PATH="/_stcore/health"
+fi
+HEALTH_CHECK_PATH="${HEALTH_CHECK_PATH:-$DEFAULT_HEALTH_CHECK_PATH}"
 
 export AWS_PAGER=""
 
@@ -26,7 +34,7 @@ aws ecs describe-services \
 
 echo
 echo "Health check:"
-curl -fsS "http://${ALB_DNS}/_stcore/health" || true
+curl -fsS "http://${ALB_DNS}${HEALTH_CHECK_PATH}" || true
 echo
 
 echo
