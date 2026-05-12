@@ -57,7 +57,11 @@
           </div>
           <div class="field-row">
             <label>产品品类<select id="categorySelect" name="category"></select></label>
-            <label>产品型号<select id="modelSelect" name="model"></select></label>
+            <label class="model-field">
+              产品型号
+              <input id="modelSearch" class="model-search" type="search" placeholder="搜索型号" autocomplete="off" aria-label="搜索产品型号" />
+              <select id="modelSelect" name="model"></select>
+            </label>
           </div>
           <label>核心卖点<div id="featurePicker" class="check-list"></div></label>
           <div class="field-row">

@@ -6,6 +6,7 @@ const state = {
   protectedObjectUrls: new Map(),
   options: { categories: [], models_by_category: {} },
   features: [],
+  featuresRequestId: 0,
   selectedFeatures: [],
   videoTypes: ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
   selectedVideoTypes: ["问题解决/痛点挖掘型", "场景化/生活方式型"],
@@ -186,6 +187,34 @@ function optionHtml(value, label = value, selected = false) {
   return `<option value="${escapeAttr(value)}" ${selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
 }
 
+function normalizeSearchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function currentCategoryModels() {
+  const category = $("categorySelect").value;
+  return state.options.models_by_category[category] || [];
+}
+
+function renderModelOptions(preferredModel = "") {
+  const select = $("modelSelect");
+  const query = normalizeSearchText($("modelSearch").value);
+  const models = currentCategoryModels();
+  const filtered = query
+    ? models.filter((item) => normalizeSearchText(item).includes(query))
+    : models;
+  if (!filtered.length) {
+    select.innerHTML = '<option value="">未找到匹配型号</option>';
+    select.value = "";
+    return;
+  }
+  const selectedModel = filtered.some((item) => String(item) === String(preferredModel)) ? preferredModel : filtered[0];
+  select.innerHTML = filtered
+    .map((item) => optionHtml(item, String(item).trim(), String(item) === String(selectedModel)))
+    .join("");
+  select.value = selectedModel;
+}
+
 function checkItemHtml(value, selected) {
   return `
     <button class="check-item ${selected ? "selected" : ""}" type="button" data-value="${escapeAttr(value)}" aria-pressed="${selected}">
@@ -215,14 +244,21 @@ async function loadOptions() {
 }
 
 function updateModels() {
-  const category = $("categorySelect").value;
-  const models = state.options.models_by_category[category] || [];
-  $("modelSelect").innerHTML = models.map((item) => optionHtml(item, String(item).trim())).join("");
+  $("modelSearch").value = "";
+  renderModelOptions();
+  loadFeatures();
+  updateSelectionSummary();
+}
+
+function filterModels() {
+  const currentModel = $("modelSelect").value;
+  renderModelOptions(currentModel);
   loadFeatures();
   updateSelectionSummary();
 }
 
 async function loadFeatures() {
+  const requestId = ++state.featuresRequestId;
   const category = $("categorySelect").value;
   const model = $("modelSelect").value;
   if (!category || !model) {
@@ -232,6 +268,7 @@ async function loadFeatures() {
     return;
   }
   const data = await api(`/api/features?category=${encodeURIComponent(category)}&model=${encodeURIComponent(model)}`);
+  if (requestId !== state.featuresRequestId) return;
   state.features = data.features;
   state.selectedFeatures = data.features.slice(0, 3);
   renderFeaturePicker();
@@ -926,6 +963,7 @@ async function startApp() {
 
 $("authForm").addEventListener("submit", submitAuth);
 $("categorySelect").addEventListener("change", updateModels);
+$("modelSearch").addEventListener("input", filterModels);
 $("modelSelect").addEventListener("change", loadFeatures);
 $("featurePicker").addEventListener("click", (event) => {
   const item = event.target.closest(".check-item");

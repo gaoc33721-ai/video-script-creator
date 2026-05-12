@@ -213,6 +213,20 @@ textarea {
   font: inherit;
 }
 
+.model-field {
+  gap: 8px;
+}
+
+.model-field select,
+.model-search {
+  min-height: 44px;
+}
+
+.model-search {
+  border-radius: 999px;
+  padding-inline: 16px;
+}
+
 button,
 .upload {
   display: inline-flex;
