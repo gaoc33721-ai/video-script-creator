@@ -20,6 +20,24 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from product_feature_store import ProductFeatureStore, filter_product_features
+from fridge_assistant import register_fridge_routes
+from rainforest_competitor import (
+    RainforestApiError,
+    amazon_domain_for_market,
+    clean_asin,
+    discover_asins as rainforest_discover_asins,
+    fetch_product as rainforest_fetch_product,
+    normalize_product_response,
+)
+from social_competitor import (
+    SocialApiError,
+    discover_youtube_videos,
+    extract_youtube_video_id,
+    fetch_youtube_videos,
+    normalize_social_url,
+    normalize_youtube_video_item,
+    refresh_social_thumbnail,
+)
 from storage_adapters import RuntimeStorage
 
 
@@ -33,6 +51,8 @@ CACHE_META_KEY = "cache_meta.json"
 HTTP_JOBS_KEY = "http_script_jobs.json"
 NOVA_REEL_JOBS_KEY = "nova_reel_poc_jobs.json"
 NOVA_CANVAS_JOBS_KEY = "nova_canvas_storyboard_jobs.json"
+COMPETITOR_ASSETS_KEY = "competitor_assets.json"
+COMPETITOR_RESEARCH_JOBS_KEY = "competitor_research_jobs.json"
 TABLE_COLUMNS = [
     "结构分段",
     "功能点",
@@ -98,6 +118,35 @@ NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PE
 NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-west-2")
 NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.sd3-5-large-v1:0")
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
+RAINFOREST_DEFAULT_AMAZON_DOMAIN = os.getenv("RAINFOREST_DEFAULT_AMAZON_DOMAIN", "amazon.com")
+RAINFOREST_SEARCH_TOP_N = int(os.getenv("RAINFOREST_SEARCH_TOP_N", "8"))
+RAINFOREST_DISCOVERY_REQUEST_LIMIT = int(os.getenv("RAINFOREST_DISCOVERY_REQUEST_LIMIT", "6"))
+RAINFOREST_MAX_PRODUCTS_PER_REFRESH = int(os.getenv("RAINFOREST_MAX_PRODUCTS_PER_REFRESH", "30"))
+RAINFOREST_REQUEST_TIMEOUT = int(os.getenv("RAINFOREST_REQUEST_TIMEOUT", "30"))
+_RAINFOREST_API_KEY = os.getenv("RAINFOREST_API_KEY", "")
+_RAINFOREST_API_KEY_SECRET_ID = (
+    os.getenv("RAINFOREST_API_KEY_SECRET_ID")
+    or os.getenv("RAINFOREST_API_KEY_SECRET_ARN")
+    or os.getenv("RAINFOREST_API_KEY_SECRET_NAME")
+)
+_rainforest_api_key_cache = {"value": _RAINFOREST_API_KEY, "expires_at": 0.0}
+YOUTUBE_DISCOVERY_TOP_N = int(os.getenv("YOUTUBE_DISCOVERY_TOP_N", "8"))
+YOUTUBE_DISCOVERY_REQUEST_LIMIT = int(os.getenv("YOUTUBE_DISCOVERY_REQUEST_LIMIT", "4"))
+SOCIAL_REQUEST_TIMEOUT = int(os.getenv("SOCIAL_REQUEST_TIMEOUT", "15"))
+_YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+_YOUTUBE_API_KEY_SECRET_ID = (
+    os.getenv("YOUTUBE_API_KEY_SECRET_ID")
+    or os.getenv("YOUTUBE_API_KEY_SECRET_ARN")
+    or os.getenv("YOUTUBE_API_KEY_SECRET_NAME")
+)
+_youtube_api_key_cache = {"value": _YOUTUBE_API_KEY, "expires_at": 0.0}
+_SOCIAL_OEMBED_ACCESS_TOKEN = os.getenv("SOCIAL_OEMBED_ACCESS_TOKEN", "")
+_SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ID = (
+    os.getenv("SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ID")
+    or os.getenv("SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN")
+    or os.getenv("SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME")
+)
+_social_oembed_token_cache = {"value": _SOCIAL_OEMBED_ACCESS_TOKEN, "expires_at": 0.0}
 
 app = FastAPI(title="海外爆款内容引擎 API")
 
@@ -106,7 +155,7 @@ _allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins or ["*"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -163,6 +212,58 @@ def _current_access_password() -> str:
     return cached_value or _API_ACCESS_PASSWORD
 
 
+def _current_rainforest_api_key() -> str:
+    if not _RAINFOREST_API_KEY_SECRET_ID:
+        return _RAINFOREST_API_KEY
+    now = time.monotonic()
+    cached_value = str(_rainforest_api_key_cache.get("value") or "")
+    if cached_value and now < float(_rainforest_api_key_cache.get("expires_at") or 0):
+        return cached_value
+    try:
+        client = boto3.client("secretsmanager", region_name=_secret_region())
+        response = client.get_secret_value(SecretId=_RAINFOREST_API_KEY_SECRET_ID)
+        value = _extract_secret_password(response.get("SecretString", ""))
+        if value:
+            _rainforest_api_key_cache["value"] = value
+            _rainforest_api_key_cache["expires_at"] = now + max(_API_ACCESS_PASSWORD_CACHE_TTL, 5)
+            return value
+    except Exception:
+        pass
+    return cached_value or _RAINFOREST_API_KEY
+
+
+def _current_external_secret(initial_value: str, secret_id: str, cache: dict) -> str:
+    if not secret_id:
+        return initial_value
+    now = time.monotonic()
+    cached_value = str(cache.get("value") or "")
+    if cached_value and now < float(cache.get("expires_at") or 0):
+        return cached_value
+    try:
+        client = boto3.client("secretsmanager", region_name=_secret_region())
+        response = client.get_secret_value(SecretId=secret_id)
+        value = _extract_secret_password(response.get("SecretString", ""))
+        if value:
+            cache["value"] = value
+            cache["expires_at"] = now + max(_API_ACCESS_PASSWORD_CACHE_TTL, 5)
+            return value
+    except Exception:
+        pass
+    return cached_value or initial_value
+
+
+def _current_youtube_api_key() -> str:
+    return _current_external_secret(_YOUTUBE_API_KEY, _YOUTUBE_API_KEY_SECRET_ID, _youtube_api_key_cache)
+
+
+def _current_social_oembed_token() -> str:
+    return _current_external_secret(
+        _SOCIAL_OEMBED_ACCESS_TOKEN,
+        _SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ID,
+        _social_oembed_token_cache,
+    )
+
+
 def _access_control_active() -> bool:
     configured = bool(_API_ACCESS_PASSWORD or _API_ACCESS_PASSWORD_SECRET_ID)
     if _API_ACCESS_CONTROL_SETTING in _TRUTHY:
@@ -198,10 +299,13 @@ async def _verify_access(request: Request, authorization: str = Header(default="
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 
 job_lock = threading.Lock()
+competitor_lock = threading.Lock()
 
 static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+register_fridge_routes(app, STORAGE, _current_access_password, _clean_access_token, _access_control_active)
 
 
 class GenerateRequest(BaseModel):
@@ -236,6 +340,79 @@ class NovaCanvasSubmitRequest(BaseModel):
     prompt: str = Field(min_length=10, max_length=2000)
 
 
+class RainforestDiscoverRequest(BaseModel):
+    category: str = ""
+    target_market: str = "北美 (US/CA)"
+    amazon_domain: str = ""
+    brands: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    max_results: int = Field(default=RAINFOREST_SEARCH_TOP_N, ge=1, le=50)
+    request_limit: int = Field(default=RAINFOREST_DISCOVERY_REQUEST_LIMIT, ge=1, le=20)
+
+
+class RainforestRefreshRequest(BaseModel):
+    category: str = ""
+    target_market: str = "北美 (US/CA)"
+    amazon_domain: str = ""
+    brands: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    asins: list[str] = Field(default_factory=list)
+    use_discovery: bool = True
+    max_search_results: int = Field(default=RAINFOREST_SEARCH_TOP_N, ge=1, le=50)
+    request_limit: int = Field(default=RAINFOREST_DISCOVERY_REQUEST_LIMIT, ge=1, le=20)
+    max_products: int = Field(default=RAINFOREST_MAX_PRODUCTS_PER_REFRESH, ge=1, le=200)
+
+
+class CompetitorResearchRequest(BaseModel):
+    question: str = Field(min_length=4, max_length=2000)
+    category: str = ""
+    target_market: str = ""
+    platform: str = "Amazon"
+    source: str = "rainforest"
+    top_k: int = Field(default=8, ge=1, le=20)
+
+
+class SocialUrlImportRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list, max_length=50)
+    category: str = ""
+    target_market: str = ""
+    brands: list[str] = Field(default_factory=list)
+    fetch_oembed: bool = True
+
+
+class YouTubeDiscoverRequest(BaseModel):
+    category: str = ""
+    target_market: str = "北美 (US/CA)"
+    region_code: str = ""
+    brands: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    max_results: int = Field(default=YOUTUBE_DISCOVERY_TOP_N, ge=1, le=25)
+    request_limit: int = Field(default=YOUTUBE_DISCOVERY_REQUEST_LIMIT, ge=1, le=10)
+
+
+class YouTubeRefreshRequest(BaseModel):
+    category: str = ""
+    target_market: str = "北美 (US/CA)"
+    region_code: str = ""
+    brands: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    video_ids: list[str] = Field(default_factory=list, max_length=200)
+    use_discovery: bool = True
+    max_results: int = Field(default=YOUTUBE_DISCOVERY_TOP_N, ge=1, le=25)
+    request_limit: int = Field(default=YOUTUBE_DISCOVERY_REQUEST_LIMIT, ge=1, le=10)
+    max_videos: int = Field(default=30, ge=1, le=200)
+
+
+class SocialThumbnailRefreshRequest(BaseModel):
+    q: str = ""
+    category: str = ""
+    platform: str = ""
+    source: str = ""
+    media_type: str = ""
+    asset_ids: list[str] = Field(default_factory=list, max_length=200)
+    limit: int = Field(default=20, ge=1, le=200)
+
+
 def _read_json(key, default_value):
     return STORAGE.read_json(key, default_value)
 
@@ -255,6 +432,154 @@ def _load_jobs():
 
 def _save_jobs(jobs):
     return _write_json(HTTP_JOBS_KEY, jobs[:100])
+
+
+def _load_competitor_assets():
+    data = _read_json(COMPETITOR_ASSETS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_competitor_assets(assets):
+    sorted_assets = sorted(
+        [item for item in assets if isinstance(item, dict)],
+        key=lambda item: str(item.get("collected_at") or item.get("updated_at") or ""),
+        reverse=True,
+    )
+    return _write_json(COMPETITOR_ASSETS_KEY, sorted_assets[:5000])
+
+
+def _upsert_competitor_assets(new_assets):
+    now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    with competitor_lock:
+        assets = _load_competitor_assets()
+        by_id = {str(item.get("id") or ""): dict(item) for item in assets if item.get("id")}
+        inserted = 0
+        updated = 0
+        for asset in new_assets:
+            asset_id = str((asset or {}).get("id") or "")
+            if not asset_id:
+                continue
+            existing = by_id.get(asset_id, {})
+            merged = {**existing, **asset}
+            merged["updated_at"] = now
+            if "created_at" not in merged:
+                merged["created_at"] = existing.get("created_at") or now
+            by_id[asset_id] = merged
+            if existing:
+                updated += 1
+            else:
+                inserted += 1
+        _save_competitor_assets(list(by_id.values()))
+    return {"inserted": inserted, "updated": updated, "total": inserted + updated}
+
+
+def _load_competitor_research_jobs():
+    data = _read_json(COMPETITOR_RESEARCH_JOBS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_competitor_research_jobs(jobs):
+    return _write_json(COMPETITOR_RESEARCH_JOBS_KEY, jobs[:200])
+
+
+def _update_competitor_research_job(job_id, **fields):
+    with competitor_lock:
+        jobs = _load_competitor_research_jobs()
+        for job in jobs:
+            if job.get("id") == job_id:
+                job.update(fields)
+                now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                job["updated_at"] = now
+                if fields.get("status") in {"succeeded", "failed"}:
+                    job["completed_at"] = now
+                break
+        _save_competitor_research_jobs(jobs)
+
+
+def _public_competitor_asset(asset, include_source_payload=False):
+    public = dict(asset or {})
+    if not include_source_payload:
+        public.pop("source_payload", None)
+    media = []
+    for item in public.get("media", []) or []:
+        public_media = dict(item or {})
+        if not include_source_payload:
+            public_media.pop("source_payload", None)
+        media.append(public_media)
+    public["media"] = media
+    return public
+
+
+def _competitor_asset_search_text(asset):
+    media_text = " ".join(
+        f"{item.get('title', '')} {item.get('media_type', '')}"
+        for item in (asset.get("media") or [])
+        if isinstance(item, dict)
+    )
+    metadata = asset.get("metadata") or {}
+    return " ".join(
+        [
+            str(asset.get("id") or ""),
+            str(asset.get("asin") or ""),
+            str(asset.get("platform") or ""),
+            str(asset.get("source_type") or ""),
+            str(asset.get("channel") or ""),
+            str(asset.get("brand") or ""),
+            str(asset.get("category") or ""),
+            str(asset.get("title") or ""),
+            str(asset.get("original_copy") or ""),
+            str(asset.get("ai_analysis") or ""),
+            " ".join(asset.get("ai_tags") or []),
+            str(metadata.get("source_query") or ""),
+            str(metadata.get("platform_content_id") or ""),
+            str(metadata.get("account_name") or ""),
+            str(metadata.get("youtube_video_id") or ""),
+            media_text,
+        ]
+    ).lower()
+
+
+def _search_competitor_assets(
+    *,
+    q: str = "",
+    category: str = "",
+    brand: str = "",
+    platform: str = "",
+    source: str = "",
+    media_type: str = "",
+    limit: int = 20,
+):
+    q_lower = str(q or "").strip().lower()
+    category_lower = str(category or "").strip().lower()
+    brand_lower = str(brand or "").strip().lower()
+    platform_lower = str(platform or "").strip().lower()
+    source_lower = str(source or "").strip().lower()
+    media_type_lower = str(media_type or "").strip().lower()
+    matched = []
+    for asset in _load_competitor_assets():
+        search_text = _competitor_asset_search_text(asset)
+        if q_lower and q_lower not in search_text:
+            continue
+        if category_lower and category_lower not in str(asset.get("category") or "").lower() and category_lower not in search_text:
+            continue
+        if brand_lower and brand_lower not in str(asset.get("brand") or "").lower():
+            continue
+        if platform_lower and platform_lower not in str(asset.get("platform") or "").lower():
+            continue
+        if source_lower and source_lower not in str(asset.get("source_type") or "").lower():
+            continue
+        if media_type_lower:
+            if not any(str(item.get("media_type") or "").lower() == media_type_lower for item in asset.get("media", []) or []):
+                continue
+        matched.append(asset)
+    matched.sort(
+        key=lambda item: (
+            int(item.get("quality_score") or 0),
+            str(item.get("collected_at") or item.get("updated_at") or ""),
+        ),
+        reverse=True,
+    )
+    return matched[: max(1, int(limit or 20))]
 
 
 def _update_job(job_id, **fields):
@@ -997,6 +1322,142 @@ def _run_generation(job_id: str):
         _update_job(job_id, status="failed", progress=100, current_step="失败", error_message=str(exc), completed_at=dt.datetime.utcnow().isoformat(timespec="seconds") + "Z")
 
 
+def _asset_evidence_lines(assets):
+    lines = []
+    for index, asset in enumerate(assets, start=1):
+        metadata = asset.get("metadata") or {}
+        videos = [item for item in asset.get("media", []) or [] if item.get("media_type") == "video"]
+        media_hint = f"{len(videos)} 条视频素材" if videos else f"{len(asset.get('media', []) or [])} 个非视频媒体项"
+        tags = "、".join(asset.get("ai_tags") or [])
+        platform = asset.get("platform") or asset.get("source_type") or "Unknown"
+        source_id = f"ASIN: {asset.get('asin')} / Domain: {asset.get('amazon_domain')}" if asset.get("asin") else f"Platform: {platform} / Source: {asset.get('source_type') or '-'}"
+        lines.append(
+            "\n".join(
+                [
+                    f"[{index}] {asset.get('brand') or 'Unknown'} | {asset.get('title') or 'Untitled'}",
+                    f"- {source_id}",
+                    f"- Link: {asset.get('source_url') or ''}",
+                    f"- Score: {asset.get('quality_score') or 0} / Rating: {metadata.get('rating') or '-'} / Reviews: {metadata.get('reviews') or '-'} / Media: {media_hint}",
+                    f"- Tags: {tags or '无'}",
+                    f"- Analysis: {asset.get('ai_analysis') or ''}",
+                    f"- Copy excerpt: {str(asset.get('original_copy') or '')[:700]}",
+                ]
+            )
+        )
+    return "\n\n".join(lines)
+
+
+def _build_competitor_research_prompt(req: CompetitorResearchRequest, assets: list[dict]) -> str:
+    evidence = _asset_evidence_lines(assets)
+    return f"""
+你是海外电商竞品视频素材分析顾问。请只基于下方证据回答业务问题，不要编造平台数据、播放量、投放效果或竞品参数。
+
+业务问题：
+{req.question}
+
+筛选条件：
+- 品类：{req.category or "未限定"}
+- 市场：{req.target_market or "未限定"}
+- 平台/来源：{req.platform or "未限定"} / {req.source or "未限定"}
+
+证据素材：
+{evidence}
+
+输出要求：
+1. 用中文输出一份调研报告。
+2. 每个关键结论后面都必须用 [1]、[2] 这样的证据编号标注来源。
+3. 报告结构包括：核心结论、素材套路归纳、可借鉴拍摄方向、风险与限制、证据清单。
+4. 如果证据不足，请明确说明，不要补充没有证据支持的判断。
+5. 强调这些素材只保存链接和结构化分析，未保存竞品视频原片。
+""".strip()
+
+
+def _fallback_competitor_report(req: CompetitorResearchRequest, assets: list[dict]) -> str:
+    if not assets:
+        return (
+            "## 核心结论\n"
+            "当前素材库没有检索到可支撑该问题的证据。建议先通过 Rainforest、官方 API 或人工样本补充竞品素材后再生成报告。\n\n"
+            "## 风险与限制\n"
+            "系统不会编造竞品素材结论，也不会下载或保存竞品视频原片。"
+        )
+    conclusion = []
+    directions = []
+    evidence = []
+    for index, asset in enumerate(assets, start=1):
+        metadata = asset.get("metadata") or {}
+        video_count = metadata.get("video_count") or 0
+        tags = "、".join(asset.get("ai_tags") or [])
+        conclusion.append(
+            f"- {asset.get('brand') or '竞品'} 素材围绕“{asset.get('title') or '商品页'}”展开，"
+            f"质量分 {asset.get('quality_score') or 0}，识别到 {video_count} 条视频素材。[{index}]"
+        )
+        if tags:
+            directions.append(f"- 可参考 {asset.get('brand') or '竞品'} 的标签方向：{tags}。[{index}]")
+        evidence.append(
+            f"- [{index}] {metadata.get('platform_content_id') or asset.get('asin') or asset.get('id') or '-'} | {asset.get('platform') or '-'} | {asset.get('brand') or '-'} | "
+            f"{asset.get('source_url') or ''} | 抓取时间：{asset.get('collected_at') or '-'}"
+        )
+    return "\n\n".join(
+        [
+            "## 核心结论",
+            "\n".join(conclusion),
+            "## 素材套路归纳",
+            "\n".join(directions or ["- 当前证据以已入库素材链接、标题、图片/视频线索和结构化分析为主，仍需继续扩充样本。"]),
+            "## 可借鉴拍摄方向",
+            "- 优先复盘含视频或高质量社媒帖的素材，拆解开场利益点、场景演示、功能特写和收尾 CTA。",
+            "## 风险与限制",
+            "- 本报告仅基于已入库素材证据，不代表真实投放效果；系统未下载或保存竞品视频原片。",
+            "## 证据清单",
+            "\n".join(evidence),
+        ]
+    )
+
+
+def _run_competitor_research_job(job_id: str):
+    job = next((item for item in _load_competitor_research_jobs() if item.get("id") == job_id), None)
+    if not job:
+        return
+    try:
+        req = CompetitorResearchRequest(**(job.get("request") or {}))
+        _update_competitor_research_job(job_id, status="running", progress=25, current_step="正在检索素材证据")
+        assets = _search_competitor_assets(
+            q=req.question,
+            category=req.category,
+            platform=req.platform,
+            source=req.source,
+            limit=req.top_k,
+        )
+        if not assets and req.category:
+            assets = _search_competitor_assets(category=req.category, platform=req.platform, source=req.source, limit=req.top_k)
+        if not assets and (req.platform or req.source):
+            assets = _search_competitor_assets(platform=req.platform, source=req.source, limit=req.top_k)
+        if not assets:
+            report = _fallback_competitor_report(req, [])
+        else:
+            _update_competitor_research_job(job_id, progress=60, current_step="正在生成调研报告")
+            try:
+                report = _strip_code_fences(_call_bedrock(_build_competitor_research_prompt(req, assets), temperature=0.25, top_p=0.8))
+            except Exception:
+                report = _fallback_competitor_report(req, assets)
+        _update_competitor_research_job(
+            job_id,
+            status="succeeded",
+            progress=100,
+            current_step="已完成",
+            report=report,
+            evidence=[_public_competitor_asset(item) for item in assets],
+            error_message="",
+        )
+    except Exception as exc:
+        _update_competitor_research_job(
+            job_id,
+            status="failed",
+            progress=100,
+            current_step="失败",
+            error_message=str(exc),
+        )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     path = os.path.join(static_dir, "index.html")
@@ -1137,6 +1598,363 @@ def job(job_id: str):
     found = next((item for item in _load_jobs() if item.get("id") == job_id), None)
     if not found:
         raise HTTPException(status_code=404, detail="任务不存在。")
+    return found
+
+
+@app.post("/api/competitor-sources/rainforest/discover", dependencies=[Depends(_verify_access)])
+def rainforest_discover(req: RainforestDiscoverRequest):
+    api_key = _current_rainforest_api_key()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="RAINFOREST_API_KEY 尚未配置。")
+    try:
+        result = rainforest_discover_asins(
+            api_key,
+            category=req.category,
+            brands=req.brands,
+            keywords=req.keywords,
+            target_market=req.target_market,
+            amazon_domain=req.amazon_domain,
+            default_domain=RAINFOREST_DEFAULT_AMAZON_DOMAIN,
+            max_results=req.max_results,
+            request_limit=req.request_limit,
+            timeout=RAINFOREST_REQUEST_TIMEOUT,
+        )
+        return {"ok": True, **result}
+    except RainforestApiError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/competitor-assets/rainforest/refresh", dependencies=[Depends(_verify_access)])
+def rainforest_refresh(req: RainforestRefreshRequest):
+    api_key = _current_rainforest_api_key()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="RAINFOREST_API_KEY 尚未配置。")
+
+    domain = amazon_domain_for_market(req.target_market, req.amazon_domain, RAINFOREST_DEFAULT_AMAZON_DOMAIN)
+    asin_sources: dict[str, dict] = {}
+    for asin in req.asins or []:
+        clean = clean_asin(asin)
+        if clean:
+            asin_sources[clean] = {"asin": clean, "source_query": "manual", "position": None, "amazon_domain": domain}
+
+    discovery_result = {"amazon_domain": domain, "queries": [], "asins": []}
+    if req.use_discovery and (req.keywords or req.brands or req.category):
+        try:
+            discovery_result = rainforest_discover_asins(
+                api_key,
+                category=req.category,
+                brands=req.brands,
+                keywords=req.keywords,
+                target_market=req.target_market,
+                amazon_domain=req.amazon_domain,
+                default_domain=RAINFOREST_DEFAULT_AMAZON_DOMAIN,
+                max_results=req.max_search_results,
+                request_limit=req.request_limit,
+                timeout=RAINFOREST_REQUEST_TIMEOUT,
+            )
+            domain = discovery_result.get("amazon_domain") or domain
+            for item in discovery_result.get("asins", []):
+                asin = clean_asin(item.get("asin", ""))
+                if asin and asin not in asin_sources:
+                    asin_sources[asin] = item
+        except RainforestApiError as exc:
+            if not asin_sources:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not asin_sources:
+        raise HTTPException(status_code=400, detail="请提供手动 ASIN，或提供品类/品牌/关键词用于自动发现。")
+    if len(asin_sources) > 200:
+        raise HTTPException(status_code=400, detail="单次超过 200 个 ASIN 时请使用 Rainforest Collections 批处理后导入 S3 结果。")
+
+    max_products = min(req.max_products, RAINFOREST_MAX_PRODUCTS_PER_REFRESH, 200)
+    normalized_assets = []
+    errors = []
+    for asin, source in list(asin_sources.items())[:max_products]:
+        try:
+            product_payload = rainforest_fetch_product(
+                api_key,
+                asin,
+                amazon_domain=source.get("amazon_domain") or domain,
+                timeout=RAINFOREST_REQUEST_TIMEOUT,
+            )
+            normalized_assets.append(
+                normalize_product_response(
+                    product_payload,
+                    asin=asin,
+                    amazon_domain=source.get("amazon_domain") or domain,
+                    category=req.category,
+                    source_query=source.get("source_query") or "",
+                    search_position=source.get("position"),
+                    preferred_brands=req.brands,
+                )
+            )
+            time.sleep(0.15)
+        except RainforestApiError as exc:
+            errors.append({"asin": asin, "error": str(exc)})
+        except Exception as exc:
+            errors.append({"asin": asin, "error": str(exc)})
+
+    upsert = _upsert_competitor_assets(normalized_assets)
+    return {
+        "ok": True,
+        "amazon_domain": domain,
+        "discovery": discovery_result,
+        "requested_asin_count": len(asin_sources),
+        "fetched_count": len(normalized_assets),
+        "upsert": upsert,
+        "errors": errors[:20],
+        "assets": [_public_competitor_asset(item) for item in normalized_assets],
+        "note": "仅保存链接、缩略图、元数据和分析结果；不会下载或保存竞品视频原片。",
+    }
+
+
+@app.post("/api/social-assets/import-url", dependencies=[Depends(_verify_access)])
+def social_import_url(req: SocialUrlImportRequest):
+    urls = []
+    for value in req.urls or []:
+        clean = str(value or "").strip()
+        if clean and clean not in urls:
+            urls.append(clean)
+    if not urls:
+        raise HTTPException(status_code=400, detail="请先输入至少一个社媒素材 URL。")
+
+    token = _current_social_oembed_token()
+    normalized_assets = []
+    errors = []
+    for url in urls[:50]:
+        try:
+            normalized_assets.append(
+                normalize_social_url(
+                    url,
+                    category=req.category,
+                    brands=req.brands,
+                    fetch_oembed=req.fetch_oembed,
+                    oembed_access_token=token,
+                    timeout=SOCIAL_REQUEST_TIMEOUT,
+                )
+            )
+        except SocialApiError as exc:
+            errors.append({"url": url, "error": str(exc)})
+        except Exception as exc:
+            errors.append({"url": url, "error": str(exc)})
+
+    upsert = _upsert_competitor_assets(normalized_assets)
+    return {
+        "ok": True,
+        "requested_url_count": len(urls),
+        "imported_count": len(normalized_assets),
+        "upsert": upsert,
+        "errors": errors[:20],
+        "assets": [_public_competitor_asset(item) for item in normalized_assets],
+        "note": "社媒 URL 入库仅保存链接、缩略图 URL、嵌入信息和结构化分析；不会下载或保存竞品视频原片。",
+    }
+
+
+@app.post("/api/competitor-sources/youtube/discover", dependencies=[Depends(_verify_access)])
+def youtube_discover(req: YouTubeDiscoverRequest):
+    api_key = _current_youtube_api_key()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="YOUTUBE_API_KEY 尚未配置；可先用社媒 URL 手动入库。")
+    try:
+        result = discover_youtube_videos(
+            api_key,
+            category=req.category,
+            brands=req.brands,
+            keywords=req.keywords,
+            target_market=req.target_market,
+            region_code=req.region_code,
+            max_results=req.max_results,
+            request_limit=req.request_limit,
+            timeout=SOCIAL_REQUEST_TIMEOUT,
+        )
+        return {"ok": True, **result, "assets": [_public_competitor_asset(item) for item in result.get("assets", [])]}
+    except SocialApiError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/competitor-assets/youtube/refresh", dependencies=[Depends(_verify_access)])
+def youtube_refresh(req: YouTubeRefreshRequest):
+    api_key = _current_youtube_api_key()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="YOUTUBE_API_KEY 尚未配置；可先用社媒 URL 手动入库。")
+
+    video_sources: dict[str, dict] = {}
+    for value in req.video_ids or []:
+        video_id = extract_youtube_video_id(value) or str(value or "").strip()
+        if video_id:
+            video_sources[video_id] = {"video_id": video_id, "source_query": "manual", "position": None}
+
+    discovery_result = {"platform": "YouTube", "queries": [], "video_ids": [], "assets": []}
+    if req.use_discovery and (req.keywords or req.brands or req.category):
+        try:
+            discovery_result = discover_youtube_videos(
+                api_key,
+                category=req.category,
+                brands=req.brands,
+                keywords=req.keywords,
+                target_market=req.target_market,
+                region_code=req.region_code,
+                max_results=req.max_results,
+                request_limit=req.request_limit,
+                timeout=SOCIAL_REQUEST_TIMEOUT,
+            )
+            for asset in discovery_result.get("assets", []) or []:
+                metadata = asset.get("metadata") or {}
+                video_id = str(metadata.get("youtube_video_id") or metadata.get("platform_content_id") or "").strip()
+                if video_id and video_id not in video_sources:
+                    video_sources[video_id] = {
+                        "video_id": video_id,
+                        "source_query": metadata.get("source_query") or "",
+                        "position": metadata.get("search_position"),
+                        "asset": asset,
+                    }
+        except SocialApiError as exc:
+            if not video_sources:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not video_sources:
+        raise HTTPException(status_code=400, detail="请提供 YouTube 视频 ID/链接，或提供品类/品牌/关键词用于自动发现。")
+
+    normalized_assets = []
+    errors = []
+    for video_id, source in list(video_sources.items())[: req.max_videos]:
+        try:
+            if source.get("asset"):
+                normalized_assets.append(source["asset"])
+                continue
+            details = fetch_youtube_videos(api_key, [video_id], timeout=SOCIAL_REQUEST_TIMEOUT)
+            if not details:
+                errors.append({"video_id": video_id, "error": "YouTube video not found."})
+                continue
+            normalized_assets.append(
+                normalize_youtube_video_item(
+                    details[0],
+                    category=req.category,
+                    preferred_brands=req.brands,
+                    source_query=source.get("source_query") or "",
+                    search_position=source.get("position"),
+                )
+            )
+        except SocialApiError as exc:
+            errors.append({"video_id": video_id, "error": str(exc)})
+        except Exception as exc:
+            errors.append({"video_id": video_id, "error": str(exc)})
+
+    upsert = _upsert_competitor_assets(normalized_assets)
+    return {
+        "ok": True,
+        "requested_video_count": len(video_sources),
+        "fetched_count": len(normalized_assets),
+        "discovery": {**discovery_result, "assets": [_public_competitor_asset(item) for item in discovery_result.get("assets", [])]},
+        "upsert": upsert,
+        "errors": errors[:20],
+        "assets": [_public_competitor_asset(item) for item in normalized_assets],
+        "note": "YouTube 素材仅保存链接、缩略图 URL、公开元数据和分析结果；不会下载或保存竞品视频原片。",
+    }
+
+
+@app.post("/api/competitor-assets/social/thumbnails/refresh", dependencies=[Depends(_verify_access)])
+def social_thumbnail_refresh(req: SocialThumbnailRefreshRequest):
+    if req.asset_ids:
+        wanted = {str(item) for item in req.asset_ids}
+        assets = [item for item in _load_competitor_assets() if str(item.get("id") or "") in wanted]
+    else:
+        assets = _search_competitor_assets(
+            q=req.q,
+            category=req.category,
+            platform=req.platform,
+            source=req.source,
+            media_type=req.media_type,
+            limit=req.limit,
+        )
+
+    youtube_key = _current_youtube_api_key()
+    token = _current_social_oembed_token()
+    refreshed_assets = []
+    errors = []
+    for asset in assets[: req.limit]:
+        try:
+            refreshed, changed, error = refresh_social_thumbnail(
+                asset,
+                youtube_api_key=youtube_key,
+                oembed_access_token=token,
+                timeout=SOCIAL_REQUEST_TIMEOUT,
+            )
+            if changed:
+                refreshed_assets.append(refreshed)
+            elif error:
+                errors.append({"id": asset.get("id"), "error": error})
+        except Exception as exc:
+            errors.append({"id": asset.get("id"), "error": str(exc)})
+
+    upsert = _upsert_competitor_assets(refreshed_assets) if refreshed_assets else {"inserted": 0, "updated": 0, "total": 0}
+    return {
+        "ok": True,
+        "matched_count": len(assets),
+        "refreshed_count": len(refreshed_assets),
+        "upsert": upsert,
+        "errors": errors[:20],
+        "assets": [_public_competitor_asset(item) for item in refreshed_assets],
+    }
+
+
+@app.get("/api/competitor-assets/search", dependencies=[Depends(_verify_access)])
+def competitor_asset_search(
+    q: str = "",
+    category: str = "",
+    brand: str = "",
+    platform: str = "",
+    source: str = "",
+    media_type: str = "",
+    limit: int = 20,
+):
+    limit = max(1, min(int(limit or 20), 100))
+    assets = _search_competitor_assets(
+        q=q,
+        category=category,
+        brand=brand,
+        platform=platform,
+        source=source,
+        media_type=media_type,
+        limit=limit,
+    )
+    return {"assets": [_public_competitor_asset(item) for item in assets], "count": len(assets)}
+
+
+@app.post("/api/competitor-research/jobs", dependencies=[Depends(_verify_access)])
+def create_competitor_research_job(req: CompetitorResearchRequest):
+    now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "created_at": now,
+        "updated_at": now,
+        "status": "pending",
+        "progress": 0,
+        "current_step": "已提交",
+        "request": req.model_dump(),
+        "report": "",
+        "evidence": [],
+        "error_message": "",
+    }
+    with competitor_lock:
+        jobs = _load_competitor_research_jobs()
+        jobs.insert(0, job)
+        _save_competitor_research_jobs(jobs)
+    threading.Thread(target=_run_competitor_research_job, args=(job_id,), daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/api/competitor-research/jobs", dependencies=[Depends(_verify_access)])
+def competitor_research_jobs():
+    return {"jobs": _load_competitor_research_jobs()[:30]}
+
+
+@app.get("/api/competitor-research/jobs/{job_id}", dependencies=[Depends(_verify_access)])
+def competitor_research_job(job_id: str):
+    found = next((item for item in _load_competitor_research_jobs() if item.get("id") == job_id), None)
+    if not found:
+        raise HTTPException(status_code=404, detail="竞品调研任务不存在。")
     return found
 
 

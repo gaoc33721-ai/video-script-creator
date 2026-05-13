@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>海信产品知识 AI 助手</title>
+    <link rel="stylesheet" href="/fridge/static/styles.css?v=20260513" />
+  </head>
+  <body>
+    <section id="loginView" class="login-view hidden">
+      <form id="loginForm" class="login-panel">
+        <div class="product-mark">
+          <span>Hisense</span>
+          <strong>产品知识 AI 助手</strong>
+        </div>
+        <h1>进入内部知识问答工作台</h1>
+        <label>
+          访问密码
+          <input id="passwordInput" type="password" autocomplete="current-password" placeholder="请输入访问密码" />
+        </label>
+        <button id="loginButton" type="submit">登录</button>
+        <p id="loginMessage" class="message"></p>
+      </form>
+    </section>
+
+    <div id="appView" class="app hidden">
+      <aside class="sidebar">
+        <header class="sidebar-head">
+          <div class="product-mark compact">
+            <span>Hisense</span>
+            <strong>产品知识 AI 助手</strong>
+          </div>
+          <span id="roleBadge" class="role-badge">-</span>
+        </header>
+        <button id="newSessionButton" type="button" class="primary full">新建会话</button>
+        <input id="sessionSearch" class="session-search" type="search" placeholder="搜索历史会话" />
+        <div id="sessionList" class="session-list"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>产品知识问答</h1>
+            <div id="summaryPills" class="summary-pills"></div>
+          </div>
+          <label class="model-picker">
+            型号上下文
+            <select id="modelSelect"></select>
+          </label>
+        </header>
+
+        <section id="quickQuestions" class="quick-questions" aria-label="快捷问题"></section>
+
+        <section class="chat-panel">
+          <div id="emptyChat" class="empty-chat">
+            <strong>选择一个型号或直接提问</strong>
+            <span>回答会优先引用已上传的规格、营销、竞品和文档资料。</span>
+          </div>
+          <div id="messageList" class="message-list"></div>
+          <form id="composerForm" class="composer">
+            <textarea id="messageInput" rows="3" placeholder="输入问题，例如：DH7i10 适合怎么向欧洲渠道客户介绍？"></textarea>
+            <button id="sendButton" type="submit" class="primary">发送</button>
+            <p id="chatMessage" class="message"></p>
+          </form>
+        </section>
+      </main>
+
+      <aside class="inspector">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>型号卡片</h2>
+            <button id="reloadButton" type="button" class="ghost">刷新</button>
+          </div>
+          <div id="modelCard" class="model-card"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>知识库</h2>
+          </div>
+          <div id="datasetStatus" class="dataset-status"></div>
+        </section>
+
+        <section id="adminPanel" class="panel admin-panel">
+          <div class="panel-head">
+            <h2>管理员上传</h2>
+          </div>
+          <div id="uploadRows" class="upload-rows"></div>
+          <p id="uploadMessage" class="message"></p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>回答反馈</h2>
+          </div>
+          <label>
+            问题类型
+            <select id="feedbackIssue">
+              <option value="">未分类</option>
+              <option value="missing_data">缺少数据</option>
+              <option value="wrong_fact">事实不准</option>
+              <option value="bad_expression">表达需优化</option>
+              <option value="not_actionable">不够可执行</option>
+            </select>
+          </label>
+          <label>
+            补充说明
+            <textarea id="feedbackNote" rows="3" placeholder="可选：说明要补充或修正的点"></textarea>
+          </label>
+          <p id="feedbackMessage" class="message"></p>
+        </section>
+      </aside>
+    </div>
+
+    <script src="/fridge/static/app.js?v=20260513"></script>
+  </body>
+</html>

@@ -21,6 +21,9 @@ const state = {
   jobsExpanded: false,
   jobFilter: "all",
   jobSearch: "",
+  competitorResearchTimer: null,
+  lastDiscoveredAsins: [],
+  lastDiscoveredVideoIds: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -315,6 +318,381 @@ function formPayload(form) {
   };
 }
 
+function splitList(value) {
+  return String(value || "")
+    .split(/[\n,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitUrls(value) {
+  return String(value || "")
+    .split(/[\n,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function competitorCategoryValue() {
+  return ($("competitorCategory")?.value || "").trim() || $("categorySelect")?.value || "";
+}
+
+function competitorPayload() {
+  return {
+    category: competitorCategoryValue(),
+    target_market: $("competitorMarket")?.value || "北美 (US/CA)",
+    amazon_domain: ($("competitorDomain")?.value || "").trim(),
+    brands: splitList($("competitorBrands")?.value || ""),
+    keywords: splitList($("competitorKeywords")?.value || ""),
+    asins: splitList($("competitorAsins")?.value || ""),
+  };
+}
+
+function competitorSourceValue() {
+  return $("competitorSource")?.value || "";
+}
+
+function competitorPlatformForSource(source) {
+  if (source === "rainforest") return "Amazon";
+  if (source === "youtube") return "YouTube";
+  if (source === "instagram") return "Instagram";
+  if (source === "tiktok") return "TikTok";
+  if (source === "pinterest") return "Pinterest";
+  if (source === "facebook") return "Facebook";
+  return "";
+}
+
+function renderCompetitorDiscovery(data) {
+  const asins = data.asins || [];
+  state.lastDiscoveredAsins = asins.map((item) => item.asin).filter(Boolean);
+  if (!asins.length) {
+    $("competitorDiscovery").innerHTML = '<div class="empty-state small"><strong>未发现 ASIN</strong><span>可换关键词或手动输入重点 ASIN。</span></div>';
+    return;
+  }
+  $("competitorDiscovery").innerHTML = `
+    <div class="discovery-head">
+      <strong>发现 ${asins.length} 个 ASIN</strong>
+      <span>${escapeHtml(data.amazon_domain || "")}</span>
+    </div>
+    <div class="asin-list">
+      ${asins
+        .map(
+          (item) => `
+            <button type="button" class="asin-chip" data-asin="${escapeAttr(item.asin)}">
+              <strong>${escapeHtml(item.asin)}</strong>
+              <span>${escapeHtml(item.brand || item.source_query || "")}</span>
+            </button>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderYouTubeDiscovery(data) {
+  const assets = data.assets || [];
+  state.lastDiscoveredVideoIds = assets
+    .map((asset) => asset.metadata?.youtube_video_id || asset.metadata?.platform_content_id)
+    .filter(Boolean);
+  if (!assets.length) {
+    $("competitorDiscovery").innerHTML = '<div class="empty-state small"><strong>未发现 YouTube 视频</strong><span>可换关键词、品牌或直接粘贴社媒 URL。</span></div>';
+    return;
+  }
+  $("competitorDiscovery").innerHTML = `
+    <div class="discovery-head">
+      <strong>发现 ${assets.length} 条 YouTube 候选素材</strong>
+      <span>${escapeHtml((data.queries || []).map((item) => item.query).join(" / "))}</span>
+    </div>
+    <div class="asin-list">
+      ${assets
+        .map((asset) => {
+          const videoId = asset.metadata?.youtube_video_id || asset.metadata?.platform_content_id || "";
+          return `
+            <button type="button" class="asin-chip video-chip" data-video-id="${escapeAttr(videoId)}">
+              <strong>${escapeHtml(videoId || asset.id)}</strong>
+              <span>${escapeHtml(asset.title || asset.channel || "")}</span>
+            </button>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+async function importSocialUrls() {
+  const urls = splitUrls($("competitorSocialUrls")?.value || "");
+  if (!urls.length) {
+    setMessage("competitorMessage", "请先粘贴至少一个社媒素材 URL。", "error");
+    return;
+  }
+  setMessage("competitorMessage", "正在导入社媒 URL...");
+  try {
+    const payload = competitorPayload();
+    const data = await api("/api/social-assets/import-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        urls,
+        category: payload.category,
+        target_market: payload.target_market,
+        brands: payload.brands,
+        fetch_oembed: true,
+      }),
+    });
+    renderCompetitorAssets(data.assets || []);
+    const errors = data.errors?.length ? `，失败 ${data.errors.length} 条` : "";
+    setMessage("competitorMessage", `已导入/更新 ${data.upsert?.total || 0} 条社媒素材${errors}。`, "ok");
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function discoverYouTube() {
+  setMessage("competitorMessage", "正在通过 YouTube API 发现竞品视频...");
+  try {
+    const payload = competitorPayload();
+    const data = await api("/api/competitor-sources/youtube/discover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: payload.category,
+        target_market: payload.target_market,
+        brands: payload.brands,
+        keywords: payload.keywords,
+      }),
+    });
+    renderYouTubeDiscovery(data);
+    renderCompetitorAssets(data.assets || []);
+    setMessage("competitorMessage", `已发现 ${data.assets?.length || 0} 条 YouTube 候选素材，可继续刷新入库。`, "ok");
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+function youtubeInputsFromSocialUrls() {
+  return splitUrls($("competitorSocialUrls")?.value || "").filter((url) => /youtu\.be|youtube\.com/i.test(url));
+}
+
+async function refreshYouTube() {
+  setMessage("competitorMessage", "正在刷新 YouTube 素材入库...");
+  try {
+    const payload = competitorPayload();
+    const videoIds = Array.from(new Set([...state.lastDiscoveredVideoIds, ...youtubeInputsFromSocialUrls()]));
+    const data = await api("/api/competitor-assets/youtube/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: payload.category,
+        target_market: payload.target_market,
+        brands: payload.brands,
+        keywords: payload.keywords,
+        video_ids: videoIds,
+        use_discovery: true,
+      }),
+    });
+    renderCompetitorAssets(data.assets || []);
+    const errors = data.errors?.length ? `，失败 ${data.errors.length} 条` : "";
+    setMessage("competitorMessage", `已入库/更新 ${data.upsert?.total || 0} 条 YouTube 素材${errors}。`, "ok");
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function refreshSocialThumbnails() {
+  setMessage("competitorMessage", "正在刷新已入库素材缩略图...");
+  try {
+    const params = {
+      q: ($("competitorAssetQuery")?.value || "").trim(),
+      category: ($("competitorCategory")?.value || "").trim(),
+      source: competitorSourceValue(),
+      media_type: $("competitorMediaType")?.value || "",
+      limit: 20,
+    };
+    const data = await api("/api/competitor-assets/social/thumbnails/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (data.assets?.length) {
+      renderCompetitorAssets(data.assets);
+    }
+    const errors = data.errors?.length ? `，${data.errors.length} 条暂无法刷新` : "";
+    setMessage("competitorMessage", `已刷新 ${data.refreshed_count || 0} 条缩略图${errors}。`, "ok");
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function discoverRainforest() {
+  setMessage("competitorMessage", "正在通过 Rainforest 搜索 Amazon ASIN...");
+  try {
+    const payload = competitorPayload();
+    const data = await api("/api/competitor-sources/rainforest/discover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: payload.category,
+        target_market: payload.target_market,
+        amazon_domain: payload.amazon_domain,
+        brands: payload.brands,
+        keywords: payload.keywords,
+      }),
+    });
+    renderCompetitorDiscovery(data);
+    setMessage("competitorMessage", `已发现 ${data.asins?.length || 0} 个候选 ASIN，可继续刷新入库。`, "ok");
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function refreshRainforest() {
+  setMessage("competitorMessage", "正在刷新 Rainforest 素材入库...");
+  try {
+    const payload = competitorPayload();
+    const mergedAsins = Array.from(new Set([...payload.asins, ...state.lastDiscoveredAsins]));
+    const data = await api("/api/competitor-assets/rainforest/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        asins: mergedAsins,
+        use_discovery: true,
+      }),
+    });
+    renderCompetitorAssets(data.assets || []);
+    const errors = data.errors?.length ? `，失败 ${data.errors.length} 条` : "";
+    setMessage("competitorMessage", `已入库/更新 ${data.upsert?.total || 0} 条商品素材${errors}。`, "ok");
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function loadCompetitorAssets() {
+  setMessage("competitorMessage", "正在加载已入库竞品素材...");
+  try {
+    const params = new URLSearchParams({
+      limit: "8",
+    });
+    const category = ($("competitorCategory")?.value || "").trim();
+    const source = competitorSourceValue();
+    const q = ($("competitorAssetQuery")?.value || "").trim();
+    const mediaType = $("competitorMediaType")?.value || "";
+    if (category) params.set("category", category);
+    if (source) params.set("source", source);
+    if (q) params.set("q", q);
+    if (mediaType) params.set("media_type", mediaType);
+    const data = await api(`/api/competitor-assets/search?${params.toString()}`);
+    renderCompetitorAssets(data.assets || []);
+    setMessage("competitorMessage", `已加载 ${data.count || 0} 条素材。`, "ok");
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+function renderCompetitorAssets(assets, targetId = "competitorAssets") {
+  const target = $(targetId);
+  if (!target) return;
+  if (!assets.length) {
+    target.innerHTML = '<div class="empty-state small"><strong>暂无素材</strong><span>可先发现 ASIN 或刷新入库。</span></div>';
+    return;
+  }
+  target.innerHTML = assets.map(renderCompetitorAsset).join("");
+}
+
+function renderCompetitorAsset(asset) {
+  const media = asset.media || [];
+  const videos = media.filter((item) => item.media_type === "video");
+  const firstImage = asset.image_url || media.find((item) => item.thumbnail_url || item.media_url)?.thumbnail_url || media.find((item) => item.media_type === "image")?.media_url || "";
+  const tags = (asset.ai_tags || []).slice(0, 5).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("");
+  const mediaLine = `${videos.length} 条视频 / ${media.length} 个媒体项`;
+  const sourceLabel = asset.platform || asset.source_type || "素材";
+  const assetKey = asset.asin ? `ASIN ${asset.asin}` : sourceLabel;
+  const evidenceLabel = asset.platform ? `打开 ${asset.platform} 证据` : "打开素材证据";
+  const contentId = asset.metadata?.platform_content_id || asset.metadata?.youtube_video_id || "";
+  const publishedAt = asset.metadata?.published_at ? `发布 ${formatDateTime(asset.metadata.published_at)}` : "";
+  const embedLink = asset.embed_url ? `<a href="${escapeAttr(asset.embed_url)}" target="_blank" rel="noreferrer">嵌入预览</a>` : "";
+  return `
+    <article class="competitor-asset">
+      ${firstImage ? `<img src="${escapeAttr(firstImage)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : `<div class="asset-image-empty"><strong>${escapeHtml(sourceLabel)}</strong><span>无缩略图</span></div>`}
+      <div>
+        <div class="asset-meta">
+          <span>${escapeHtml(asset.brand || "Unknown")}</span>
+          <span>${escapeHtml(assetKey)}</span>
+          ${contentId ? `<span>ID ${escapeHtml(contentId)}</span>` : ""}
+          <span>分数 ${escapeHtml(asset.quality_score || 0)}</span>
+          ${publishedAt ? `<span>${escapeHtml(publishedAt)}</span>` : ""}
+        </div>
+        <h4>${escapeHtml(asset.title || "Untitled")}</h4>
+        <p>${escapeHtml(asset.ai_analysis || "")}</p>
+        <div class="asset-tags">${tags}</div>
+        <div class="asset-foot">
+          <span>${escapeHtml(mediaLine)}</span>
+          <span class="asset-links">
+            ${embedLink}
+            <a href="${escapeAttr(asset.source_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(evidenceLabel)}</a>
+          </span>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+async function submitCompetitorResearch(event) {
+  event.preventDefault();
+  const question = ($("competitorQuestion")?.value || "").trim();
+  if (!question) {
+    setMessage("competitorMessage", "请先填写业务调研问题。", "error");
+    return;
+  }
+  if (state.competitorResearchTimer) {
+    clearTimeout(state.competitorResearchTimer);
+    state.competitorResearchTimer = null;
+  }
+  setMessage("competitorMessage", "正在提交竞品调研报告任务...");
+  try {
+    const data = await api("/api/competitor-research/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        category: competitorCategoryValue(),
+        target_market: $("competitorMarket")?.value || "",
+        platform: competitorPlatformForSource(competitorSourceValue()),
+        source: competitorSourceValue(),
+        top_k: 8,
+      }),
+    });
+    setMessage("competitorMessage", `调研任务 ${data.job_id} 已提交，正在生成报告...`, "ok");
+    await pollCompetitorResearchJob(data.job_id, 0);
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function pollCompetitorResearchJob(jobId, attempt) {
+  const job = await api(`/api/competitor-research/jobs/${encodeURIComponent(jobId)}`);
+  if (job.status === "succeeded") {
+    renderCompetitorReport(job);
+    setMessage("competitorMessage", "调研报告已生成。", "ok");
+    return;
+  }
+  if (job.status === "failed") {
+    setMessage("competitorMessage", job.error_message || "调研报告生成失败。", "error");
+    return;
+  }
+  setMessage("competitorMessage", `${job.current_step || "正在生成"} ${Number(job.progress || 0)}%`);
+  if (attempt < 90) {
+    state.competitorResearchTimer = setTimeout(() => pollCompetitorResearchJob(jobId, attempt + 1), 2000);
+  }
+}
+
+function renderCompetitorReport(job) {
+  $("competitorReportSection").classList.remove("hidden");
+  $("competitorReportMeta").textContent = `任务 ${job.id} · ${formatDateTime(job.completed_at || job.updated_at)} · 证据 ${job.evidence?.length || 0} 条`;
+  $("competitorReportBody").innerHTML = markdownToHtml(job.report || "");
+  renderCompetitorAssets(job.evidence || [], "competitorEvidence");
+  $("competitorReportSection").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function submitGeneration(event) {
   event.preventDefault();
   hideResults();
@@ -338,6 +716,9 @@ function updateSelectionSummary() {
   const category = $("categorySelect").value || "未选择";
   const model = ($("modelSelect").value || "未选择").trim();
   const features = state.selectedFeatures;
+  if ($("competitorCategory") && category !== "未选择") {
+    $("competitorCategory").placeholder = `默认：${category}`;
+  }
   $("selectionSummary").innerHTML = `
     <div><span>品类</span><strong>${escapeHtml(category)}</strong></div>
     <div><span>型号</span><strong>${escapeHtml(model)}</strong></div>
@@ -453,8 +834,8 @@ function hideResults() {
   $("resultSection").classList.add("hidden");
   $("resultTabs").innerHTML = "";
   $("resultBody").innerHTML = "";
-  $("videoJobs").innerHTML = "";
-  $("videoMessage").textContent = "";
+  if ($("videoJobs")) $("videoJobs").innerHTML = "";
+  if ($("videoMessage")) $("videoMessage").textContent = "";
   state.currentResultJob = null;
 }
 
@@ -1043,6 +1424,28 @@ if ($("imagePreviewModal")) {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeStoryboardImagePreview();
+  }
+});
+$("discoverRainforest").addEventListener("click", discoverRainforest);
+$("refreshRainforest").addEventListener("click", refreshRainforest);
+$("loadCompetitorAssets").addEventListener("click", loadCompetitorAssets);
+$("importSocialUrls").addEventListener("click", importSocialUrls);
+$("discoverYouTube").addEventListener("click", discoverYouTube);
+$("refreshYouTube").addEventListener("click", refreshYouTube);
+$("refreshSocialThumbnails").addEventListener("click", refreshSocialThumbnails);
+$("competitorResearchForm").addEventListener("submit", submitCompetitorResearch);
+$("competitorDiscovery").addEventListener("click", (event) => {
+  const chip = event.target.closest(".asin-chip");
+  if (!chip) return;
+  if (chip.dataset.videoId) {
+    if (!state.lastDiscoveredVideoIds.includes(chip.dataset.videoId)) {
+      state.lastDiscoveredVideoIds.push(chip.dataset.videoId);
+    }
+    return;
+  }
+  const current = splitList($("competitorAsins").value || "");
+  if (!current.includes(chip.dataset.asin)) {
+    $("competitorAsins").value = [...current, chip.dataset.asin].join(", ");
   }
 });
 // Nova Reel video section hidden - guard against missing elements

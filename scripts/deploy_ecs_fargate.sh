@@ -15,6 +15,22 @@ NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK="${NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK:-2}"
 NOVA_CANVAS_AWS_REGION="${NOVA_CANVAS_AWS_REGION:-us-west-2}"
 NOVA_CANVAS_MODEL_ID="${NOVA_CANVAS_MODEL_ID:-stability.sd3-5-large-v1:0}"
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE="${NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE:-0.08}"
+RAINFOREST_API_KEY="${RAINFOREST_API_KEY:-}"
+RAINFOREST_API_KEY_SECRET_NAME="${RAINFOREST_API_KEY_SECRET_NAME:-${APP_NAME}/rainforest-api-key}"
+RAINFOREST_API_KEY_SECRET_ARN="${RAINFOREST_API_KEY_SECRET_ARN:-}"
+RAINFOREST_DEFAULT_AMAZON_DOMAIN="${RAINFOREST_DEFAULT_AMAZON_DOMAIN:-amazon.com}"
+RAINFOREST_SEARCH_TOP_N="${RAINFOREST_SEARCH_TOP_N:-8}"
+RAINFOREST_DISCOVERY_REQUEST_LIMIT="${RAINFOREST_DISCOVERY_REQUEST_LIMIT:-6}"
+RAINFOREST_MAX_PRODUCTS_PER_REFRESH="${RAINFOREST_MAX_PRODUCTS_PER_REFRESH:-30}"
+YOUTUBE_API_KEY="${YOUTUBE_API_KEY:-}"
+YOUTUBE_API_KEY_SECRET_NAME="${YOUTUBE_API_KEY_SECRET_NAME:-${APP_NAME}/youtube-api-key}"
+YOUTUBE_API_KEY_SECRET_ARN="${YOUTUBE_API_KEY_SECRET_ARN:-}"
+YOUTUBE_DISCOVERY_TOP_N="${YOUTUBE_DISCOVERY_TOP_N:-8}"
+YOUTUBE_DISCOVERY_REQUEST_LIMIT="${YOUTUBE_DISCOVERY_REQUEST_LIMIT:-4}"
+SOCIAL_OEMBED_ACCESS_TOKEN="${SOCIAL_OEMBED_ACCESS_TOKEN:-}"
+SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME="${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME:-${APP_NAME}/social-oembed-token}"
+SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN="${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN:-}"
+SOCIAL_REQUEST_TIMEOUT="${SOCIAL_REQUEST_TIMEOUT:-15}"
 STORAGE_BACKEND="${STORAGE_BACKEND:-local}"
 S3_BUCKET="${S3_BUCKET:-}"
 S3_PREFIX="${S3_PREFIX:-runtime}"
@@ -293,6 +309,105 @@ if [[ -z "$APP_ACCESS_PASSWORD" && -z "$APP_ACCESS_PASSWORD_SECRET_ARN" ]]; then
   fi
 fi
 
+if [[ -n "$RAINFOREST_API_KEY" && -z "$RAINFOREST_API_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$RAINFOREST_API_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$RAINFOREST_API_KEY_SECRET_NAME" \
+      --secret-string "$RAINFOREST_API_KEY" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$RAINFOREST_API_KEY_SECRET_NAME" \
+      --secret-string "$RAINFOREST_API_KEY" >/dev/null
+  fi
+  RAINFOREST_API_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$RAINFOREST_API_KEY_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
+if [[ -z "$RAINFOREST_API_KEY" && -z "$RAINFOREST_API_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$RAINFOREST_API_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    RAINFOREST_API_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$RAINFOREST_API_KEY_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
+if [[ -n "$YOUTUBE_API_KEY" && -z "$YOUTUBE_API_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$YOUTUBE_API_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$YOUTUBE_API_KEY_SECRET_NAME" \
+      --secret-string "$YOUTUBE_API_KEY" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$YOUTUBE_API_KEY_SECRET_NAME" \
+      --secret-string "$YOUTUBE_API_KEY" >/dev/null
+  fi
+  YOUTUBE_API_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$YOUTUBE_API_KEY_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
+if [[ -z "$YOUTUBE_API_KEY" && -z "$YOUTUBE_API_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$YOUTUBE_API_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    YOUTUBE_API_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$YOUTUBE_API_KEY_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
+if [[ -n "$SOCIAL_OEMBED_ACCESS_TOKEN" && -z "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME" \
+      --secret-string "$SOCIAL_OEMBED_ACCESS_TOKEN" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME" \
+      --secret-string "$SOCIAL_OEMBED_ACCESS_TOKEN" >/dev/null
+  fi
+  SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
+if [[ -z "$SOCIAL_OEMBED_ACCESS_TOKEN" && -z "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME" >/dev/null 2>&1; then
+    SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
 if ! aws iam get-role --role-name "$TASK_ROLE" >/dev/null 2>&1; then
   aws iam create-role \
     --role-name "$TASK_ROLE" \
@@ -380,6 +495,15 @@ fi
 if [[ -n "$DATABASE_URL_SECRET_ARN" ]]; then
   SECRET_ARNS+=("$DATABASE_URL_SECRET_ARN")
 fi
+if [[ -n "$RAINFOREST_API_KEY_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$RAINFOREST_API_KEY_SECRET_ARN")
+fi
+if [[ -n "$YOUTUBE_API_KEY_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$YOUTUBE_API_KEY_SECRET_ARN")
+fi
+if [[ -n "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN")
+fi
 
 if [[ ${#SECRET_ARNS[@]} -gt 0 ]]; then
   SECRET_POLICY_DOC="$(mktemp)"
@@ -422,6 +546,13 @@ env = [
     {"name": "NOVA_CANVAS_AWS_REGION", "value": "${NOVA_CANVAS_AWS_REGION}"},
     {"name": "NOVA_CANVAS_MODEL_ID", "value": "${NOVA_CANVAS_MODEL_ID}"},
     {"name": "NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "value": "${NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE}"},
+    {"name": "RAINFOREST_DEFAULT_AMAZON_DOMAIN", "value": "${RAINFOREST_DEFAULT_AMAZON_DOMAIN}"},
+    {"name": "RAINFOREST_SEARCH_TOP_N", "value": "${RAINFOREST_SEARCH_TOP_N}"},
+    {"name": "RAINFOREST_DISCOVERY_REQUEST_LIMIT", "value": "${RAINFOREST_DISCOVERY_REQUEST_LIMIT}"},
+    {"name": "RAINFOREST_MAX_PRODUCTS_PER_REFRESH", "value": "${RAINFOREST_MAX_PRODUCTS_PER_REFRESH}"},
+    {"name": "YOUTUBE_DISCOVERY_TOP_N", "value": "${YOUTUBE_DISCOVERY_TOP_N}"},
+    {"name": "YOUTUBE_DISCOVERY_REQUEST_LIMIT", "value": "${YOUTUBE_DISCOVERY_REQUEST_LIMIT}"},
+    {"name": "SOCIAL_REQUEST_TIMEOUT", "value": "${SOCIAL_REQUEST_TIMEOUT}"},
     {"name": "APP_DATA_DIR", "value": "/app/data"},
     {"name": "STORAGE_BACKEND", "value": "${STORAGE_BACKEND}"},
     {"name": "STREAMLIT_SERVER_ENABLE_CORS", "value": "false"},
@@ -435,11 +566,23 @@ if "${S3_PREFIX}":
 if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
     env.append({"name": "APP_ACCESS_PASSWORD_SECRET_ID", "value": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})
     env.append({"name": "APP_ACCESS_PASSWORD_CACHE_TTL", "value": "${APP_ACCESS_PASSWORD_CACHE_TTL}"})
+if "${RAINFOREST_API_KEY_SECRET_ARN}":
+    env.append({"name": "RAINFOREST_API_KEY_SECRET_ID", "value": "${RAINFOREST_API_KEY_SECRET_ARN}"})
+if "${YOUTUBE_API_KEY_SECRET_ARN}":
+    env.append({"name": "YOUTUBE_API_KEY_SECRET_ID", "value": "${YOUTUBE_API_KEY_SECRET_ARN}"})
+if "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}":
+    env.append({"name": "SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ID", "value": "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}"})
 secrets = []
 if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
     secrets.append({"name": "APP_ACCESS_PASSWORD", "valueFrom": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})
 if "${DATABASE_URL_SECRET_ARN}":
     secrets.append({"name": "DATABASE_URL", "valueFrom": "${DATABASE_URL_SECRET_ARN}"})
+if "${RAINFOREST_API_KEY_SECRET_ARN}":
+    secrets.append({"name": "RAINFOREST_API_KEY", "valueFrom": "${RAINFOREST_API_KEY_SECRET_ARN}"})
+if "${YOUTUBE_API_KEY_SECRET_ARN}":
+    secrets.append({"name": "YOUTUBE_API_KEY", "valueFrom": "${YOUTUBE_API_KEY_SECRET_ARN}"})
+if "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}":
+    secrets.append({"name": "SOCIAL_OEMBED_ACCESS_TOKEN", "valueFrom": "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}"})
 
 doc = {
     "family": "${TASK_FAMILY}",

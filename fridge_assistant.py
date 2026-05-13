@@ -1,0 +1,1122 @@
+import datetime as dt
+import hmac
+import io
+import json
+import os
+import re
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Callable
+
+import boto3
+import pandas as pd
+from fastapi import Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+
+FRIDGE_DATASETS = {"specs", "marketing", "competitors", "documents"}
+FRIDGE_DATA_PREFIX = "fridge"
+FRIDGE_MAX_UPLOAD_BYTES = int(os.getenv("FRIDGE_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+FRIDGE_SESSION_LIMIT = int(os.getenv("FRIDGE_SESSION_LIMIT", "100"))
+FRIDGE_BEDROCK_MODEL_ID = os.getenv("FRIDGE_BEDROCK_MODEL_ID") or os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
+FRIDGE_BEDROCK_REGION = (
+    os.getenv("FRIDGE_BEDROCK_REGION")
+    or os.getenv("BEDROCK_AWS_REGION")
+    or os.getenv("AWS_REGION")
+    or os.getenv("AWS_DEFAULT_REGION")
+    or "us-east-1"
+)
+FRIDGE_BEDROCK_MAX_TOKENS = int(os.getenv("FRIDGE_BEDROCK_MAX_TOKENS", "2048"))
+
+
+SPEC_ALIASES = {
+    "model": ["model", "型号", "产品型号", "型号编码", "sku", "product_model", "product model"],
+    "series": ["series", "系列", "产品系列", "系列名称", "product_line", "product_line_name", "Product Series"],
+    "brand": ["brand", "品牌", "メーカー"],
+    "product_name": ["product_name", "产品名称", "型号名称", "name", "title"],
+    "product_type": ["product_type", "产品类型", "Porduct Type", "Product Type", "品类", "category", "カテゴリー"],
+    "market": ["market", "市场", "国家", "区域", "region", "country", "Target Market", "销售区域"],
+    "country": ["country", "出口国家", "Country"],
+    "launch_status": ["launch_status", "上市状态", "状态", "status"],
+    "capacity_total_l": ["capacity_total_l", "总容积", "总容量", "总容积(l)", "total capacity"],
+    "washing_capacity_kg": ["washing_capacity_kg", "洗涤容量", "洗濯容量", "Washing Capacity", "洗涤容量(KG)", "公斤段"],
+    "drying_capacity_kg": ["drying_capacity_kg", "烘干容量", "烘干容量 (KG)", "Drying capacity (KG)", "乾燥容量"],
+    "drum_volume_l": ["drum_volume_l", "内筒容积", "内筒容积（L）", "Drum Volum", "Drum Volume"],
+    "fridge_capacity_l": ["fridge_capacity_l", "冷藏容积", "冷藏容量", "fridge capacity"],
+    "freezer_capacity_l": ["freezer_capacity_l", "冷冻容积", "冷冻容量", "freezer capacity"],
+    "energy_rating": ["energy_rating", "能效等级", "能效", "energy class", "energy rating"],
+    "energy_rating_wash": ["energy_rating_wash", "能耗等级", "Energy Rating （Wash）", "Energy Rating (Wash)", "洗涤能效"],
+    "energy_rating_dry": ["energy_rating_dry", "冷凝效率等级", "Energy Rating（Dry）", "Energy Rating (Dry)", "烘干能效"],
+    "water_rating": ["water_rating", "Water Rating", "冷凝效率", "水效"],
+    "energy_consumption": ["energy_consumption", "耗电量", "年耗电量", "energy consumption", "kwh"],
+    "noise_db": ["noise_db", "噪音", "噪声", "噪音(db)", "noise", "noise level", "Noise Level", "運転音"],
+    "width_mm": ["width_mm", "宽度", "净宽度", "宽(mm)", "width", "Product Width (mm)", "幅"],
+    "depth_mm": ["depth_mm", "深度", "净深度", "深(mm)", "depth", "Product Depth (mm)", "奥行"],
+    "height_mm": ["height_mm", "高度", "净高度", "高(mm)", "height", "Product Height (mm)", "高さ"],
+    "dimensions": ["dimensions", "尺寸", "Dimensions", "Net Dimensions WxDxH (mm)", "净尺寸 WxDxH (mm)"],
+    "net_weight_kg": ["net_weight_kg", "净重", "净重 (Kg)", "Net Weight", "本体重量"],
+    "cooling_type": ["cooling_type", "制冷方式", "风冷", "制冷系统", "cooling"],
+    "compressor_type": ["compressor_type", "压缩机", "压缩机类型", "compressor"],
+    "inverter": ["inverter", "变频", "inverter compressor", "Inverter motor", "インバーター搭載"],
+    "door_type": ["door_type", "门体", "开门方式", "door", "door type"],
+    "drying_mode": ["drying_mode", "烘干类型", "Drying mode", "乾燥方式", "乾燥方式"],
+    "installation_type": ["installation_type", "安装方式", "Built in/Free standing"],
+    "supply_voltage": ["supply_voltage", "电压", "电压 (V/Hz)", "Supply Voltage (V/Hz)"],
+    "programs": ["programs", "程序", "Programs", "Use Program"],
+    "key_features": ["key_features", "功能", "Features"],
+    "color": ["color", "颜色", "colour", "Product Color", "整机颜色", "色"],
+    "image_url": ["image_url", "图片", "图片url", "主图", "product image"],
+    "certification": ["certification", "认证", "认证报告", "证书", "certification report", "Cerficate", "认证要求"],
+    "price": ["price", "价格", "售价", "msrp", "pvp", "fob", "FOB", "PVP Price", "Selling in Price", "価格"],
+    "currency": ["currency", "币种", "货币"],
+}
+
+MARKETING_ALIASES = {
+    "model": ["model", "型号", "产品型号", "适用型号", "sku"],
+    "series": ["series", "系列", "适用系列", "产品系列"],
+    "scope": ["scope", "范围", "适用范围", "层级"],
+    "content_type": ["content_type", "类型", "素材类型", "数据项", "类别"],
+    "title": ["title", "标题", "卖点标题", "问题", "faq_question", "point_name", "usp"],
+    "content": ["content", "正文", "详情", "答案", "faq_answer", "long_copy", "话术", "指南"],
+    "keywords": ["keywords", "关键词", "触发关键词", "同义词"],
+    "pain_point": ["pain_point", "痛点", "用户痛点"],
+    "objection": ["objection", "异议", "反对意见"],
+    "response": ["response", "应对话术", "异议处理", "回答"],
+    "priority": ["priority", "优先级", "权重"],
+}
+
+COMPETITOR_ALIASES = {
+    "competitor_model": ["competitor_model", "竞品型号", "型号", "型番", "model", "sku"],
+    "brand": ["brand", "竞品品牌", "品牌", "Brand\n品牌", "メーカー"],
+    "category": ["category", "品类", "产品类型", "Category\n品类", "Category\n品类（已更新）", "カテゴリー"],
+    "market": ["market", "市场", "区域", "Market\n区域", "上线平台", "法人"],
+    "price": ["price", "价格", "上市价格", "当前价格", "msrp", "価格"],
+    "currency": ["currency", "币种", "货币"],
+    "capacity_total_l": ["capacity_total_l", "总容积", "容量", "总容量", "Washing Capacity", "洗濯容量", "乾燥容量", "公斤段"],
+    "energy_rating": ["energy_rating", "能效", "能效等级", "Energy Rating"],
+    "water_rating": ["water_rating", "Water Rating", "水效"],
+    "noise_db": ["noise_db", "噪音", "噪声", "運転音"],
+    "feature_name": ["feature_name", "Feature Name", "Feature Name\n卖点名", "卖点名", "卖点名称"],
+    "slogan": ["slogan", "Slogan", "Slogan\n标题", "标题"],
+    "meaning": ["meaning", "Meaning", "Meaning\n传播点", "传播点"],
+    "description": ["description", "Description", "Description\n描述", "描述"],
+    "tm_certified": ["tm_certified", "TM认证", "TM认证\nY/N", "商标认证"],
+    "owner": ["owner", "Owner", "Owner\n信息主人", "信息主人"],
+    "updated_at": ["updated_at", "Last Updated", "Last Updated\n更新日期", "更新日期"],
+    "core_params": ["core_params", "核心参数", "参数", "卖点", "Feature Name", "Description"],
+    "positive_keywords": ["positive_keywords", "正面关键词", "好评关键词"],
+    "negative_keywords": ["negative_keywords", "负面关键词", "差评关键词"],
+    "source_url": ["source_url", "链接", "来源链接", "商品链接", "Link\n链接", "url"],
+}
+
+DOCUMENT_ALIASES = {
+    "model": ["model", "型号", "产品型号", "适用型号"],
+    "series": ["series", "系列", "适用系列"],
+    "title": ["title", "标题", "文件名", "文档名称", "name"],
+    "summary": ["summary", "摘要", "人工摘要", "核心摘要"],
+    "content": ["content", "正文", "文本", "内容", "text"],
+    "source_url": ["source_url", "链接", "来源链接", "url"],
+}
+
+KEY_SPEC_COLUMNS = [
+    "model",
+    "brand",
+    "series",
+    "product_type",
+    "market",
+    "country",
+    "capacity_total_l",
+    "washing_capacity_kg",
+    "drying_capacity_kg",
+    "drum_volume_l",
+    "fridge_capacity_l",
+    "freezer_capacity_l",
+    "energy_rating",
+    "energy_rating_wash",
+    "energy_rating_dry",
+    "water_rating",
+    "energy_consumption",
+    "noise_db",
+    "width_mm",
+    "depth_mm",
+    "height_mm",
+    "dimensions",
+    "net_weight_kg",
+    "cooling_type",
+    "compressor_type",
+    "inverter",
+    "drying_mode",
+    "installation_type",
+    "supply_voltage",
+    "programs",
+    "key_features",
+    "door_type",
+    "color",
+    "price",
+    "currency",
+    "certification",
+]
+
+SPEC_LABELS = {
+    "model": "型号",
+    "brand": "品牌",
+    "series": "系列",
+    "product_type": "产品类型",
+    "market": "市场",
+    "country": "国家",
+    "capacity_total_l": "总容积",
+    "washing_capacity_kg": "洗涤容量",
+    "drying_capacity_kg": "烘干容量",
+    "drum_volume_l": "内筒容积",
+    "fridge_capacity_l": "冷藏容积",
+    "freezer_capacity_l": "冷冻容积",
+    "energy_rating": "能效等级",
+    "energy_rating_wash": "洗涤能效",
+    "energy_rating_dry": "烘干能效",
+    "water_rating": "水效/冷凝效率",
+    "energy_consumption": "耗电量",
+    "noise_db": "噪音",
+    "width_mm": "宽度",
+    "depth_mm": "深度",
+    "height_mm": "高度",
+    "dimensions": "净尺寸",
+    "net_weight_kg": "净重",
+    "cooling_type": "制冷方式",
+    "compressor_type": "压缩机",
+    "inverter": "变频",
+    "drying_mode": "烘干方式",
+    "installation_type": "安装方式",
+    "supply_voltage": "电压",
+    "programs": "程序",
+    "key_features": "功能",
+    "door_type": "开门方式",
+    "color": "颜色",
+    "price": "价格",
+    "currency": "币种",
+    "certification": "认证",
+}
+
+MODEL_CARD_COLUMNS = [
+    "model",
+    "brand",
+    "product_type",
+    "series",
+    "market",
+    "country",
+    "washing_capacity_kg",
+    "drying_capacity_kg",
+    "drum_volume_l",
+    "drying_mode",
+    "energy_rating",
+    "energy_rating_wash",
+    "energy_rating_dry",
+    "water_rating",
+    "noise_db",
+    "dimensions",
+    "width_mm",
+    "depth_mm",
+    "height_mm",
+    "net_weight_kg",
+    "color",
+    "installation_type",
+    "supply_voltage",
+    "inverter",
+    "programs",
+    "key_features",
+    "certification",
+]
+
+
+class FridgeAuthLoginRequest(BaseModel):
+    password: str = Field(default="", max_length=256)
+
+
+class FridgeSessionCreateRequest(BaseModel):
+    title: str = Field(default="新会话", max_length=80)
+
+
+class FridgeSessionPatchRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=80)
+    favorite: bool | None = None
+
+
+class FridgeMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=3000)
+    model: str = Field(default="", max_length=120)
+
+
+class FridgeFeedbackRequest(BaseModel):
+    session_id: str = Field(default="", max_length=80)
+    message_id: str = Field(default="", max_length=80)
+    score: str = Field(pattern="^(up|down)$")
+    issue_type: str = Field(default="", max_length=80)
+    note: str = Field(default="", max_length=1000)
+
+
+def _now_iso() -> str:
+    return dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _safe_slug(text: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(text or "")).strip("_")
+    return slug or "fridge"
+
+
+def _normalize_name(value: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(value or "").strip().lower())
+
+
+def _text(value) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
+def _first_existing_column(df: pd.DataFrame, aliases: list[str]) -> str | None:
+    columns = {_normalize_name(col): col for col in df.columns}
+    for alias in aliases:
+        match = columns.get(_normalize_name(alias))
+        if match is not None:
+            return match
+    for alias in aliases:
+        normalized_alias = _normalize_name(alias)
+        if len(normalized_alias) < 2:
+            continue
+        for normalized_column, column in columns.items():
+            if normalized_alias in normalized_column:
+                return column
+    return None
+
+
+def _apply_aliases(df: pd.DataFrame, aliases: dict[str, list[str]]) -> pd.DataFrame:
+    normalized = df.copy()
+    for canonical, candidates in aliases.items():
+        if canonical in normalized.columns:
+            normalized[canonical] = normalized[canonical].map(_text)
+            continue
+        source = _first_existing_column(normalized, [canonical, *candidates])
+        normalized[canonical] = normalized[source].map(_text) if source else ""
+    for column in normalized.columns:
+        normalized[column] = normalized[column].map(_text)
+    return normalized.fillna("")
+
+
+def _row_search_text(row: pd.Series, preferred_columns: list[str] | None = None) -> str:
+    columns = preferred_columns or list(row.index)
+    values = [_text(row.get(column, "")) for column in columns if _text(row.get(column, ""))]
+    return " ".join(values)
+
+
+HEADER_HINTS = {
+    "model",
+    "型号",
+    "brand",
+    "品牌",
+    "market",
+    "区域",
+    "category",
+    "品类",
+    "feature",
+    "卖点",
+    "slogan",
+    "标题",
+    "description",
+    "描述",
+    "link",
+    "链接",
+    "price",
+    "价格",
+}
+
+
+def _header_score(values) -> int:
+    score = 0
+    for value in values:
+        normalized = _normalize_name(value)
+        if not normalized:
+            continue
+        if any(_normalize_name(hint) in normalized for hint in HEADER_HINTS):
+            score += 1
+    return score
+
+
+def _promote_embedded_header(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    current_score = _header_score(df.columns)
+    best_index = None
+    best_score = current_score
+    for index in range(min(6, len(df))):
+        row_values = [_text(value) for value in df.iloc[index].tolist()]
+        row_score = _header_score(row_values)
+        if row_score > best_score:
+            best_index = index
+            best_score = row_score
+    if best_index is None or best_score < 3:
+        return df
+    header_values = [_text(value) for value in df.iloc[best_index].tolist()]
+    columns = []
+    seen: dict[str, int] = {}
+    for fallback, value in zip(df.columns, header_values):
+        column = value or str(fallback)
+        if column in seen:
+            seen[column] += 1
+            column = f"{column}_{seen[column]}"
+        else:
+            seen[column] = 0
+        columns.append(column)
+    promoted = df.iloc[best_index + 1 :].copy()
+    promoted.columns = columns
+    return promoted.reset_index(drop=True)
+
+
+def _read_excel_first_sheet(data: bytes) -> pd.DataFrame:
+    df = pd.read_excel(io.BytesIO(data))
+    return _promote_embedded_header(df)
+
+
+def _read_tabular_upload(file_name: str, data: bytes) -> pd.DataFrame:
+    suffix = Path(file_name).suffix.lower()
+    if suffix in {".xlsx", ".xls"}:
+        return _read_excel_first_sheet(data)
+    if suffix == ".csv":
+        for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+            try:
+                return pd.read_csv(io.BytesIO(data), encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+        return pd.read_csv(io.BytesIO(data))
+    raise ValueError("仅支持 xlsx、xls、csv、pdf 文件。")
+
+
+def _is_template_value(value: str, expected: set[str]) -> bool:
+    normalized = _normalize_name(value)
+    return bool(normalized) and normalized in {_normalize_name(item) for item in expected}
+
+
+def _drop_template_rows(df: pd.DataFrame, column: str, expected: set[str]) -> pd.DataFrame:
+    if column not in df.columns or df.empty:
+        return df
+    mask = df[column].astype(str).apply(lambda value: _is_template_value(value, expected))
+    return df[~mask].copy()
+
+
+def _join_unique(values: list[str], limit: int = 900) -> str:
+    parts = []
+    for value in values:
+        text = _text(value)
+        if text and text not in parts:
+            parts.append(text)
+    return "；".join(parts)[:limit]
+
+
+def _enrich_competitor_rows(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    for column in ("feature_name", "slogan", "meaning", "description", "core_params"):
+        if column not in normalized.columns:
+            normalized[column] = ""
+    normalized["core_params"] = normalized.apply(
+        lambda row: _join_unique(
+            [
+                row.get("feature_name"),
+                row.get("slogan"),
+                row.get("meaning"),
+                row.get("description"),
+                row.get("core_params"),
+            ]
+        ),
+        axis=1,
+    )
+    normalized["positive_keywords"] = normalized.apply(
+        lambda row: _text(row.get("positive_keywords")) or _join_unique([row.get("meaning"), row.get("feature_name")], limit=260),
+        axis=1,
+    )
+    return normalized
+
+
+def _extract_pdf_text(data: bytes) -> tuple[str, str]:
+    try:
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        pages = [(page.extract_text() or "") for page in reader.pages]
+        return "\n".join(pages).strip(), ""
+    except Exception as first_error:
+        try:
+            import PyPDF2
+
+            reader = PyPDF2.PdfReader(io.BytesIO(data))
+            pages = [(page.extract_text() or "") for page in reader.pages]
+            return "\n".join(pages).strip(), ""
+        except Exception as second_error:
+            return "", f"{type(first_error).__name__}: {first_error}; {type(second_error).__name__}: {second_error}"
+
+
+def normalize_fridge_dataset(dataset: str, df: pd.DataFrame) -> pd.DataFrame:
+    if dataset == "specs":
+        normalized = _apply_aliases(df, SPEC_ALIASES)
+        normalized = _drop_template_rows(normalized, "model", {"型号", "model", "产品型号"})
+        missing_model = normalized["model"].astype(str).str.strip().eq("")
+        normalized = normalized[~missing_model].copy()
+        if normalized.empty:
+            raise ValueError("规格表必须至少包含一行有效的 model / 型号。")
+        normalized["search_text"] = normalized.apply(lambda row: _row_search_text(row), axis=1)
+        return normalized
+    if dataset == "marketing":
+        normalized = _apply_aliases(df, MARKETING_ALIASES)
+        normalized["content"] = normalized.apply(
+            lambda row: _text(row.get("content")) or _text(row.get("response")) or _text(row.get("title")),
+            axis=1,
+        )
+        normalized = normalized[normalized["content"].astype(str).str.strip().ne("")].copy()
+        if normalized.empty:
+            raise ValueError("营销素材表至少需要包含标题、正文、FAQ答案或异议处理内容。")
+        normalized["search_text"] = normalized.apply(lambda row: _row_search_text(row), axis=1)
+        return normalized
+    if dataset == "competitors":
+        normalized = _apply_aliases(df, COMPETITOR_ALIASES)
+        normalized = _drop_template_rows(normalized, "brand", {"品牌", "brand"})
+        normalized = _drop_template_rows(normalized, "competitor_model", {"型号", "model", "型番"})
+        normalized = _enrich_competitor_rows(normalized)
+        has_signal = normalized.apply(
+            lambda row: any(
+                _text(row.get(column))
+                for column in ("competitor_model", "brand", "category", "core_params", "source_url")
+            ),
+            axis=1,
+        )
+        normalized = normalized[has_signal].copy()
+        if normalized.empty:
+            raise ValueError("竞品表至少需要包含品牌、型号、品类、卖点描述或来源链接中的一类有效信息。")
+        normalized["search_text"] = normalized.apply(lambda row: _row_search_text(row), axis=1)
+        return normalized
+    if dataset == "documents":
+        normalized = _apply_aliases(df, DOCUMENT_ALIASES)
+        normalized["content"] = normalized.apply(
+            lambda row: _text(row.get("content")) or _text(row.get("summary")) or _text(row.get("title")),
+            axis=1,
+        )
+        normalized = normalized[normalized["content"].astype(str).str.strip().ne("")].copy()
+        if normalized.empty:
+            raise ValueError("文档表至少需要包含标题、摘要或正文内容。")
+        normalized["search_text"] = normalized.apply(lambda row: _row_search_text(row), axis=1)
+        return normalized
+    raise ValueError("未知数据集。")
+
+
+def _numeric_value(value: str) -> float | None:
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value or ""))
+    return float(match.group(0)) if match else None
+
+
+def _mentioned_models(question: str, available_models: list[str], selected_model: str = "") -> list[str]:
+    question_text = question.lower()
+    matches = []
+    if selected_model:
+        matches.append(selected_model)
+    for model in available_models:
+        model_text = str(model or "").strip()
+        if model_text and model_text.lower() in question_text and model_text not in matches:
+            matches.append(model_text)
+    return matches
+
+
+def _keywords(question: str) -> list[str]:
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_.-]{1,}|\d+(?:\.\d+)?|[\u4e00-\u9fff]{2,}", question)
+    stop = {"请问", "一下", "这个", "产品", "冰箱", "海信", "生成", "帮我", "哪些", "如何", "什么", "怎么"}
+    return [word.lower() for word in words if word.lower() not in stop]
+
+
+def _contains_any(text: str, keywords: list[str]) -> bool:
+    haystack = str(text or "").lower()
+    return any(keyword and keyword in haystack for keyword in keywords)
+
+
+def _apply_spec_filters(question: str, specs: pd.DataFrame) -> pd.DataFrame:
+    if specs.empty:
+        return specs
+    filtered = specs.copy()
+    question_text = question.lower()
+    capacity_match = re.search(r"(\d+(?:\.\d+)?)\s*(l|升|litre|liter)", question_text, re.I)
+    if capacity_match and "capacity_total_l" in filtered.columns:
+        target = float(capacity_match.group(1))
+        values = filtered["capacity_total_l"].map(_numeric_value)
+        capacity_rows = filtered[values.map(lambda value: value is not None and abs(value - target) <= 20)]
+        if not capacity_rows.empty:
+            filtered = capacity_rows
+    noise_match = re.search(r"(\d+(?:\.\d+)?)\s*(db|分贝)", question_text, re.I)
+    if noise_match and "noise_db" in filtered.columns:
+        target = float(noise_match.group(1))
+        values = filtered["noise_db"].map(_numeric_value)
+        if any(word in question_text for word in ["低于", "小于", "以内", "不超过", "<", "≤"]):
+            noise_rows = filtered[values.map(lambda value: value is not None and value <= target)]
+        else:
+            noise_rows = filtered[values.map(lambda value: value is not None and abs(value - target) <= 3)]
+        if not noise_rows.empty:
+            filtered = noise_rows
+    if "能效" in question_text and "energy_rating" in filtered.columns:
+        rating_tokens = re.findall(r"\b[a-g][+]*\b|[一二三四五]级|一级|二级|三级|四级|五级", question_text, re.I)
+        if rating_tokens:
+            rating_rows = filtered[
+                filtered["energy_rating"].astype(str).str.lower().apply(lambda value: any(token.lower() in value for token in rating_tokens))
+            ]
+            if not rating_rows.empty:
+                filtered = rating_rows
+    return filtered
+
+
+class FridgeKnowledgeStore:
+    def __init__(self, storage):
+        self.storage = storage
+
+    def dataframe_key(self, dataset: str) -> str:
+        return f"{FRIDGE_DATA_PREFIX}/{dataset}.pkl"
+
+    def meta_key(self) -> str:
+        return f"{FRIDGE_DATA_PREFIX}/dataset_meta.json"
+
+    def sessions_key(self) -> str:
+        return f"{FRIDGE_DATA_PREFIX}/sessions.json"
+
+    def feedback_key(self) -> str:
+        return f"{FRIDGE_DATA_PREFIX}/feedback.json"
+
+    def load_dataset(self, dataset: str) -> pd.DataFrame:
+        if dataset not in FRIDGE_DATASETS:
+            raise ValueError("未知数据集。")
+        return self.storage.read_dataframe(self.dataframe_key(dataset))
+
+    def save_dataset(self, dataset: str, file_name: str, data: bytes) -> dict:
+        if dataset not in FRIDGE_DATASETS:
+            raise ValueError("未知数据集。")
+        if len(data) > FRIDGE_MAX_UPLOAD_BYTES:
+            raise ValueError(f"文件过大，最大允许 {FRIDGE_MAX_UPLOAD_BYTES // (1024 * 1024)}MB。")
+        suffix = Path(file_name).suffix.lower()
+        upload_key = f"{FRIDGE_DATA_PREFIX}/uploads/{dataset}/{dt.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}_{_safe_slug(file_name)}"
+        stored_uri = self.storage.write_file_bytes(upload_key, data, content_type="application/octet-stream")
+        if dataset == "documents" and suffix == ".pdf":
+            text, error = _extract_pdf_text(data)
+            row = {
+                "model": "",
+                "series": "",
+                "title": Path(file_name).stem,
+                "summary": text[:1200],
+                "content": text[:12000],
+                "source_url": "",
+                "file_name": file_name,
+                "storage_uri": stored_uri,
+                "extract_error": error,
+                "search_text": f"{Path(file_name).stem} {text[:12000]}",
+            }
+            existing = self.load_dataset("documents")
+            normalized = pd.concat([existing, pd.DataFrame([row])], ignore_index=True).fillna("")
+        else:
+            df = _read_tabular_upload(file_name, data)
+            normalized = normalize_fridge_dataset(dataset, df)
+            if dataset == "documents":
+                normalized["file_name"] = file_name
+                normalized["storage_uri"] = stored_uri
+        self.storage.write_dataframe(self.dataframe_key(dataset), normalized)
+        meta = self.load_meta()
+        meta[dataset] = {
+            "file_name": file_name,
+            "storage_uri": stored_uri,
+            "row_count": int(len(normalized)),
+            "updated_at": _now_iso(),
+        }
+        self.storage.write_json(self.meta_key(), meta)
+        return meta[dataset]
+
+    def load_meta(self) -> dict:
+        return self.storage.read_json(self.meta_key(), {})
+
+    def summary(self) -> dict:
+        meta = self.load_meta()
+        datasets = {}
+        for dataset in sorted(FRIDGE_DATASETS):
+            df = self.load_dataset(dataset)
+            datasets[dataset] = {
+                "loaded": not df.empty,
+                "row_count": int(len(df)),
+                "meta": meta.get(dataset, {}),
+            }
+        specs = self.load_dataset("specs")
+        models = sorted(specs["model"].dropna().astype(str).unique().tolist()) if not specs.empty and "model" in specs else []
+        series = sorted(specs["series"].dropna().astype(str).unique().tolist()) if not specs.empty and "series" in specs else []
+        return {
+            "datasets": datasets,
+            "model_count": len(models),
+            "series_count": len([item for item in series if item]),
+            "models": models,
+            "series": [item for item in series if item],
+        }
+
+    def options(self) -> dict:
+        summary = self.summary()
+        specs = self.load_dataset("specs")
+        model_cards = []
+        if not specs.empty:
+            for _, row in specs.head(300).iterrows():
+                fields = [
+                    {"key": column, "label": SPEC_LABELS.get(column, column), "value": _text(row.get(column))}
+                    for column in MODEL_CARD_COLUMNS
+                    if _text(row.get(column))
+                ]
+                model_cards.append(
+                    {
+                        "model": _text(row.get("model")),
+                        "brand": _text(row.get("brand")),
+                        "series": _text(row.get("series")),
+                        "product_type": _text(row.get("product_type")),
+                        "market": _text(row.get("market")),
+                        "capacity_total_l": _text(row.get("capacity_total_l")),
+                        "washing_capacity_kg": _text(row.get("washing_capacity_kg")),
+                        "drying_capacity_kg": _text(row.get("drying_capacity_kg")),
+                        "energy_rating": _text(row.get("energy_rating")),
+                        "energy_rating_wash": _text(row.get("energy_rating_wash")),
+                        "energy_rating_dry": _text(row.get("energy_rating_dry")),
+                        "water_rating": _text(row.get("water_rating")),
+                        "noise_db": _text(row.get("noise_db")),
+                        "fields": fields,
+                    }
+                )
+        return {**summary, "model_cards": model_cards}
+
+    def load_sessions(self) -> list[dict]:
+        sessions = self.storage.read_json(self.sessions_key(), [])
+        return sessions if isinstance(sessions, list) else []
+
+    def save_sessions(self, sessions: list[dict]) -> None:
+        sessions = sorted(sessions, key=lambda item: item.get("updated_at", ""), reverse=True)[:FRIDGE_SESSION_LIMIT]
+        self.storage.write_json(self.sessions_key(), sessions)
+
+    def create_session(self, title: str = "新会话") -> dict:
+        session = {
+            "id": uuid.uuid4().hex[:12],
+            "title": title.strip() or "新会话",
+            "favorite": False,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+            "messages": [],
+        }
+        sessions = self.load_sessions()
+        sessions.insert(0, session)
+        self.save_sessions(sessions)
+        return session
+
+    def update_session(self, session_id: str, title: str | None = None, favorite: bool | None = None) -> dict:
+        sessions = self.load_sessions()
+        for session in sessions:
+            if session.get("id") == session_id:
+                if title is not None:
+                    session["title"] = title.strip() or session.get("title") or "新会话"
+                if favorite is not None:
+                    session["favorite"] = bool(favorite)
+                session["updated_at"] = _now_iso()
+                self.save_sessions(sessions)
+                return session
+        raise KeyError("会话不存在。")
+
+    def delete_session(self, session_id: str) -> None:
+        sessions = [session for session in self.load_sessions() if session.get("id") != session_id]
+        self.save_sessions(sessions)
+
+    def append_feedback(self, payload: dict) -> dict:
+        feedback = self.storage.read_json(self.feedback_key(), [])
+        if not isinstance(feedback, list):
+            feedback = []
+        item = {"id": uuid.uuid4().hex[:12], "created_at": _now_iso(), **payload}
+        feedback.insert(0, item)
+        self.storage.write_json(self.feedback_key(), feedback[:1000])
+        return item
+
+    def build_evidence(self, question: str, selected_model: str = "") -> dict:
+        specs = self.load_dataset("specs")
+        marketing = self.load_dataset("marketing")
+        competitors = self.load_dataset("competitors")
+        documents = self.load_dataset("documents")
+        available_models = sorted(specs["model"].dropna().astype(str).unique().tolist()) if not specs.empty and "model" in specs else []
+        requested_models = _mentioned_models(question, available_models, selected_model)
+        words = _keywords(question)
+
+        spec_hits = pd.DataFrame()
+        if not specs.empty:
+            if requested_models:
+                spec_hits = specs[specs["model"].astype(str).isin(requested_models)].copy()
+            else:
+                spec_hits = _apply_spec_filters(question, specs)
+                if words and len(spec_hits) == len(specs):
+                    text_hits = specs[specs["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))]
+                    if not text_hits.empty:
+                        spec_hits = text_hits
+            spec_hits = spec_hits.head(8)
+
+        marketing_hits = pd.DataFrame()
+        if not marketing.empty:
+            mask = pd.Series([False] * len(marketing), index=marketing.index)
+            if requested_models and "model" in marketing:
+                mask = mask | marketing["model"].astype(str).isin(requested_models)
+            if words and "search_text" in marketing:
+                mask = mask | marketing["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))
+            scope_mask = marketing.get("scope", pd.Series([""] * len(marketing), index=marketing.index)).astype(str).str.lower().isin(["global", "全局", "通用"])
+            marketing_hits = marketing[mask | scope_mask].head(10)
+
+        competitor_hits = pd.DataFrame()
+        if not competitors.empty:
+            if words and "search_text" in competitors:
+                competitor_hits = competitors[
+                    competitors["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))
+                ].head(8)
+            else:
+                competitor_hits = competitors.head(5)
+
+        document_hits = pd.DataFrame()
+        if not documents.empty:
+            if requested_models and "model" in documents:
+                document_hits = documents[documents["model"].astype(str).isin(requested_models)]
+            if words and "search_text" in documents:
+                keyword_hits = documents[documents["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))]
+                document_hits = pd.concat([document_hits, keyword_hits], ignore_index=True).drop_duplicates().head(6)
+            elif document_hits.empty:
+                document_hits = documents.head(3)
+
+        return {
+            "requested_models": requested_models,
+            "specs": spec_hits.fillna("").to_dict(orient="records"),
+            "marketing": marketing_hits.fillna("").to_dict(orient="records"),
+            "competitors": competitor_hits.fillna("").to_dict(orient="records"),
+            "documents": document_hits.fillna("").to_dict(orient="records"),
+            "available_models": available_models[:200],
+        }
+
+
+def _format_spec_row(row: dict) -> str:
+    parts = []
+    for column in KEY_SPEC_COLUMNS:
+        value = _text(row.get(column))
+        if value:
+            parts.append(f"{SPEC_LABELS.get(column, column)}: {value}")
+    return "；".join(parts)
+
+
+def _format_competitor_row(row: dict) -> str:
+    fields = [
+        ("brand", "品牌"),
+        ("competitor_model", "型号"),
+        ("category", "品类"),
+        ("market", "市场/渠道"),
+        ("price", "价格"),
+        ("capacity_total_l", "容量"),
+        ("energy_rating", "能效"),
+        ("water_rating", "水效"),
+        ("noise_db", "噪音"),
+        ("feature_name", "卖点名"),
+        ("slogan", "标题"),
+        ("meaning", "传播点"),
+        ("description", "描述"),
+        ("tm_certified", "TM认证"),
+        ("source_url", "链接"),
+    ]
+    parts = []
+    for column, label in fields:
+        value = _text(row.get(column))
+        if value:
+            parts.append(f"{label}: {value[:700]}")
+    core_params = _text(row.get("core_params"))
+    if core_params and not any("卖点名:" in item or "描述:" in item for item in parts):
+        parts.append(f"核心信息: {core_params[:900]}")
+    return "；".join(parts)
+
+
+def _evidence_to_text(evidence: dict) -> str:
+    blocks = []
+    if evidence.get("specs"):
+        lines = [f"[规格{i}] {_format_spec_row(row)}" for i, row in enumerate(evidence["specs"], start=1)]
+        blocks.append("规格数据：\n" + "\n".join(lines))
+    if evidence.get("marketing"):
+        lines = []
+        for i, row in enumerate(evidence["marketing"], start=1):
+            title = _text(row.get("title")) or _text(row.get("content_type")) or "营销素材"
+            content = _text(row.get("content")) or _text(row.get("response"))
+            lines.append(f"[营销{i}] {title}: {content[:700]}")
+        blocks.append("营销素材：\n" + "\n".join(lines))
+    if evidence.get("competitors"):
+        lines = []
+        for i, row in enumerate(evidence["competitors"], start=1):
+            lines.append(f"[竞品{i}] {_format_competitor_row(row)}")
+        blocks.append("竞品数据：\n" + "\n".join(lines))
+    if evidence.get("documents"):
+        lines = []
+        for i, row in enumerate(evidence["documents"], start=1):
+            title = _text(row.get("title")) or _text(row.get("file_name")) or "文档"
+            content = _text(row.get("summary")) or _text(row.get("content"))
+            lines.append(f"[文档{i}] {title}: {content[:800]}")
+        blocks.append("文档摘要：\n" + "\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
+    header_line = "| " + " | ".join(headers) + " |"
+    sep_line = "| " + " | ".join([":---"] * len(headers)) + " |"
+    body = ["| " + " | ".join(_text(cell).replace("|", "/") for cell in row) + " |" for row in rows]
+    return "\n".join([header_line, sep_line, *body])
+
+
+def _fallback_answer(question: str, evidence: dict) -> str:
+    if not any(evidence.get(key) for key in ("specs", "marketing", "competitors", "documents")):
+        models = "、".join(evidence.get("available_models", [])[:12])
+        suffix = f"\n\n当前已入库型号：{models}" if models else ""
+        return "当前知识库未覆盖这个问题所需的数据，请先在右侧上传规格、营销素材、竞品或文档后再查询。" + suffix
+
+    question_text = question.lower()
+    specs = evidence.get("specs") or []
+    if ("对比" in question_text or "compare" in question_text) and len(specs) >= 2:
+        headers = ["字段"] + [_text(row.get("model")) or f"型号{i}" for i, row in enumerate(specs, start=1)]
+        rows = []
+        for column in KEY_SPEC_COLUMNS[1:]:
+            values = [_text(row.get(column)) for row in specs]
+            if any(values):
+                rows.append([SPEC_LABELS.get(column, column), *values])
+        return "以下对比仅基于当前已上传规格表：\n\n" + _markdown_table(headers, rows[:16])
+
+    if specs:
+        row = specs[0]
+        detail_rows = [[SPEC_LABELS.get(column, column), _text(row.get(column))] for column in KEY_SPEC_COLUMNS if _text(row.get(column))]
+        answer = f"### {_text(row.get('model')) or '产品型号'} 产品卡片\n\n" + _markdown_table(["字段", "信息"], detail_rows)
+        marketing = evidence.get("marketing") or []
+        if marketing:
+            points = []
+            for item in marketing[:4]:
+                title = _text(item.get("title")) or _text(item.get("content_type")) or "卖点"
+                content = _text(item.get("content")) or _text(item.get("response"))
+                points.append(f"- **{title}**：{content}")
+            answer += "\n\n### 可用卖点/FAQ\n" + "\n".join(points)
+        competitors = evidence.get("competitors") or []
+        if competitors:
+            points = []
+            for item in competitors[:5]:
+                title = " ".join([_text(item.get("brand")), _text(item.get("feature_name")) or _text(item.get("competitor_model"))]).strip()
+                points.append(f"- **{title or '竞品资料'}**：{_format_competitor_row(item)}")
+            answer += "\n\n### 竞品卖点参考\n" + "\n".join(points)
+        return answer
+
+    lines = ["以下内容仅基于当前已上传知识库："]
+    for item in evidence.get("marketing", [])[:6]:
+        title = _text(item.get("title")) or _text(item.get("content_type")) or "营销素材"
+        content = _text(item.get("content")) or _text(item.get("response"))
+        lines.append(f"- **{title}**：{content}")
+    for item in evidence.get("documents", [])[:3]:
+        title = _text(item.get("title")) or _text(item.get("file_name")) or "文档"
+        content = _text(item.get("summary")) or _text(item.get("content"))
+        lines.append(f"- **{title}**：{content[:400]}")
+    for item in evidence.get("competitors", [])[:3]:
+        title = " ".join([_text(item.get("brand")), _text(item.get("competitor_model")) or _text(item.get("feature_name"))]).strip()
+        lines.append(f"- **竞品 {title or '资料'}**：{_format_competitor_row(item)}")
+    return "\n".join(lines)
+
+
+def _call_fridge_bedrock(question: str, history: list[dict], evidence: dict) -> str:
+    evidence_text = _evidence_to_text(evidence)
+    if not evidence_text.strip():
+        return ""
+    recent_history = "\n".join(
+        f"{item.get('role', '')}: {_text(item.get('content'))[:500]}" for item in history[-8:] if item.get("content")
+    )
+    system_prompt = """
+你是“海信产品知识 AI 助手”，服务内部产品、营销、销售和渠道团队。
+回答必须严格基于提供的证据，不得编造参数、认证、价格、竞品表现或功能。
+如果证据不足，请明确说“当前知识库未覆盖”，并说明需要补充哪类数据。
+默认用中文回答。需要对比时优先输出 Markdown 表格；需要营销材料时输出可直接给渠道使用的话术。
+""".strip()
+    user_prompt = f"""
+用户问题：
+{question}
+
+最近上下文：
+{recent_history or "无"}
+
+可用证据：
+{evidence_text}
+
+请给出专业、简洁、可执行的回答，并在涉及参数时保持与证据一致。
+""".strip()
+    client = boto3.client("bedrock-runtime", region_name=FRIDGE_BEDROCK_REGION)
+    response = client.converse(
+        modelId=FRIDGE_BEDROCK_MODEL_ID,
+        system=[{"text": system_prompt}],
+        messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+        inferenceConfig={"maxTokens": FRIDGE_BEDROCK_MAX_TOKENS, "temperature": 0.2, "topP": 0.8},
+    )
+    return response["output"]["message"]["content"][0]["text"]
+
+
+def answer_fridge_question(question: str, history: list[dict], evidence: dict) -> str:
+    try:
+        answer = _call_fridge_bedrock(question, history, evidence)
+        if answer.strip():
+            return answer.strip()
+    except Exception:
+        pass
+    return _fallback_answer(question, evidence)
+
+
+def register_fridge_routes(
+    app,
+    storage,
+    current_access_password: Callable[[], str],
+    clean_access_token: Callable[[str], str],
+    access_control_active: Callable[[], bool],
+) -> None:
+    store = FridgeKnowledgeStore(storage)
+    route_lock = threading.Lock()
+    static_dir = os.path.join(os.path.dirname(__file__), "web_frontend", "fridge")
+    if os.path.isdir(static_dir):
+        app.mount("/fridge/static", StaticFiles(directory=static_dir), name="fridge_static")
+
+    def admin_password() -> str:
+        return os.getenv("FRIDGE_ADMIN_PASSWORD", "").strip() or current_access_password()
+
+    def user_password() -> str:
+        return os.getenv("FRIDGE_USER_PASSWORD", "").strip()
+
+    def auth_enabled() -> bool:
+        return bool(admin_password() or user_password() or access_control_active())
+
+    def role_for_token(raw_token: str) -> str:
+        token = clean_access_token(raw_token)
+        admin = admin_password()
+        user = user_password()
+        if admin and hmac.compare_digest(token.encode("utf-8"), admin.encode("utf-8")):
+            return "admin"
+        if user and hmac.compare_digest(token.encode("utf-8"), user.encode("utf-8")):
+            return "user"
+        if not auth_enabled():
+            return "admin"
+        return ""
+
+    async def verify_user(request: Request, authorization: str = Header(default="")) -> str:
+        role = role_for_token(authorization)
+        if not role:
+            raise HTTPException(status_code=401, detail="冰箱助手访问密码不正确。")
+        return role
+
+    async def verify_admin(role: str = Depends(verify_user)) -> str:
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="仅管理员可执行该操作。")
+        return role
+
+    @app.get("/fridge", response_class=HTMLResponse)
+    def fridge_index():
+        path = os.path.join(static_dir, "index.html")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as handle:
+                return HTMLResponse(handle.read(), headers={"Cache-Control": "no-store, max-age=0"})
+        return HTMLResponse("<h1>海信冰箱 AI 助手</h1>", headers={"Cache-Control": "no-store, max-age=0"})
+
+    @app.get("/api/fridge/auth/status")
+    def fridge_auth_status():
+        return {"enabled": auth_enabled()}
+
+    @app.post("/api/fridge/auth/login")
+    def fridge_auth_login(req: FridgeAuthLoginRequest):
+        if not auth_enabled():
+            return {"ok": True, "role": "admin"}
+        role = role_for_token(req.password)
+        if not role:
+            raise HTTPException(status_code=401, detail="冰箱助手访问密码不正确。")
+        return {"ok": True, "role": role}
+
+    @app.get("/api/fridge/summary")
+    def fridge_summary(role: str = Depends(verify_user)):
+        return {**store.summary(), "role": role}
+
+    @app.get("/api/fridge/options")
+    def fridge_options(role: str = Depends(verify_user)):
+        return {**store.options(), "role": role}
+
+    @app.post("/api/fridge/upload/{dataset}")
+    async def fridge_upload(dataset: str, file: UploadFile = File(...), role: str = Depends(verify_admin)):
+        if dataset not in FRIDGE_DATASETS:
+            raise HTTPException(status_code=404, detail="未知数据集。")
+        data = await file.read()
+        try:
+            with route_lock:
+                meta = store.save_dataset(dataset, file.filename or f"{dataset}.xlsx", data)
+            return {"ok": True, "dataset": dataset, "meta": meta}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/fridge/sessions")
+    def fridge_sessions(role: str = Depends(verify_user)):
+        return {"sessions": store.load_sessions()}
+
+    @app.post("/api/fridge/sessions")
+    def fridge_create_session(req: FridgeSessionCreateRequest, role: str = Depends(verify_user)):
+        with route_lock:
+            session = store.create_session(req.title)
+        return session
+
+    @app.patch("/api/fridge/sessions/{session_id}")
+    def fridge_patch_session(session_id: str, req: FridgeSessionPatchRequest, role: str = Depends(verify_user)):
+        try:
+            with route_lock:
+                return store.update_session(session_id, title=req.title, favorite=req.favorite)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/fridge/sessions/{session_id}")
+    def fridge_delete_session(session_id: str, role: str = Depends(verify_user)):
+        with route_lock:
+            store.delete_session(session_id)
+        return {"ok": True}
+
+    @app.post("/api/fridge/sessions/{session_id}/messages")
+    def fridge_send_message(session_id: str, req: FridgeMessageRequest, role: str = Depends(verify_user)):
+        with route_lock:
+            sessions = store.load_sessions()
+            session = next((item for item in sessions if item.get("id") == session_id), None)
+            if not session:
+                raise HTTPException(status_code=404, detail="会话不存在。")
+            user_message = {
+                "id": uuid.uuid4().hex[:12],
+                "role": "user",
+                "content": req.message,
+                "created_at": _now_iso(),
+            }
+            history = list(session.get("messages") or [])
+            evidence = store.build_evidence(req.message, selected_model=req.model)
+            answer = answer_fridge_question(req.message, history + [user_message], evidence)
+            assistant_message = {
+                "id": uuid.uuid4().hex[:12],
+                "role": "assistant",
+                "content": answer,
+                "created_at": _now_iso(),
+                "sources": {
+                    "specs": len(evidence.get("specs") or []),
+                    "marketing": len(evidence.get("marketing") or []),
+                    "competitors": len(evidence.get("competitors") or []),
+                    "documents": len(evidence.get("documents") or []),
+                },
+            }
+            session.setdefault("messages", []).extend([user_message, assistant_message])
+            if session.get("title") in {"", "新会话"}:
+                session["title"] = req.message[:28]
+            session["updated_at"] = _now_iso()
+            store.save_sessions(sessions)
+        return {"session": session, "message": assistant_message, "evidence": assistant_message["sources"]}
+
+    @app.post("/api/fridge/feedback")
+    def fridge_feedback(req: FridgeFeedbackRequest, role: str = Depends(verify_user)):
+        with route_lock:
+            item = store.append_feedback(req.model_dump())
+        return {"ok": True, "feedback": item}

@@ -261,6 +261,23 @@ bash scripts/deploy_ecs_fargate.sh
 | `S3_BUCKET` | Environment | `video-script-creator-prod-assets` |
 | `S3_PREFIX` | Environment | `runtime` |
 | `DATABASE_URL` | Secrets Manager | `video-script-creator/prod/database:DATABASE_URL` |
+| `RAINFOREST_API_KEY` | Secrets Manager / Environment | `video-script-creator/prod/rainforest:RAINFOREST_API_KEY` |
+| `RAINFOREST_DEFAULT_AMAZON_DOMAIN` | Environment | `amazon.com` |
+| `RAINFOREST_SEARCH_TOP_N` | Environment | `8` |
+| `RAINFOREST_DISCOVERY_REQUEST_LIMIT` | Environment | `6` |
+| `RAINFOREST_MAX_PRODUCTS_PER_REFRESH` | Environment | `30` |
+| `YOUTUBE_API_KEY` | Secrets Manager / Environment | `video-script-creator/youtube-api-key` |
+| `YOUTUBE_DISCOVERY_TOP_N` | Environment | `8` |
+| `YOUTUBE_DISCOVERY_REQUEST_LIMIT` | Environment | `4` |
+| `SOCIAL_OEMBED_ACCESS_TOKEN` | Secrets Manager / Environment | `video-script-creator/social-oembed-token` |
+| `SOCIAL_REQUEST_TIMEOUT` | Environment | `15` |
+
+社媒素材 MVP 的约束：
+
+- YouTube 自动发现和刷新需要 `YOUTUBE_API_KEY`；未配置时仍可用“社媒 URL 入库”手动导入链接。
+- Instagram/Facebook oEmbed 需要 Meta access token，可通过 `SOCIAL_OEMBED_ACCESS_TOKEN` 注入；未配置时系统只保存链接和人工元数据。
+- TikTok/Pinterest/YouTube URL 入库会优先尝试 oEmbed 缩略图；失败时保留链接证据，不下载原视频。
+- 报告生成只引用已入库素材证据，不编造播放量、投放效果或未抓取字段。
 
 ECS task role 需要至少包含：
 

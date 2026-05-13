@@ -114,6 +114,57 @@
         </aside>
       </section>
 
+      <section class="card competitor-card">
+        <div class="card-head">
+          <div>
+            <h2>竞品素材调研</h2>
+            <p>支持 Amazon/Rainforest 与社媒素材入库；默认只保存链接、缩略图 URL、嵌入信息和分析结果，不保存竞品原片。</p>
+          </div>
+          <button id="loadCompetitorAssets" type="button" class="secondary">查看已入库素材</button>
+        </div>
+        <form id="competitorResearchForm" class="competitor-form">
+          <div class="field-row">
+            <label>调研品类<input id="competitorCategory" name="category" placeholder="默认使用当前产品品类" /></label>
+            <label>目标市场<select id="competitorMarket" name="target_market"><option>北美 (US/CA)</option><option>欧洲 (UK/DE/FR)</option><option>英国 (UK)</option><option>德国 (DE)</option><option>法国 (FR)</option></select></label>
+            <label>Amazon 域名<input id="competitorDomain" name="amazon_domain" placeholder="留空自动匹配，如 amazon.com" /></label>
+          </div>
+          <div class="field-row">
+            <label>竞品品牌<input id="competitorBrands" name="brands" placeholder="逗号分隔，如 Ninja, COSORI" /></label>
+            <label>关键词<input id="competitorKeywords" name="keywords" placeholder="逗号分隔，如 air fryer, product video" /></label>
+            <label>重点 ASIN<input id="competitorAsins" name="asins" placeholder="逗号或换行分隔" /></label>
+          </div>
+          <div class="field-row">
+            <label>素材来源<select id="competitorSource" name="source"><option value="">全部来源</option><option value="rainforest">Amazon / Rainforest</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="pinterest">Pinterest</option><option value="facebook">Facebook</option></select></label>
+            <label>入库检索词<input id="competitorAssetQuery" name="asset_query" placeholder="如 Ninja、SLUSHi、Reel" /></label>
+            <label>媒体类型<select id="competitorMediaType" name="media_type"><option value="">全部媒体</option><option value="video">视频</option><option value="post">社媒帖</option><option value="image">图片</option></select></label>
+          </div>
+          <label class="full-field">社媒素材 URL<textarea id="competitorSocialUrls" name="social_urls" rows="3" placeholder="粘贴 YouTube / Instagram / TikTok / Pinterest / Facebook 素材链接，多个链接可换行"></textarea></label>
+          <label>业务调研问题<textarea id="competitorQuestion" name="question" rows="3" placeholder="例如：北美空气炸锅竞品站内视频主要怎么展示快速、省油和易清洁？"></textarea></label>
+          <div class="competitor-actions">
+            <button id="importSocialUrls" type="button">导入社媒 URL</button>
+            <button id="discoverYouTube" type="button">发现 YouTube</button>
+            <button id="refreshYouTube" type="button">刷新 YouTube 入库</button>
+            <button id="refreshSocialThumbnails" type="button">刷新缩略图</button>
+            <button id="discoverRainforest" type="button">发现 ASIN</button>
+            <button id="refreshRainforest" type="button">刷新入库</button>
+            <button type="submit">生成调研报告</button>
+          </div>
+          <div id="competitorMessage" class="message"></div>
+        </form>
+        <div id="competitorDiscovery" class="competitor-discovery"></div>
+        <div id="competitorAssets" class="competitor-assets"></div>
+        <section id="competitorReportSection" class="competitor-report hidden">
+          <div class="card-head compact">
+            <div>
+              <h3>调研报告</h3>
+              <p id="competitorReportMeta"></p>
+            </div>
+          </div>
+          <div id="competitorReportBody" class="script-markdown"></div>
+          <div id="competitorEvidence" class="competitor-assets compact"></div>
+        </section>
+      </section>
+
       <section id="resultSection" class="card result-card hidden">
         <div class="card-head">
           <div>

@@ -11,6 +11,8 @@ competitor_candidates_*.json
 cache_meta.json
 script_history.json
 trial_feedback.json
+competitor_assets.json
+/fridge/
 
 # Python 缓存
 __pycache__/
