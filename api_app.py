@@ -68,29 +68,33 @@ TABLE_COLUMNS = [
 TABLE_HEADER_LINE = "| " + " | ".join(TABLE_COLUMNS) + " |"
 TABLE_SEPARATOR_LINE = "| " + " | ".join([":---"] * len(TABLE_COLUMNS)) + " |"
 SYSTEM_PROMPT = f"""##角色
-你是“海外爆款内容引擎”，为海信海外电商产品策划推广提供视频脚本生成服务。你需要基于海信的产品卖点，撰写不同类型的视频脚本，以支持导出为 Word 或 Excel 形式的 Markdown 表格输出。
+你是“海外爆款内容引擎”的资深海外短视频创意导演、社媒内容策划和可落地分镜编剧。你的任务不是平铺产品参数，而是把海信产品卖点转化为有情境、有冲突、有动作、有记忆点的海外电商短视频脚本，并保持可拍摄、可执行、可导出为 Excel 的 Markdown 表格。
 
-##限制与优化规范
-1. 时长精确控制：脚本总时长需尽量贴近用户给定的“期望视频时长(秒)”。表格的“时长”列必须给出确切秒数，并在表格最后一行增加“总时长”统计。
-2. 结构模块化与落地：采用步骤拆解式结构，逻辑务实清晰，可交给国内视频团队拍摄执行。
-3. 强调交互与对比镜头：表现手法/拍摄角度/运镜方式中要体现 UI 面板、按键特写、操作反馈和使用前后对比。
-4. 品牌 Slogan 收尾：最后一段必须是产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
-5. 语言规范：旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是纯英文；其余列必须以中文为主，便于国内制作团队执行。
-6. 产品卖点必须严格符合用户提供的信息，不可捏造。
-7. 竞品链接/竞品盖帽字段保留；没有可用竞品链接时留空，不要编造。
-8. 如需 AI 视频生成 Prompt，请放入表现手法/拍摄角度/运镜方式等中文描述字段中，以英文括号附带。
+##创意质量原则
+1. 先在内部完成创意策略，不要输出思考过程：明确目标观众、生活冲突、产品介入时刻、情绪变化、开场 hook、结尾品牌记忆点。
+2. 除非用户明确要求“纯产品展示”，每套脚本都必须围绕一个具体生活场景展开：有人物/手部互动、真实道具、时间压力或使用前后对比，而不是连续罗列产品外观。
+3. 每个核心卖点都要变成“可看见的动作”：例如食物状态变化、家庭成员反应、操作面板反馈、空间利用、清洁前后、传统方式 vs 本品方式。
+4. 微波炉、烤箱、空气炸锅等厨房电器必须优先生成可拍摄食物场景；如果用户没有给出重点，请自动选择 1-2 个最适合的场景，如忙碌早餐、放学点心、电影夜爆米花、剩饭复热、冷冻食品解冻、热饮加热、朋友来访快速出餐。
+5. 表现手法必须具体到镜头动作和画面内容：不要写“展示产品功能”这种空话，要写“孩子放下书包，母亲把披萨放入微波炉，屏幕数字跳动，切到拉丝芝士特写”这类可拍画面。
+6. 每套方案必须明显不同：开场 hook、主场景、人物关系、节奏结构至少两处不同。避免三套都只是“产品特写 + 功能展示 + 品牌收尾”。
+7. 创意可以丰富，但不得捏造产品卖点、参数、传感器、AI、变频、容量、菜单数量等事实；未出现在卖点库或用户输入中的功能不得写成确定功能。
 
-##格式要求
-必须以标准 Markdown 表格形式输出，绝对不要包裹在 ```markdown 或 ``` 代码块中。
-表格必须统一使用以下 10 列，并逐字使用该表头：
+##格式与语言硬约束
+1. 第一输出必须是标准 Markdown 表格，绝对不要包裹在 ```markdown 或 ``` 代码块中。
+2. 表格必须统一使用以下 10 列，并逐字使用该表头：
 {TABLE_HEADER_LINE}
 {TABLE_SEPARATOR_LINE}
+3. 表格最后一行必须是“总时长”统计。
+4. “旁白（英文）”和“字幕-显示卖点名及描述（英文）”两列必须是纯英文句子，不得带字段名/标签/括号前缀。
+5. 其余列必须以中文为主，便于国内制作团队执行；允许少量 UI/LED/4K 等缩写。
+6. 竞品链接/竞品盖帽字段保留；没有可用竞品链接时留空，不要编造。
+7. 品牌收尾必须是产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
 
 ##额外输出
 表格后必须追加：
 
 整体AI视频生成Prompt（English）:
-- 用一段完整英文描述整支视频的统一风格、镜头语言、光影、场景、产品露出和品牌调性。
+- 用一段完整英文描述整支视频的统一风格、镜头语言、光影、场景、人物、产品露出和品牌调性，且要与表格中的具体场景一致。
 - 必须包含：4k, cinematic lighting, shallow depth of field, smooth camera movement。
 - 必须包含品牌收尾：Hisense Designed to Ease, Crafted to Cheer.
 
@@ -107,8 +111,14 @@ BEDROCK_AWS_REGION = (
     or os.getenv("AWS_DEFAULT_REGION")
     or "us-east-1"
 )
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
-BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MODEL_FALLBACK_IDS = [
+    model_id.strip()
+    for model_id in os.getenv("BEDROCK_MODEL_FALLBACK_IDS", "eu.amazon.nova-pro-v1:0").split(",")
+    if model_id.strip() and model_id.strip() != BEDROCK_MODEL_ID
+]
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "8192"))
+BEDROCK_FALLBACK_MAX_TOKENS = int(os.getenv("BEDROCK_FALLBACK_MAX_TOKENS", "4096"))
 NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
@@ -145,6 +155,12 @@ _SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ID = (
     or os.getenv("SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_NAME")
 )
 _social_oembed_token_cache = {"value": _SOCIAL_OEMBED_ACCESS_TOKEN, "expires_at": 0.0}
+
+
+def _bedrock_max_tokens_for_model(model_id: str, requested: int) -> int:
+    if model_id == BEDROCK_MODEL_ID:
+        return requested
+    return min(requested, BEDROCK_FALLBACK_MAX_TOKENS)
 
 app = FastAPI(title="海外爆款内容引擎 API")
 
@@ -696,6 +712,9 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 {TABLE_HEADER_LINE}
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
 - 与其他方案保持明显差异：开场 hook、表现手法、镜头组织至少两处不同。
+- 先在内部确定本方案的创意策略，但不要输出策略过程：方案1偏生活痛点开场，方案2偏社媒种草/情绪反差，方案3偏快节奏功能挑战；如果只生成1-2套，也必须让每套的主场景和人物动作不同。
+- 场景优先级：厨房电器优先写真实食物与人物互动场景；冰箱/洗衣机/洗碗机等家电优先写家庭生活任务、使用前后对比、收纳/清洁/省心的可视化结果。
+- 表现手法必须落到具体画面动作，不要只写“展示功能/突出卖点/产品特写”；每行至少包含一个可拍摄动作、一个道具或环境细节。
 - 竞品链接与竞品盖帽：当前暂无可用竞品链接，请两列留空，不要编造。
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列必须以中文为主。
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
@@ -722,17 +741,25 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 
 def _call_bedrock(prompt: str, temperature=0.7, top_p=0.9) -> str:
     client = boto3.client("bedrock-runtime", region_name=BEDROCK_AWS_REGION)
-    response = client.converse(
-        modelId=BEDROCK_MODEL_ID,
-        system=[{"text": SYSTEM_PROMPT}],
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={
-            "maxTokens": BEDROCK_MAX_TOKENS,
-            "temperature": temperature,
-            "topP": top_p,
-        },
-    )
-    return response["output"]["message"]["content"][0]["text"]
+    model_ids = [BEDROCK_MODEL_ID, *BEDROCK_MODEL_FALLBACK_IDS]
+    last_error = None
+    for model_id in model_ids:
+        try:
+            response = client.converse(
+                modelId=model_id,
+                system=[{"text": SYSTEM_PROMPT}],
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={
+                    "maxTokens": _bedrock_max_tokens_for_model(model_id, BEDROCK_MAX_TOKENS),
+                    "temperature": temperature,
+                    "topP": top_p,
+                },
+            )
+            return response["output"]["message"]["content"][0]["text"]
+        except Exception as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(f"Bedrock API call failed for models {', '.join(model_ids)}: {last_error}")
 
 
 def _load_nova_reel_jobs():

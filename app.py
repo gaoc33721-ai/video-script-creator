@@ -43,8 +43,14 @@ BEDROCK_AWS_REGION = (
     or os.getenv("AWS_DEFAULT_REGION")
     or "us-east-1"
 )
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
-BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MODEL_FALLBACK_IDS = [
+    model_id.strip()
+    for model_id in os.getenv("BEDROCK_MODEL_FALLBACK_IDS", "eu.amazon.nova-pro-v1:0").split(",")
+    if model_id.strip() and model_id.strip() != BEDROCK_MODEL_ID
+]
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "8192"))
+BEDROCK_FALLBACK_MAX_TOKENS = int(os.getenv("BEDROCK_FALLBACK_MAX_TOKENS", "4096"))
 NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
@@ -56,6 +62,12 @@ APP_ACCESS_CONTROL_ENABLED = os.getenv("APP_ACCESS_CONTROL_ENABLED", "false").st
 APP_ACCESS_PASSWORD_CACHE_TTL = int(os.getenv("APP_ACCESS_PASSWORD_CACHE_TTL", "300"))
 APP_ACCESS_PASSWORD_FETCH_TIMEOUT = int(os.getenv("APP_ACCESS_PASSWORD_FETCH_TIMEOUT", "2"))
 _ACCESS_PASSWORD_CACHE = {"value": None, "expires_at": 0, "error": ""}
+
+
+def _bedrock_max_tokens_for_model(model_id: str, requested: int) -> int:
+    if model_id == BEDROCK_MODEL_ID:
+        return requested
+    return min(requested, BEDROCK_FALLBACK_MAX_TOKENS)
 
 OWN_BRAND_ALIASES = {"hisense", "海信"}
 
@@ -1983,48 +1995,42 @@ with col2:
 st.markdown("---")
 
 # 定义系统 Prompt
-SYSTEM_PROMPT = """##角色 
-你是“海外爆款内容引擎”，为海信海外电商产品策划推广提供视频脚本生成服务。你需要基于海信的产品卖点，撰写不同类型（产品展示视频、产品介绍视频、产品操作视频、产品种草视频等）的视频脚本，以支持导出为word或excel形式的Markdown表格输出。 
- 
-##限制与优化规范
-1. **时长精确控制**：脚本总时长需尽量贴近用户给定的“期望视频时长(秒)”；如用户未特别指定，建议控制在 15-45 秒。表格的“时长”列必须给出**确切的秒数**（如：5秒），并在表格最后一行增加“总时长”统计。
-2. **结构模块化与落地**：对于产品展示和操作类视频，采用“步骤拆解式”的结构分段（如：开箱检查、安装放置、功能A演示、对比实验等），逻辑务实清晰。
-3. **强调交互与对比镜头**：在“表现手法/拍摄角度/运镜方式”等字段中，必须包含**UI面板/按键的特写、操作反馈（如LED屏幕显示、滴滴声）**，并尽量设计**使用前后的对比实验镜头**（如：传统解冻 vs 微波炉解冻）以直观展示卖点。
-4. **品牌 Slogan 收尾**：脚本的最后一段（总结）必须是固定的格式：产品静置全景特写 + 海信品牌 Slogan（"Hisense Designed to Ease, Crafted to Cheer."）。
-5. **语言规范（极其重要）**：
-   - 面向海外观众的内容：**【旁白（英文）】列与【字幕-显示卖点名及描述（英文）】列必须完全使用纯英文**（或对应的海外市场语言，绝对不要写中文翻译）。
-   - 英文列严禁带字段名：以上两列的单元格内容不得包含“旁白/字幕/字段名/括号标签”等前缀（例如不要输出“【旁白（英文）】...”或“字幕：...”），必须直接输出纯英文内容。
-   - 面向国内制作团队的内容：表格中的**所有其他列**必须严格使用全中文进行描述，以便国内的拍摄和剪辑团队能无障碍阅读和执行。禁止出现整句英文；如必须出现英文术语，只能作为中文句子中的少量术语/缩写出现。
-   - 产品卖点：必须严格符合用户提供的信息，不可捏造。
-6. **竞品链接**：表格中必须包含“竞品链接”字段，至少在“总结/收尾”行填写 1-3 条可用链接（使用用户提供的链接清单，不要编造）。
-7. **竞品盖帽**：表格中必须新增“竞品盖帽”字段，用于一句话概括“本产品强于该竞品主打点的展示特点”。必须只基于本产品卖点写法，避免编造竞品参数/结论；可采用“对标点+本品优势”表达（例如：对标可视化/预设菜单/快速解冻，本品通过XX镜头更直观、更省事）。
-8. **AI Prompt**：如需 AI 视频生成 Prompt，请将其放入“表现手法/拍摄角度/运镜方式”等中文描述字段中，以括号附带英文（如：[AI Prompt: xxx]）。
-9. **整体要求**：必须遵循用户给定的“制作方式/风格/音乐/调性(色调)”整体要求，并在“表现手法/拍摄角度/运镜方式/整体AI视频生成Prompt”中体现一致的视觉与剪辑风格。
+SYSTEM_PROMPT = """##角色
+你是“海外爆款内容引擎”的资深海外短视频创意导演、社媒内容策划和可落地分镜编剧。你的任务不是平铺产品参数，而是把海信产品卖点转化为有情境、有冲突、有动作、有记忆点的海外电商短视频脚本，并保持可拍摄、可执行、可导出为 Excel 的 Markdown 表格。
 
-## 格式要求
-必须以**标准的 Markdown 表格**形式输出，**请直接输出纯文本形式的表格，绝对不要将表格包裹在 ```markdown 或 ``` 代码块中！**
-请确保每一行都用 `|` 完整闭合，表格必须统一使用以下 10 列：
+##创意质量原则
+1. 先在内部完成创意策略，不要输出思考过程：明确目标观众、生活冲突、产品介入时刻、情绪变化、开场 hook、结尾品牌记忆点。
+2. 除非用户明确要求“纯产品展示”，每套脚本都必须围绕一个具体生活场景展开：有人物/手部互动、真实道具、时间压力或使用前后对比，而不是连续罗列产品外观。
+3. 每个核心卖点都要变成“可看见的动作”：例如食物状态变化、家庭成员反应、操作面板反馈、空间利用、清洁前后、传统方式 vs 本品方式。
+4. 微波炉、烤箱、空气炸锅等厨房电器必须优先生成可拍摄食物场景；如果用户没有给出重点，请自动选择 1-2 个最适合的场景，如忙碌早餐、放学点心、电影夜爆米花、剩饭复热、冷冻食品解冻、热饮加热、朋友来访快速出餐。
+5. 表现手法必须具体到镜头动作和画面内容：不要写“展示产品功能”这种空话，要写“孩子放下书包，母亲把披萨放入微波炉，屏幕数字跳动，切到拉丝芝士特写”这类可拍画面。
+6. 每套方案必须明显不同：开场 hook、主场景、人物关系、节奏结构至少两处不同。避免三套都只是“产品特写 + 功能展示 + 品牌收尾”。
+7. 创意可以丰富，但不得捏造产品卖点、参数、传感器、AI、变频、容量、菜单数量等事实；未出现在卖点库或用户输入中的功能不得写成确定功能。
+
+##格式与语言硬约束
+1. 第一输出必须是标准 Markdown 表格，绝对不要包裹在 ```markdown 或 ``` 代码块中。
+2. 表格必须统一使用以下 10 列，并逐字使用该表头：
 | 结构分段 | 功能点 | 表现手法 | 旁白（英文） | 字幕-显示卖点名及描述（英文） | 拍摄角度 | 运镜方式 | 竞品链接 | 竞品盖帽 | 时长 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"""
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+3. 表格最后一行必须是“总时长”统计。
+4. “旁白（英文）”和“字幕-显示卖点名及描述（英文）”两列必须是纯英文句子，不得带字段名/标签/括号前缀。
+5. 其余列必须以中文为主，便于国内制作团队执行；允许少量 UI/LED/4K 等缩写。
+6. 竞品链接/竞品盖帽字段保留；没有可用竞品链接时留空，不要编造。
+7. 品牌收尾必须是产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
 
-# 在表格后追加整体 AI Prompt 的要求（不要影响表格渲染）
-SYSTEM_PROMPT += """
-
-## 额外输出（必须追加在表格之后）
-在表格输出完成后，请紧接着追加以下内容（同样不要使用 ``` 代码块）：
+##额外输出
+表格后必须追加：
 
 整体AI视频生成Prompt（English）:
-- 以一段完整英文描述输出，概括整支视频的统一风格、镜头语言、光影、场景、人物（如有）、产品露出与品牌调性，确保与表格分镜一致。
-- 必须包含一致性约束：同一产品外观保持一致（颜色/材质/外观），同一厨房/家居风格保持一致，镜头节奏为短视频节奏（15-45秒）。
-- 必须包含摄影/画面关键词：4k, cinematic lighting, shallow depth of field, smooth camera movement。
-- 必须包含“品牌收尾”要求：最后镜头为产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
-- 必须融合用户选择的整体要求：制作方式/风格/音乐/调性(色调)，并保持全片一致。
+- 用一段完整英文描述整支视频的统一风格、镜头语言、光影、场景、人物、产品露出和品牌调性，且要与表格中的具体场景一致。
+- 必须包含：4k, cinematic lighting, shallow depth of field, smooth camera movement。
+- 必须包含品牌收尾：Hisense Designed to Ease, Crafted to Cheer.
 
 Negative Prompt（English，选填）:
-- 输出一行即可，例如：no watermark, no subtitles baked into video, no extra logos, no deformed hands, no blurry frames
+- 输出一行即可。
 
 Recommended Settings（选填）:
-- 输出一行即可，例如：16:9 or 9:16, 24fps, 4-6s clips per shot, realistic style
+- 输出一行即可。
 """
 
 def generate_script_bedrock(user_prompt, temperature=0.7, top_p=0.9, max_tokens=None):
@@ -2033,22 +2039,31 @@ def generate_script_bedrock(user_prompt, temperature=0.7, top_p=0.9, max_tokens=
         import boto3
 
         client = boto3.client("bedrock-runtime", region_name=BEDROCK_AWS_REGION)
-        response = client.converse(
-            modelId=BEDROCK_MODEL_ID,
-            system=[{"text": SYSTEM_PROMPT}],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [{"text": user_prompt}],
-                }
-            ],
-            inferenceConfig={
-                "temperature": float(temperature),
-                "maxTokens": max_tokens,
-            },
-        )
-        content_blocks = response.get("output", {}).get("message", {}).get("content", [])
-        return "\n".join([block.get("text", "") for block in content_blocks if block.get("text")]).strip()
+        model_ids = [BEDROCK_MODEL_ID, *BEDROCK_MODEL_FALLBACK_IDS]
+        last_error = None
+        for model_id in model_ids:
+            try:
+                response = client.converse(
+                    modelId=model_id,
+                    system=[{"text": SYSTEM_PROMPT}],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [{"text": user_prompt}],
+                        }
+                    ],
+                    inferenceConfig={
+                        "temperature": float(temperature),
+                        "topP": float(top_p),
+                        "maxTokens": _bedrock_max_tokens_for_model(model_id, max_tokens),
+                    },
+                )
+                content_blocks = response.get("output", {}).get("message", {}).get("content", [])
+                return "\n".join([block.get("text", "") for block in content_blocks if block.get("text")]).strip()
+            except Exception as exc:
+                last_error = exc
+                continue
+        raise RuntimeError(f"Bedrock API call failed for models {', '.join(model_ids)}: {last_error}")
     except Exception as e:
         import logging as _logging
         _logging.getLogger(__name__).error("Bedrock API call failed: %s", e, exc_info=True)
@@ -2092,6 +2107,9 @@ def _build_variant_prompt(i, request, competitor_links_inline, table_header_line
 {table_header_line}
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
 - 与其他方案保持明显差异：开场hook、表现手法、镜头组织至少两处不同。
+- 先在内部确定本方案的创意策略，但不要输出策略过程：方案1偏生活痛点开场，方案2偏社媒种草/情绪反差，方案3偏快节奏功能挑战；如果只生成1-2套，也必须让每套的主场景和人物动作不同。
+- 场景优先级：厨房电器优先写真实食物与人物互动场景；冰箱/洗衣机/洗碗机等家电优先写家庭生活任务、使用前后对比、收纳/清洁/省心的可视化结果。
+- 表现手法必须落到具体画面动作，不要只写“展示功能/突出卖点/产品特写”；每行至少包含一个可拍摄动作、一个道具或环境细节。
 - 可用竞品链接与主打点（请从中选择填写到表格的“竞品链接”列，并在“竞品盖帽”列用一句话写本品在展示上的强项）：{competitor_links_inline}
 - 若可用竞品链接为“无（请留空，不要编造）”，则表格中的“竞品链接/竞品盖帽”两列必须留空。
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列（结构分段/功能点/表现手法/拍摄角度/运镜方式/竞品盖帽/时长）必须以中文为主；允许出现极少量大写缩写（如 UI/LED/4K）。
