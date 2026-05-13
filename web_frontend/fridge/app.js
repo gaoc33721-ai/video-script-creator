@@ -230,6 +230,39 @@ function activeSession() {
   return state.sessions.find((item) => item.id === state.activeSessionId) || null;
 }
 
+function friendlyErrorMessage(error) {
+  const message = String(error?.message || "请求失败");
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(message)) {
+    return "网络连接中断。请稍后重试，或点击刷新同步最新会话。";
+  }
+  return message;
+}
+
+async function reconcileSentQuestion(sessionId, question) {
+  try {
+    await loadSessions();
+    const session = state.sessions.find((item) => item.id === sessionId);
+    if (!session) return false;
+    state.activeSessionId = session.id;
+    sessionStorage.setItem("fridge_active_session", session.id);
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    let userIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const item = messages[index];
+      if (item.role === "user" && String(item.content || "").trim() === question) {
+        userIndex = index;
+        break;
+      }
+    }
+    const hasAnswer = userIndex >= 0 && messages.slice(userIndex + 1).some((item) => item.role === "assistant" && item.content);
+    if (!hasAnswer) return false;
+    setMessage("chatMessage", "网络回包中断，已从服务端同步刚生成的回答。", "ok");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function renderAll() {
   renderRole();
   renderSummary();
@@ -465,6 +498,7 @@ async function sendQuestion(text) {
   $("sendButton").disabled = true;
   setMessage("chatMessage", "");
   renderMessages();
+  let rendered = false;
   try {
     const data = await fridgeApi(`/api/fridge/sessions/${encodeURIComponent(session.id)}/messages`, {
       method: "POST",
@@ -475,13 +509,23 @@ async function sendQuestion(text) {
     sessionStorage.setItem("fridge_active_session", data.session.id);
     $("messageInput").value = "";
     renderAll();
+    rendered = true;
   } catch (error) {
-    setMessage("chatMessage", error.message, "error");
+    state.pending = null;
+    if (await reconcileSentQuestion(session.id, question)) {
+      $("messageInput").value = "";
+      renderAll();
+      rendered = true;
+    } else {
+      setMessage("chatMessage", friendlyErrorMessage(error), "error");
+    }
   } finally {
     state.pending = null;
     state.busy = false;
     $("sendButton").disabled = false;
-    renderMessages();
+    if (!rendered) {
+      renderMessages();
+    }
   }
 }
 

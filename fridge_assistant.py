@@ -13,7 +13,7 @@ from typing import Callable
 import boto3
 import pandas as pd
 from fastapi import Depends, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,8 @@ FRIDGE_BEDROCK_REGION = (
     or "us-east-1"
 )
 FRIDGE_BEDROCK_MAX_TOKENS = int(os.getenv("FRIDGE_BEDROCK_MAX_TOKENS", "2048"))
+FRIDGE_CANONICAL_HOST = os.getenv("FRIDGE_CANONICAL_HOST", "videoscript.hisense.com").strip().lower()
+FRIDGE_CANONICAL_SCHEME = os.getenv("FRIDGE_CANONICAL_SCHEME", "https").strip() or "https"
 
 
 SPEC_ALIASES = {
@@ -983,6 +985,15 @@ def register_fridge_routes(
     if os.path.isdir(static_dir):
         app.mount("/fridge/static", StaticFiles(directory=static_dir), name="fridge_static")
 
+    def canonical_redirect_url(request: Request) -> str:
+        if not FRIDGE_CANONICAL_HOST:
+            return ""
+        host = str(request.headers.get("host") or request.url.hostname or "").split(":")[0].lower()
+        if not host or host == FRIDGE_CANONICAL_HOST or not host.endswith(".elb.amazonaws.com"):
+            return ""
+        query = f"?{request.url.query}" if request.url.query else ""
+        return f"{FRIDGE_CANONICAL_SCHEME}://{FRIDGE_CANONICAL_HOST}{request.url.path}{query}"
+
     def admin_password() -> str:
         return os.getenv("FRIDGE_ADMIN_PASSWORD", "").strip() or current_access_password()
 
@@ -1016,7 +1027,10 @@ def register_fridge_routes(
         return role
 
     @app.get("/fridge", response_class=HTMLResponse)
-    def fridge_index():
+    def fridge_index(request: Request):
+        redirect_url = canonical_redirect_url(request)
+        if redirect_url:
+            return RedirectResponse(redirect_url, status_code=307)
         path = os.path.join(static_dir, "index.html")
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as handle:
