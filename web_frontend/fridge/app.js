@@ -518,6 +518,7 @@ async function sendQuestion(text) {
     state.activeSessionId = data.session.id;
     sessionStorage.setItem("fridge_active_session", data.session.id);
     $("messageInput").value = "";
+    state.pending = null;
     renderAll();
     rendered = true;
   } catch (error) {

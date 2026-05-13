@@ -23,6 +23,7 @@
 html,
 body {
   height: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -415,7 +416,8 @@ label {
 
 .message-list {
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: grid;
   align-content: start;
   gap: 14px;
@@ -424,6 +426,8 @@ label {
 
 .chat-message {
   width: min(820px, 92%);
+  max-width: 100%;
+  min-width: 0;
   display: grid;
   gap: 8px;
 }
@@ -437,12 +441,15 @@ label {
 }
 
 .message-bubble {
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 12px 14px;
   background: var(--surface-alt);
   line-height: 1.65;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-message.user .message-bubble {
@@ -459,6 +466,16 @@ label {
 
 .message-body p {
   margin: 0 0 10px;
+}
+
+.message-body,
+.message-body p,
+.message-body li,
+.message-body h3,
+.message-body strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-body p:last-child {
@@ -478,26 +495,29 @@ label {
 
 .table-wrap {
   max-width: 100%;
-  overflow-x: auto;
+  overflow-x: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
 }
 
 table {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 13px;
 }
 
 th,
 td {
-  max-width: 260px;
+  max-width: none;
   padding: 9px 10px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 th {
