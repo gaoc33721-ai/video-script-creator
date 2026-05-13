@@ -59,12 +59,10 @@ TABLE_COLUMNS = [
     "表现手法",
     "旁白（英文）",
     "字幕-显示卖点名及描述（英文）",
-    "特色效果",
     "拍摄角度",
     "运镜方式",
     "竞品链接",
     "竞品盖帽",
-    "音效",
     "时长",
 ]
 TABLE_HEADER_LINE = "| " + " | ".join(TABLE_COLUMNS) + " |"
@@ -80,11 +78,11 @@ SYSTEM_PROMPT = f"""##角色
 5. 语言规范：旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是纯英文；其余列必须以中文为主，便于国内制作团队执行。
 6. 产品卖点必须严格符合用户提供的信息，不可捏造。
 7. 竞品链接/竞品盖帽字段保留；没有可用竞品链接时留空，不要编造。
-8. 如需 AI 视频生成 Prompt，请放入表现手法/特色效果/运镜方式等中文描述字段中，以英文括号附带。
+8. 如需 AI 视频生成 Prompt，请放入表现手法/拍摄角度/运镜方式等中文描述字段中，以英文括号附带。
 
 ##格式要求
 必须以标准 Markdown 表格形式输出，绝对不要包裹在 ```markdown 或 ``` 代码块中。
-表格必须统一使用以下 12 列，并逐字使用该表头：
+表格必须统一使用以下 10 列，并逐字使用该表头：
 {TABLE_HEADER_LINE}
 {TABLE_SEPARATOR_LINE}
 
@@ -693,7 +691,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
     variant_no = variant_index + 1
     return f"""
 请生成【方案{variant_no}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
-- 必须先输出一张符合系统要求的 Markdown 表格（12列，行内时长为秒，最后一行为总时长）。
+- 必须先输出一张符合系统要求的 Markdown 表格（10列，行内时长为秒，最后一行为总时长）。
 - 表格必须包含并使用如下表头（逐字一致）：
 {TABLE_HEADER_LINE}
 - 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
@@ -1236,7 +1234,7 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 {TABLE_HEADER_LINE}
 2. 第二行必须逐字等于：
 {TABLE_SEPARATOR_LINE}
-3. 后续每一行都必须有且只有 12 个字段，字段顺序不得变更、不得新增、不得删除。
+3. 后续每一行都必须有且只有 10 个字段，字段顺序不得变更、不得新增、不得删除。
 4. 字段必须保持为：{", ".join(TABLE_COLUMNS)}
 5. 最后一行必须是“总时长”统计。
 6. 只输出表格和表格后的“整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings”，不要输出解释。

@@ -901,23 +901,21 @@ function renderStoryboardCards(content) {
       const method = row[2] || "";
       const voiceover = row[3] || "";
       const subtitle = row[4] || "";
-      const effect = row[5] || "";
-      const angle = row[6] || "";
-      const movement = row[7] || "";
-      const sound = row[10] || "";
-      const duration = row[11] || "";
+      const hasLegacyEffectColumns = row.length >= 12;
+      const angle = row[hasLegacyEffectColumns ? 6 : 5] || "";
+      const movement = row[hasLegacyEffectColumns ? 7 : 6] || "";
+      const duration = row[hasLegacyEffectColumns ? 11 : 9] || "";
       const prompt = buildStoryboardImagePrompt({
         category: productCategory,
         model: productModel,
         segment,
         feature,
         method,
-        effect,
         angle,
         movement,
         subtitle,
       });
-      state.storyboardShots.push({ segment, feature, method, effect, angle, movement, subtitle, prompt });
+      state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, prompt });
       const isGenerating = state.canvasGenerating.has(index);
       return `
         <article class="storyboard-card">
@@ -931,7 +929,6 @@ function renderStoryboardCards(content) {
             <div><dt>画面表现</dt><dd>${escapeHtml(method || "按脚本场景执行")}</dd></div>
             <div><dt>拍摄方式</dt><dd>${escapeHtml([angle, movement].filter(Boolean).join(" / ") || "稳定镜头")}</dd></div>
             <div><dt>旁白/字幕</dt><dd>${escapeHtml([voiceover, subtitle].filter(Boolean).join(" / "))}</dd></div>
-            <div><dt>效果/音效</dt><dd>${escapeHtml([effect, sound].filter(Boolean).join(" / ") || "自然产品展示")}</dd></div>
           </dl>
           <div class="storyboard-actions">
             <button class="storyboard-generate" type="button" data-shot-index="${index}" ${isGenerating ? "disabled" : ""}>
@@ -1117,7 +1114,7 @@ function parseFirstMarkdownTable(markdown) {
     .map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()));
 }
 
-function buildStoryboardImagePrompt({ category, model, segment, feature, method, effect, angle, movement, subtitle }) {
+function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
   return [
     "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
     "Follow the storyboard exactly; do not invent another product category, room, or action.",
@@ -1128,7 +1125,6 @@ function buildStoryboardImagePrompt({ category, model, segment, feature, method,
     method ? `Visual action: ${method}.` : "",
     angle ? `Camera angle: ${angle}.` : "",
     movement ? `Camera movement: ${movement}.` : "",
-    effect ? `Visual mood and effect: ${effect}.` : "",
     subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
     "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
   ]
