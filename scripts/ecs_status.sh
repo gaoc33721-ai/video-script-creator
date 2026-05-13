@@ -16,6 +16,7 @@ else
   DEFAULT_HEALTH_CHECK_PATH="/_stcore/health"
 fi
 HEALTH_CHECK_PATH="${HEALTH_CHECK_PATH:-$DEFAULT_HEALTH_CHECK_PATH}"
+PUBLIC_APP_URL="${PUBLIC_APP_URL:-https://videoscript.hisense.com}"
 
 export AWS_PAGER=""
 
@@ -34,7 +35,7 @@ aws ecs describe-services \
 
 echo
 echo "Health check:"
-curl -fsS "http://${ALB_DNS}${HEALTH_CHECK_PATH}" || true
+curl -fsS "${PUBLIC_APP_URL%/}${HEALTH_CHECK_PATH}" || true
 echo
 
 echo
@@ -44,4 +45,5 @@ aws logs tail "$LOG_GROUP" \
   --since "$SINCE"
 
 echo
-echo "Open: http://${ALB_DNS}"
+echo "Open: ${PUBLIC_APP_URL}"
+echo "ALB: http://${ALB_DNS}"
