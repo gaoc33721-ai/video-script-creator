@@ -1,5 +1,6 @@
 import base64
 import datetime as dt
+import hashlib
 import hmac
 import io
 import json
@@ -9,7 +10,9 @@ import re
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 
 import boto3
 import pandas as pd
@@ -43,6 +46,9 @@ from storage_adapters import RuntimeStorage
 
 APP_DATA_DIR = os.getenv("APP_DATA_DIR", ".")
 os.makedirs(APP_DATA_DIR, exist_ok=True)
+APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip().strip("/")
+if APP_BASE_PATH == "/":
+    APP_BASE_PATH = ""
 
 STORAGE = RuntimeStorage()
 PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
@@ -52,7 +58,12 @@ HTTP_JOBS_KEY = "http_script_jobs.json"
 NOVA_REEL_JOBS_KEY = "nova_reel_poc_jobs.json"
 NOVA_CANVAS_JOBS_KEY = "nova_canvas_storyboard_jobs.json"
 COMPETITOR_ASSETS_KEY = "competitor_assets.json"
+SEED_COMPETITOR_ASSETS_KEY = "seed_competitor_assets.json"
 COMPETITOR_RESEARCH_JOBS_KEY = "competitor_research_jobs.json"
+HOTSPOTS_KEY = "hotspots.json"
+HOTSPOT_SOURCES_KEY = "hotspot_sources.json"
+COMPETITOR_CONFIGS_KEY = "competitor_configs.json"
+COMPETITOR_COLLECTION_RUNS_KEY = "competitor_collection_runs.json"
 TABLE_COLUMNS = [
     "结构分段",
     "功能点",
@@ -164,6 +175,17 @@ def _bedrock_max_tokens_for_model(model_id: str, requested: int) -> int:
     return min(requested, BEDROCK_FALLBACK_MAX_TOKENS)
 
 app = FastAPI(title="海外爆款内容引擎 API")
+
+
+@app.middleware("http")
+async def _app_base_path_middleware(request: Request, call_next):
+    if APP_BASE_PATH:
+        path = request.scope.get("path") or ""
+        if path == APP_BASE_PATH:
+            request.scope["path"] = "/"
+        elif path.startswith(f"{APP_BASE_PATH}/"):
+            request.scope["path"] = path[len(APP_BASE_PATH):] or "/"
+    return await call_next(request)
 
 # --- Security: CORS ---
 _allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
@@ -318,6 +340,8 @@ competitor_lock = threading.Lock()
 
 static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
 if os.path.isdir(static_dir):
+    if APP_BASE_PATH:
+        app.mount(f"{APP_BASE_PATH}/static", StaticFiles(directory=static_dir), name="static_prefixed")
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 register_fridge_routes(app, STORAGE, _current_access_password, _clean_access_token, _access_control_active)
@@ -337,6 +361,10 @@ class GenerateRequest(BaseModel):
     target_audience: str = ""
     pain_points: str = ""
     custom_requirements: str = ""
+    use_competitor_context: bool = True
+    use_hotspot_context: bool = True
+    competitor_asset_ids: list[str] = Field(default_factory=list, max_length=20)
+    hotspot_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class AuthLoginRequest(BaseModel):
@@ -428,6 +456,112 @@ class SocialThumbnailRefreshRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=200)
 
 
+class CompetitorAssetPatchRequest(BaseModel):
+    review_status: str | None = None
+    rights_status: str | None = None
+    ai_tags: list[str] | None = None
+    ai_analysis: str | None = None
+    category: str | None = None
+    brand: str | None = None
+    quality_score: int | None = Field(default=None, ge=0, le=100)
+
+
+class CompetitorBulkReviewRequest(BaseModel):
+    asset_ids: list[str] = Field(default_factory=list, min_length=1, max_length=200)
+    review_status: str = Field(pattern="^(auto_collected|approved|featured|rejected|needs_review)$")
+
+
+class HotspotRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+    source_type: str = "manual"
+    source_name: str = "人工录入"
+    source_url: str = ""
+    category: str = ""
+    target_market: str = ""
+    platform: str = ""
+    heat_score: int = Field(default=50, ge=0, le=100)
+    valid_from: str = ""
+    valid_to: str = ""
+    status: str = "active"
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    notes: str = ""
+
+
+class HotspotPatchRequest(BaseModel):
+    title: str | None = None
+    source_type: str | None = None
+    source_name: str | None = None
+    source_url: str | None = None
+    category: str | None = None
+    target_market: str | None = None
+    platform: str | None = None
+    heat_score: int | None = Field(default=None, ge=0, le=100)
+    valid_from: str | None = None
+    valid_to: str | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+    notes: str | None = None
+
+
+class HotspotRefreshRequest(BaseModel):
+    category: str = ""
+    target_market: str = "北美 (US/CA)"
+    platform: str = ""
+    source_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class HotspotSourceRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    source_type: str = Field(pattern="^(google_trends_rss|ecommerce_calendar|rss|manual)$")
+    url: str = ""
+    target_market: str = ""
+    category: str = ""
+    platform: str = ""
+    enabled: bool = True
+    keywords: list[str] = Field(default_factory=list, max_length=40)
+
+
+class HotspotSourcePatchRequest(BaseModel):
+    name: str | None = None
+    source_type: str | None = None
+    url: str | None = None
+    target_market: str | None = None
+    category: str | None = None
+    platform: str | None = None
+    enabled: bool | None = None
+    keywords: list[str] | None = None
+
+
+class CompetitorConfigRequest(BaseModel):
+    category: str = Field(min_length=1, max_length=120)
+    brands: list[str] = Field(default_factory=list, max_length=80)
+    keywords: list[str] = Field(default_factory=list, max_length=80)
+    platforms: list[str] = Field(default_factory=list, max_length=20)
+    target_market: str = ""
+    refresh_frequency: str = "manual"
+    notes: str = ""
+
+
+class CompetitorConfigPatchRequest(BaseModel):
+    brands: list[str] | None = None
+    keywords: list[str] | None = None
+    platforms: list[str] | None = None
+    target_market: str | None = None
+    refresh_frequency: str | None = None
+    notes: str | None = None
+
+
+class CompetitorCollectionRunRequest(BaseModel):
+    category: str = ""
+    target_market: str = "北美 (US/CA)"
+    platform: str = ""
+    source: str = ""
+    brands: list[str] = Field(default_factory=list, max_length=80)
+    keywords: list[str] = Field(default_factory=list, max_length=80)
+    status: str = "queued"
+    error_message: str = ""
+
+
 def _read_json(key, default_value):
     return STORAGE.read_json(key, default_value)
 
@@ -449,14 +583,130 @@ def _save_jobs(jobs):
     return _write_json(HTTP_JOBS_KEY, jobs[:100])
 
 
+def _utc_now() -> str:
+    return dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _stable_id(prefix: str, *parts: str) -> str:
+    raw = "|".join(str(part or "").strip().lower() for part in parts)
+    return f"{prefix}:{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _parse_date(value: str | None) -> dt.date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return dt.datetime.fromisoformat(text).date()
+    except Exception:
+        pass
+    try:
+        return dt.date.fromisoformat(text[:10])
+    except Exception:
+        return None
+
+
+def _parse_datetime(value: str | None) -> dt.datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+        if parsed.tzinfo:
+            parsed = parsed.astimezone(dt.timezone.utc).replace(tzinfo=None)
+        return parsed
+    except Exception:
+        try:
+            day = dt.date.fromisoformat(text[:10])
+            return dt.datetime.combine(day, dt.time.min)
+        except Exception:
+            return None
+
+
+def _clean_list(values, limit=50):
+    result = []
+    for value in values or []:
+        clean = str(value or "").strip()
+        if clean and clean not in result:
+            result.append(clean)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _load_seed_competitor_assets():
+    path = os.path.join(os.path.dirname(__file__), SEED_COMPETITOR_ASSETS_KEY)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
 def _load_competitor_assets():
     data = _read_json(COMPETITOR_ASSETS_KEY, [])
-    return data if isinstance(data, list) else []
+    stored_assets = data if isinstance(data, list) else []
+    by_id = {}
+    for item in _load_seed_competitor_assets():
+        if isinstance(item, dict) and item.get("id"):
+            by_id[str(item["id"])] = item
+    for item in stored_assets:
+        if isinstance(item, dict) and item.get("id"):
+            by_id[str(item["id"])] = item
+    return list(by_id.values())
+
+
+def _asset_media_types(asset: dict) -> set[str]:
+    media_types = {
+        str(item.get("media_type") or "").strip().lower()
+        for item in (asset.get("media") or [])
+        if isinstance(item, dict) and item.get("media_type")
+    }
+    source_url = str(asset.get("source_url") or asset.get("canonical_url") or "").lower()
+    image_url = str(asset.get("image_url") or "").lower()
+    if source_url.endswith(".gif") or image_url.endswith(".gif"):
+        media_types.add("gif")
+    return {item for item in media_types if item}
+
+
+def _ensure_asset_admin_defaults(asset: dict) -> dict:
+    item = dict(asset or {})
+    now = _utc_now()
+    item["rights_status"] = item.get("rights_status") or "link_only_no_raw_video"
+    item["review_status"] = item.get("review_status") or "auto_collected"
+    item["quality_score"] = int(item.get("quality_score") or 0)
+    item["created_at"] = item.get("created_at") or now
+    item["updated_at"] = item.get("updated_at") or now
+    item["collected_at"] = item.get("collected_at") or now
+    item["ai_tags"] = _clean_list(item.get("ai_tags") or [], limit=30)
+
+    source_url = str(item.get("source_url") or item.get("canonical_url") or "").lower()
+    if source_url.endswith(".gif") and "动图素材" not in item["ai_tags"]:
+        item["ai_tags"].append("动图素材")
+    media = []
+    for media_item in item.get("media", []) or []:
+        if not isinstance(media_item, dict):
+            continue
+        next_item = dict(media_item)
+        media_url = str(next_item.get("media_url") or next_item.get("thumbnail_url") or "").lower()
+        if media_url.endswith(".gif"):
+            next_item["media_type"] = "gif"
+        next_item["rights_status"] = next_item.get("rights_status") or item["rights_status"]
+        media.append(next_item)
+    item["media"] = media
+    return item
 
 
 def _save_competitor_assets(assets):
     sorted_assets = sorted(
-        [item for item in assets if isinstance(item, dict)],
+        [_ensure_asset_admin_defaults(item) for item in assets if isinstance(item, dict)],
         key=lambda item: str(item.get("collected_at") or item.get("updated_at") or ""),
         reverse=True,
     )
@@ -475,7 +725,7 @@ def _upsert_competitor_assets(new_assets):
             if not asset_id:
                 continue
             existing = by_id.get(asset_id, {})
-            merged = {**existing, **asset}
+            merged = _ensure_asset_admin_defaults({**existing, **asset})
             merged["updated_at"] = now
             if "created_at" not in merged:
                 merged["created_at"] = existing.get("created_at") or now
@@ -495,6 +745,113 @@ def _load_competitor_research_jobs():
 
 def _save_competitor_research_jobs(jobs):
     return _write_json(COMPETITOR_RESEARCH_JOBS_KEY, jobs[:200])
+
+
+def _load_hotspots():
+    data = _read_json(HOTSPOTS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_hotspots(hotspots):
+    normalized = [_normalize_hotspot(item) for item in hotspots if isinstance(item, dict)]
+    normalized.sort(
+        key=lambda item: (
+            int(item.get("heat_score") or 0),
+            str(item.get("updated_at") or item.get("created_at") or ""),
+        ),
+        reverse=True,
+    )
+    return _write_json(HOTSPOTS_KEY, normalized[:3000])
+
+
+def _default_hotspot_sources():
+    return [
+        {
+            "id": "google-trends-us",
+            "name": "Google Trends 北美",
+            "source_type": "google_trends_rss",
+            "url": "",
+            "target_market": "北美 (US/CA)",
+            "category": "",
+            "platform": "",
+            "enabled": True,
+            "keywords": [],
+            "created_at": _utc_now(),
+            "updated_at": _utc_now(),
+        },
+        {
+            "id": "ecommerce-calendar",
+            "name": "电商节日节点",
+            "source_type": "ecommerce_calendar",
+            "url": "",
+            "target_market": "",
+            "category": "",
+            "platform": "",
+            "enabled": True,
+            "keywords": [],
+            "created_at": _utc_now(),
+            "updated_at": _utc_now(),
+        },
+    ]
+
+
+def _load_hotspot_sources():
+    data = _read_json(HOTSPOT_SOURCES_KEY, [])
+    if not isinstance(data, list):
+        return _default_hotspot_sources()
+    if not data and not STORAGE.exists(HOTSPOT_SOURCES_KEY):
+        return _default_hotspot_sources()
+    return data
+
+
+def _save_hotspot_sources(sources):
+    cleaned = []
+    now = _utc_now()
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        item = dict(source)
+        item["id"] = str(item.get("id") or _stable_id("hotspot-source", item.get("source_type", ""), item.get("name", ""), item.get("url", "")))
+        item["name"] = str(item.get("name") or item.get("source_type") or "热点源").strip()
+        item["source_type"] = str(item.get("source_type") or "manual").strip()
+        item["enabled"] = bool(item.get("enabled", True))
+        item["keywords"] = _clean_list(item.get("keywords") or [], limit=40)
+        item["created_at"] = item.get("created_at") or now
+        item["updated_at"] = item.get("updated_at") or now
+        cleaned.append(item)
+    return _write_json(HOTSPOT_SOURCES_KEY, cleaned[:200])
+
+
+def _load_competitor_configs():
+    data = _read_json(COMPETITOR_CONFIGS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_competitor_configs(configs):
+    now = _utc_now()
+    cleaned = []
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        item = dict(config)
+        item["id"] = str(item.get("id") or _stable_id("competitor-config", item.get("category", "")))
+        item["brands"] = _clean_list(item.get("brands") or [], limit=80)
+        item["keywords"] = _clean_list(item.get("keywords") or [], limit=80)
+        item["platforms"] = _clean_list(item.get("platforms") or [], limit=20)
+        item["updated_at"] = item.get("updated_at") or now
+        cleaned.append(item)
+    return _write_json(COMPETITOR_CONFIGS_KEY, cleaned[:500])
+
+
+def _load_collection_runs():
+    data = _read_json(COMPETITOR_COLLECTION_RUNS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_collection_runs(runs):
+    cleaned = [dict(item) for item in runs if isinstance(item, dict)]
+    cleaned.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return _write_json(COMPETITOR_COLLECTION_RUNS_KEY, cleaned[:500])
 
 
 def _update_competitor_research_job(job_id, **fields):
@@ -562,6 +919,13 @@ def _search_competitor_assets(
     platform: str = "",
     source: str = "",
     media_type: str = "",
+    review_status: str = "",
+    rights_status: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    min_quality: int = 0,
+    sort: str = "quality_desc",
+    offset: int = 0,
     limit: int = 20,
 ):
     q_lower = str(q or "").strip().lower()
@@ -570,8 +934,14 @@ def _search_competitor_assets(
     platform_lower = str(platform or "").strip().lower()
     source_lower = str(source or "").strip().lower()
     media_type_lower = str(media_type or "").strip().lower()
+    review_lower = str(review_status or "").strip().lower()
+    rights_lower = str(rights_status or "").strip().lower()
+    date_from_value = _parse_datetime(date_from)
+    date_to_value = _parse_datetime(date_to)
+    min_quality_value = max(0, int(min_quality or 0))
     matched = []
     for asset in _load_competitor_assets():
+        asset = _ensure_asset_admin_defaults(asset)
         search_text = _competitor_asset_search_text(asset)
         if q_lower and q_lower not in search_text:
             continue
@@ -584,17 +954,393 @@ def _search_competitor_assets(
         if source_lower and source_lower not in str(asset.get("source_type") or "").lower():
             continue
         if media_type_lower:
-            if not any(str(item.get("media_type") or "").lower() == media_type_lower for item in asset.get("media", []) or []):
+            if media_type_lower not in _asset_media_types(asset):
                 continue
+        if review_lower and review_lower != str(asset.get("review_status") or "").lower():
+            continue
+        if rights_lower and rights_lower != str(asset.get("rights_status") or "").lower():
+            continue
+        if min_quality_value and int(asset.get("quality_score") or 0) < min_quality_value:
+            continue
+        asset_time = _parse_datetime(asset.get("collected_at") or asset.get("updated_at") or asset.get("created_at"))
+        if date_from_value and asset_time and asset_time < date_from_value:
+            continue
+        if date_to_value and asset_time and asset_time > date_to_value + dt.timedelta(days=1):
+            continue
         matched.append(asset)
+    if sort == "updated_asc":
+        matched.sort(key=lambda item: str(item.get("updated_at") or item.get("collected_at") or ""))
+    elif sort == "quality_asc":
+        matched.sort(key=lambda item: int(item.get("quality_score") or 0))
+    elif sort == "created_desc":
+        matched.sort(key=lambda item: str(item.get("created_at") or item.get("collected_at") or ""), reverse=True)
+    else:
+        matched.sort(
+            key=lambda item: (
+                int(item.get("quality_score") or 0),
+                str(item.get("collected_at") or item.get("updated_at") or ""),
+            ),
+            reverse=True,
+        )
+    total = len(matched)
+    start = max(0, int(offset or 0))
+    end = start + max(1, int(limit or 20))
+    return matched[start:end], total
+
+
+def _normalize_hotspot(payload: dict) -> dict:
+    now = _utc_now()
+    item = dict(payload or {})
+    title = str(item.get("title") or "").strip()
+    source_type = str(item.get("source_type") or "manual").strip()
+    source_name = str(item.get("source_name") or item.get("source") or source_type).strip()
+    item["id"] = str(
+        item.get("id")
+        or _stable_id(
+            "hotspot",
+            source_type,
+            source_name,
+            title,
+            item.get("target_market", ""),
+            item.get("category", ""),
+            item.get("platform", ""),
+        )
+    )
+    item["title"] = title
+    item["source_type"] = source_type
+    item["source_name"] = source_name
+    item["source_url"] = str(item.get("source_url") or "").strip()
+    item["category"] = str(item.get("category") or "").strip()
+    item["target_market"] = str(item.get("target_market") or "").strip()
+    item["platform"] = str(item.get("platform") or "").strip()
+    item["heat_score"] = max(0, min(100, int(item.get("heat_score") or 0)))
+    item["valid_from"] = str(item.get("valid_from") or dt.date.today().isoformat())[:10]
+    item["valid_to"] = str(item.get("valid_to") or (dt.date.today() + dt.timedelta(days=45)).isoformat())[:10]
+    item["status"] = str(item.get("status") or "active").strip()
+    item["tags"] = _clean_list(item.get("tags") or [], limit=20)
+    item["notes"] = str(item.get("notes") or "").strip()
+    item["created_at"] = item.get("created_at") or now
+    item["updated_at"] = item.get("updated_at") or now
+    return item
+
+
+def _hotspot_matches(item: dict, *, q: str = "", category: str = "", target_market: str = "", platform: str = "", status: str = "", active_only: bool = False) -> bool:
+    text = " ".join(
+        [
+            str(item.get("title") or ""),
+            str(item.get("source_name") or ""),
+            str(item.get("source_type") or ""),
+            str(item.get("notes") or ""),
+            " ".join(item.get("tags") or []),
+        ]
+    ).lower()
+    q_lower = str(q or "").strip().lower()
+    if q_lower and q_lower not in text:
+        return False
+    if category:
+        category_lower = category.lower()
+        if category_lower not in str(item.get("category") or "").lower() and category_lower not in text:
+            return False
+    if target_market:
+        market_lower = target_market.lower()
+        item_market = str(item.get("target_market") or "").lower()
+        if item_market and market_lower not in item_market and item_market not in market_lower:
+            return False
+    if platform:
+        platform_lower = platform.lower()
+        item_platform = str(item.get("platform") or "").lower()
+        if item_platform and platform_lower not in item_platform and item_platform not in platform_lower:
+            return False
+    if status and str(item.get("status") or "").lower() != status.lower():
+        return False
+    if active_only:
+        today = dt.date.today()
+        valid_from = _parse_date(item.get("valid_from")) or today
+        valid_to = _parse_date(item.get("valid_to")) or today
+        if str(item.get("status") or "") != "active" or valid_from > today or valid_to < today:
+            return False
+    return True
+
+
+def _search_hotspots(
+    *,
+    q: str = "",
+    category: str = "",
+    target_market: str = "",
+    platform: str = "",
+    source_type: str = "",
+    status: str = "",
+    active_only: bool = False,
+    offset: int = 0,
+    limit: int = 50,
+):
+    matched = []
+    source_lower = str(source_type or "").strip().lower()
+    for item in _load_hotspots():
+        hotspot = _normalize_hotspot(item)
+        if source_lower and source_lower != str(hotspot.get("source_type") or "").lower():
+            continue
+        if not _hotspot_matches(
+            hotspot,
+            q=q,
+            category=category,
+            target_market=target_market,
+            platform=platform,
+            status=status,
+            active_only=active_only,
+        ):
+            continue
+        matched.append(hotspot)
     matched.sort(
         key=lambda item: (
-            int(item.get("quality_score") or 0),
-            str(item.get("collected_at") or item.get("updated_at") or ""),
+            str(item.get("status") or "") == "active",
+            int(item.get("heat_score") or 0),
+            str(item.get("updated_at") or ""),
         ),
         reverse=True,
     )
-    return matched[: max(1, int(limit or 20))]
+    total = len(matched)
+    start = max(0, int(offset or 0))
+    end = start + max(1, int(limit or 50))
+    return matched[start:end], total
+
+
+def _market_key(target_market: str) -> str:
+    text = str(target_market or "").lower()
+    if "北美" in text or "us" in text or "ca" in text:
+        return "NA"
+    if "欧洲" in text or "uk" in text or "de" in text or "fr" in text:
+        return "EU"
+    if "东南亚" in text or "sea" in text or "sg" in text:
+        return "SEA"
+    return "OTHER"
+
+
+def _google_trends_geo(target_market: str) -> str:
+    key = _market_key(target_market)
+    if key == "EU":
+        return "GB"
+    if key == "SEA":
+        return "SG"
+    return "US"
+
+
+def _nth_weekday_of_month(year: int, month: int, weekday: int, n: int) -> dt.date:
+    first = dt.date(year, month, 1)
+    shift = (weekday - first.weekday()) % 7
+    return dt.date(year, month, 1 + shift + (n - 1) * 7)
+
+
+def _calendar_nodes(target_market: str, from_date: dt.date | None = None, limit: int = 12):
+    current = from_date or dt.date.today()
+    year = current.year
+    market = _market_key(target_market)
+    candidates = [
+        ("New Year", dt.date(year, 1, 1), ["节日节点", "全年营销"]),
+        ("Valentine's Day", dt.date(year, 2, 14), ["节日节点", "礼赠场景"]),
+        ("Back to School", dt.date(year, 8, 15), ["开学季", "家庭场景"]),
+        ("Halloween", dt.date(year, 10, 31), ["节日节点", "派对场景"]),
+        ("Singles' Day (11.11)", dt.date(year, 11, 11), ["大促节点", "电商节日"]),
+        ("Double 12 (12.12)", dt.date(year, 12, 12), ["大促节点", "电商节日"]),
+        ("Christmas", dt.date(year, 12, 25), ["节日节点", "家庭聚会"]),
+    ]
+    if market in {"NA", "EU"}:
+        black_friday = _nth_weekday_of_month(year, 11, 3, 4)
+        candidates.extend(
+            [
+                ("Black Friday", black_friday, ["大促节点", "折扣季"]),
+                ("Cyber Monday", black_friday + dt.timedelta(days=3), ["大促节点", "线上购物"]),
+            ]
+        )
+    if market == "NA":
+        candidates.extend(
+            [
+                ("Mother's Day (US)", _nth_weekday_of_month(year, 5, 6, 2), ["节日节点", "礼赠场景"]),
+                ("Father's Day (US)", _nth_weekday_of_month(year, 6, 6, 3), ["节日节点", "家庭场景"]),
+            ]
+        )
+    if market == "EU":
+        candidates.append(("Boxing Day (UK)", dt.date(year, 12, 26), ["大促节点", "英国市场"]))
+    future = [(name, day, tags) for name, day, tags in candidates if day >= current]
+    if not future:
+        return _calendar_nodes(target_market, dt.date(year + 1, 1, 1), limit=limit)
+    future.sort(key=lambda item: item[1])
+    return future[:limit]
+
+
+def _rss_items(url: str, timeout: int = 10):
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/rss+xml, application/xml, text/xml", "User-Agent": "video-script-hotspot-admin/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = response.read()
+    parser = ET.XMLParser()
+    parser.entity = {}
+    root = ET.fromstring(data, parser=parser)
+    return root.findall(".//item")
+
+
+def _fetch_google_trends_hotspots(source: dict, *, category: str = "", target_market: str = "", platform: str = ""):
+    market = target_market or source.get("target_market") or "北美 (US/CA)"
+    geo = _google_trends_geo(market)
+    url = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={geo}"
+    hotspots = []
+    try:
+        for item in _rss_items(url):
+            title = (item.findtext("title") or "").strip()
+            if not title:
+                continue
+            traffic = (item.findtext("{http://trends.google.com/trends/trendingsearches}approx_traffic") or "").strip()
+            tags = ["Google Trends"]
+            if traffic:
+                tags.append(traffic)
+            hotspots.append(
+                _normalize_hotspot(
+                    {
+                        "title": title,
+                        "source_type": "google_trends_rss",
+                        "source_name": source.get("name") or "Google Trends",
+                        "source_url": url,
+                        "category": category or source.get("category", ""),
+                        "target_market": market,
+                        "platform": platform or source.get("platform", ""),
+                        "heat_score": 78 if traffic else 68,
+                        "valid_from": dt.date.today().isoformat(),
+                        "valid_to": (dt.date.today() + dt.timedelta(days=7)).isoformat(),
+                        "status": "active",
+                        "tags": tags,
+                        "notes": f"公开趋势 RSS 抓取；热度标记：{traffic}" if traffic else "公开趋势 RSS 抓取。",
+                    }
+                )
+            )
+    except Exception:
+        fallback_titles = ["Before vs After", "Quick tutorial", "Time-saving hack", "Meal prep", "Family gathering"]
+        hotspots.extend(
+            _normalize_hotspot(
+                {
+                    "title": title,
+                    "source_type": "google_trends_rss",
+                    "source_name": source.get("name") or "Google Trends fallback",
+                    "category": category or source.get("category", ""),
+                    "target_market": market,
+                    "platform": platform or source.get("platform", ""),
+                    "heat_score": 45,
+                    "valid_from": dt.date.today().isoformat(),
+                    "valid_to": (dt.date.today() + dt.timedelta(days=14)).isoformat(),
+                    "status": "active",
+                    "tags": ["兜底候选"],
+                    "notes": "Google Trends 抓取失败时的通用短视频热点候选。",
+                }
+            )
+            for title in fallback_titles
+        )
+    return hotspots[:30]
+
+
+def _fetch_rss_hotspots(source: dict, *, category: str = "", target_market: str = "", platform: str = ""):
+    url = str(source.get("url") or "").strip()
+    if not url:
+        return []
+    hotspots = []
+    try:
+        for item in _rss_items(url):
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            if not title:
+                continue
+            hotspots.append(
+                _normalize_hotspot(
+                    {
+                        "title": title,
+                        "source_type": "rss",
+                        "source_name": source.get("name") or "RSS",
+                        "source_url": link or url,
+                        "category": category or source.get("category", ""),
+                        "target_market": target_market or source.get("target_market", ""),
+                        "platform": platform or source.get("platform", ""),
+                        "heat_score": 62,
+                        "valid_from": dt.date.today().isoformat(),
+                        "valid_to": (dt.date.today() + dt.timedelta(days=21)).isoformat(),
+                        "status": "active",
+                        "tags": ["RSS"],
+                    }
+                )
+            )
+    except Exception:
+        return []
+    return hotspots[:30]
+
+
+def _fetch_calendar_hotspots(source: dict, *, category: str = "", target_market: str = "", platform: str = ""):
+    market = target_market or source.get("target_market") or "北美 (US/CA)"
+    result = []
+    for name, day, tags in _calendar_nodes(market, limit=12):
+        result.append(
+            _normalize_hotspot(
+                {
+                    "title": name,
+                    "source_type": "ecommerce_calendar",
+                    "source_name": source.get("name") or "电商节日节点",
+                    "category": category or source.get("category", ""),
+                    "target_market": market,
+                    "platform": platform or source.get("platform", ""),
+                    "heat_score": 85 if "Black Friday" in name or "Cyber Monday" in name else 72,
+                    "valid_from": max(dt.date.today(), day - dt.timedelta(days=45)).isoformat(),
+                    "valid_to": (day + dt.timedelta(days=3)).isoformat(),
+                    "status": "active",
+                    "tags": tags,
+                    "notes": f"建议提前围绕 {day.isoformat()} 节点规划内容。",
+                }
+            )
+        )
+    return result
+
+
+def _upsert_hotspots(new_hotspots):
+    now = _utc_now()
+    with competitor_lock:
+        existing = {_normalize_hotspot(item)["id"]: _normalize_hotspot(item) for item in _load_hotspots()}
+        inserted = 0
+        updated = 0
+        for raw in new_hotspots:
+            item = _normalize_hotspot(raw)
+            found = existing.get(item["id"])
+            if found:
+                merged = {**found, **item, "created_at": found.get("created_at") or item.get("created_at"), "updated_at": now}
+                existing[item["id"]] = _normalize_hotspot(merged)
+                updated += 1
+            else:
+                item["created_at"] = item.get("created_at") or now
+                item["updated_at"] = now
+                existing[item["id"]] = item
+                inserted += 1
+        _save_hotspots(list(existing.values()))
+    return {"inserted": inserted, "updated": updated, "total": inserted + updated}
+
+
+def _refresh_hotspots(req: HotspotRefreshRequest):
+    selected_ids = {str(item) for item in req.source_ids or []}
+    sources = [
+        source
+        for source in _load_hotspot_sources()
+        if source.get("enabled", True) and (not selected_ids or str(source.get("id")) in selected_ids)
+    ]
+    generated = []
+    errors = []
+    for source in sources:
+        source_type = str(source.get("source_type") or "manual")
+        try:
+            if source_type == "google_trends_rss":
+                generated.extend(_fetch_google_trends_hotspots(source, category=req.category, target_market=req.target_market, platform=req.platform))
+            elif source_type == "ecommerce_calendar":
+                generated.extend(_fetch_calendar_hotspots(source, category=req.category, target_market=req.target_market, platform=req.platform))
+            elif source_type == "rss":
+                generated.extend(_fetch_rss_hotspots(source, category=req.category, target_market=req.target_market, platform=req.platform))
+        except Exception as exc:
+            errors.append({"source_id": source.get("id"), "error": str(exc)})
+    upsert = _upsert_hotspots(generated) if generated else {"inserted": 0, "updated": 0, "total": 0}
+    return {"sources": sources, "hotspots": generated, "upsert": upsert, "errors": errors[:20]}
 
 
 def _update_job(job_id, **fields):
@@ -700,12 +1446,113 @@ def _infer_variant_label(content: str) -> str:
     return "通用脚本"
 
 
-def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int) -> str:
+def _assets_by_ids(asset_ids: list[str]) -> list[dict]:
+    wanted = [str(item) for item in asset_ids or [] if str(item or "").strip()]
+    if not wanted:
+        return []
+    by_id = {str(item.get("id") or ""): _ensure_asset_admin_defaults(item) for item in _load_competitor_assets()}
+    return [by_id[item] for item in wanted if item in by_id]
+
+
+def _hotspots_by_ids(hotspot_ids: list[str]) -> list[dict]:
+    wanted = [str(item) for item in hotspot_ids or [] if str(item or "").strip()]
+    if not wanted:
+        return []
+    by_id = {str(_normalize_hotspot(item).get("id") or ""): _normalize_hotspot(item) for item in _load_hotspots()}
+    return [by_id[item] for item in wanted if item in by_id]
+
+
+def _script_context_snapshot(req: GenerateRequest) -> dict:
+    if req.competitor_asset_ids:
+        competitor_assets = _assets_by_ids(req.competitor_asset_ids)[:3]
+    elif req.use_competitor_context:
+        competitor_assets = []
+        for status in ("featured", "approved"):
+            rows, _ = _search_competitor_assets(
+                category=req.category,
+                review_status=status,
+                rights_status="link_only_no_raw_video",
+                limit=3,
+            )
+            competitor_assets.extend(rows)
+            if len(competitor_assets) >= 3:
+                break
+        seen_assets = set()
+        competitor_assets = [
+            item
+            for item in competitor_assets
+            if not (item.get("id") in seen_assets or seen_assets.add(item.get("id")))
+        ][:3]
+    else:
+        competitor_assets = []
+
+    if req.hotspot_ids:
+        hotspots = _hotspots_by_ids(req.hotspot_ids)[:5]
+    elif req.use_hotspot_context:
+        hotspots, _ = _search_hotspots(
+            category=req.category,
+            target_market=req.target_market,
+            platform=req.platform,
+            active_only=True,
+            limit=5,
+        )
+    else:
+        hotspots = []
+
+    return {
+        "competitor_assets": [_public_competitor_asset(item) for item in competitor_assets],
+        "hotspots": hotspots[:5],
+        "generated_at": _utc_now(),
+    }
+
+
+def _competitor_context_prompt(assets: list[dict]) -> str:
+    if not assets:
+        return "竞品素材上下文：当前没有已审核可引用的竞品素材；竞品链接和竞品盖帽两列请留空，不要编造。"
+    lines = []
+    for index, asset in enumerate(assets[:3], start=1):
+        media_types = "、".join(sorted(_asset_media_types(asset))) or "未知媒体"
+        tags = "、".join(asset.get("ai_tags") or [])
+        lines.append(
+            "\n".join(
+                [
+                    f"{index}. {asset.get('brand') or '竞品'} / {asset.get('platform') or asset.get('source_type') or '素材'}",
+                    f"- 标题：{asset.get('title') or 'Untitled'}",
+                    f"- 链接：{asset.get('source_url') or ''}",
+                    f"- 媒体：{media_types}；质量分：{asset.get('quality_score') or 0}",
+                    f"- 标签：{tags or '无'}",
+                    f"- 分析：{asset.get('ai_analysis') or ''}",
+                ]
+            )
+        )
+    return (
+        "竞品素材上下文（只能引用下列链接；不得编造播放量、投放效果、竞品参数）：\n"
+        + "\n".join(lines)
+        + "\n请在合适镜头的“竞品链接”列填写 1-3 条上述链接，并在“竞品盖帽”列基于本品卖点写对标表达。"
+    )
+
+
+def _hotspot_context_prompt(hotspots: list[dict]) -> str:
+    if not hotspots:
+        return "热点上下文：当前没有有效热点；如无必要不要强行加入热点。"
+    lines = []
+    for index, item in enumerate(hotspots[:5], start=1):
+        tags = "、".join(item.get("tags") or [])
+        lines.append(
+            f"{index}. {item.get('title')}｜来源：{item.get('source_name')}｜市场：{item.get('target_market') or '通用'}｜有效期：{item.get('valid_from')} 至 {item.get('valid_to')}｜标签：{tags or '无'}"
+        )
+    return "行业热点上下文（仅选择与产品和目标市场自然相关的热点使用）：\n" + "\n".join(lines)
+
+
+def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int, context_snapshot: dict | None = None) -> str:
     feature_lines = "\n".join(
         f"- {item['name']}: {item['tagline']}。{item['description']}" for item in features
     )
     direction = req.video_type[variant_index % len(req.video_type)] if req.video_type else "场景化/生活方式型"
     variant_no = variant_index + 1
+    context_snapshot = context_snapshot or {"competitor_assets": [], "hotspots": []}
+    competitor_context = _competitor_context_prompt(context_snapshot.get("competitor_assets") or [])
+    hotspot_context = _hotspot_context_prompt(context_snapshot.get("hotspots") or [])
     return f"""
 请生成【方案{variant_no}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
 - 必须先输出一张符合系统要求的 Markdown 表格（10列，行内时长为秒，最后一行为总时长）。
@@ -718,7 +1565,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 人物处理：可用手部/手臂/背影/越肩视角完成开门、按键、取放、摆放、擦拭等操作；不要让人物成为画面主角。
 - 场景优先级：厨房电器优先写“产品 + 食材/餐具/台面/蒸汽/成品状态”的互动；冰箱/洗衣机/洗碗机等家电优先写“产品内部空间 + 被处理物品 + 使用前后结果”的可视化过程。
 - 表现手法必须落到产品可见动作和物品状态变化，不要只写“展示功能/突出卖点/产品特写”；每行至少包含一个产品本体或被处理物品的可拍动作、一个道具或环境细节、一个镜头处理。
-- 竞品链接与竞品盖帽：当前暂无可用竞品链接，请两列留空，不要编造。
+- 竞品链接与竞品盖帽：只能基于“竞品素材上下文”引用真实链接；没有上下文时两列留空。
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列必须以中文为主。
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
@@ -739,6 +1586,10 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 
 核心卖点：
 {feature_lines or "- 请围绕产品核心功能和使用场景撰写。"}
+
+{competitor_context}
+
+{hotspot_context}
 """.strip()
 
 
@@ -1287,9 +2138,37 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 
 def _build_excel_bytes(job: dict) -> bytes:
     request = job.get("request", {})
+    context_snapshot = job.get("context_snapshot") or {}
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         pd.DataFrame([request]).to_excel(writer, index=False, sheet_name="配置")
+        context_rows = []
+        for asset in context_snapshot.get("competitor_assets", []) or []:
+            context_rows.append(
+                {
+                    "类型": "竞品素材",
+                    "标题": asset.get("title", ""),
+                    "来源": asset.get("platform") or asset.get("source_type", ""),
+                    "品牌": asset.get("brand", ""),
+                    "链接": asset.get("source_url", ""),
+                    "状态": asset.get("review_status", ""),
+                    "备注": asset.get("ai_analysis", ""),
+                }
+            )
+        for hotspot in context_snapshot.get("hotspots", []) or []:
+            context_rows.append(
+                {
+                    "类型": "行业热点",
+                    "标题": hotspot.get("title", ""),
+                    "来源": hotspot.get("source_name", ""),
+                    "品牌": "",
+                    "链接": hotspot.get("source_url", ""),
+                    "状态": hotspot.get("status", ""),
+                    "备注": f"{hotspot.get('valid_from', '')} - {hotspot.get('valid_to', '')}",
+                }
+            )
+        if context_rows:
+            pd.DataFrame(context_rows).to_excel(writer, index=False, sheet_name="引用上下文")
         appendix_rows = []
         for index, variant in enumerate(job.get("variants", []), start=1):
             table_lines, remainder = _extract_first_md_table(variant.get("content", ""))
@@ -1319,11 +2198,12 @@ def _run_generation(job_id: str):
         if df.empty:
             raise RuntimeError("产品卖点库为空，请先上传 Excel。")
         features = _feature_rows(df, req.model, req.selected_features)
+        context_snapshot = job.get("context_snapshot") or _script_context_snapshot(req)
         variants = []
         _update_job(job_id, status="running", progress=8, current_step="已读取产品卖点")
         total = max(1, req.variant_count)
         for i in range(total):
-            prompt = _build_prompt(req, features, i)
+            prompt = _build_prompt(req, features, i, context_snapshot=context_snapshot)
             _update_job(job_id, progress=int((i / total) * 80) + 10, current_step=f"生成方案 {i + 1}/{total}")
             content = _strip_code_fences(_call_bedrock(prompt))
             if not _has_expected_table(content):
@@ -1343,6 +2223,7 @@ def _run_generation(job_id: str):
             progress=100,
             current_step="已完成",
             variants=variants,
+            context_snapshot=context_snapshot,
             error_message="",
             completed_at=dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
         )
@@ -1448,7 +2329,7 @@ def _run_competitor_research_job(job_id: str):
     try:
         req = CompetitorResearchRequest(**(job.get("request") or {}))
         _update_competitor_research_job(job_id, status="running", progress=25, current_step="正在检索素材证据")
-        assets = _search_competitor_assets(
+        assets, _ = _search_competitor_assets(
             q=req.question,
             category=req.category,
             platform=req.platform,
@@ -1456,9 +2337,9 @@ def _run_competitor_research_job(job_id: str):
             limit=req.top_k,
         )
         if not assets and req.category:
-            assets = _search_competitor_assets(category=req.category, platform=req.platform, source=req.source, limit=req.top_k)
+            assets, _ = _search_competitor_assets(category=req.category, platform=req.platform, source=req.source, limit=req.top_k)
         if not assets and (req.platform or req.source):
-            assets = _search_competitor_assets(platform=req.platform, source=req.source, limit=req.top_k)
+            assets, _ = _search_competitor_assets(platform=req.platform, source=req.source, limit=req.top_k)
         if not assets:
             report = _fallback_competitor_report(req, [])
         else:
@@ -1491,8 +2372,11 @@ def index():
     path = os.path.join(static_dir, "index.html")
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as handle:
+            html = handle.read()
+            html = html.replace("__APP_BASE_PATH__", APP_BASE_PATH)
+            html = html.replace("__BASE_PATH__", APP_BASE_PATH)
             return HTMLResponse(
-                handle.read(),
+                html,
                 headers={"Cache-Control": "no-store, max-age=0"},
             )
     return HTMLResponse(
@@ -1551,6 +2435,32 @@ def summary():
     }
 
 
+@app.get("/api/admin/overview", dependencies=[Depends(_verify_access)])
+def admin_overview():
+    today = dt.date.today()
+    assets = [_ensure_asset_admin_defaults(item) for item in _load_competitor_assets()]
+    hotspots, active_hotspot_total = _search_hotspots(active_only=True, limit=6)
+    latest_assets = sorted(assets, key=lambda item: str(item.get("updated_at") or item.get("collected_at") or ""), reverse=True)[:6]
+    recent_runs = _load_collection_runs()[:8]
+    video_asset_count = sum(1 for item in assets if _asset_media_types(item) & {"video", "gif"})
+    today_asset_count = sum(1 for item in assets if (_parse_date(item.get("collected_at") or item.get("created_at")) == today))
+    pending_review_count = sum(1 for item in assets if str(item.get("review_status") or "") in {"auto_collected", "needs_review"})
+    failed_run_count = sum(1 for item in recent_runs if str(item.get("status") or "").lower() == "failed")
+    return {
+        "metrics": {
+            "asset_count": len(assets),
+            "video_gif_count": video_asset_count,
+            "today_new_assets": today_asset_count,
+            "pending_review_count": pending_review_count,
+            "active_hotspot_count": active_hotspot_total,
+            "recent_failed_runs": failed_run_count,
+        },
+        "latest_assets": [_public_competitor_asset(item) for item in latest_assets],
+        "hotspots": hotspots,
+        "recent_runs": recent_runs,
+    }
+
+
 @app.post("/api/upload", dependencies=[Depends(_verify_access)])
 async def upload_product_features(file: UploadFile = File(...)):
     if not file.filename.lower().endswith((".xlsx", ".xls")):
@@ -1597,6 +2507,7 @@ def features(category: str, model: str):
 @app.post("/api/generate", dependencies=[Depends(_verify_access)])
 def generate(req: GenerateRequest):
     job_id = uuid.uuid4().hex[:12]
+    context_snapshot = _script_context_snapshot(req)
     job = {
         "id": job_id,
         "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -1605,6 +2516,7 @@ def generate(req: GenerateRequest):
         "progress": 0,
         "current_step": "已提交",
         "request": req.model_dump(),
+        "context_snapshot": context_snapshot,
         "variants": [],
         "error_message": "",
     }
@@ -1887,7 +2799,7 @@ def social_thumbnail_refresh(req: SocialThumbnailRefreshRequest):
         wanted = {str(item) for item in req.asset_ids}
         assets = [item for item in _load_competitor_assets() if str(item.get("id") or "") in wanted]
     else:
-        assets = _search_competitor_assets(
+        assets, _ = _search_competitor_assets(
             q=req.q,
             category=req.category,
             platform=req.platform,
@@ -1934,19 +2846,80 @@ def competitor_asset_search(
     platform: str = "",
     source: str = "",
     media_type: str = "",
+    review_status: str = "",
+    rights_status: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    min_quality: int = 0,
+    sort: str = "quality_desc",
+    offset: int = 0,
+    page: int = 1,
+    page_size: int = 0,
     limit: int = 20,
 ):
+    if page_size:
+        limit = page_size
+        offset = max(0, int(page or 1) - 1) * int(page_size or 20)
     limit = max(1, min(int(limit or 20), 100))
-    assets = _search_competitor_assets(
+    assets, total = _search_competitor_assets(
         q=q,
         category=category,
         brand=brand,
         platform=platform,
         source=source,
         media_type=media_type,
+        review_status=review_status,
+        rights_status=rights_status,
+        date_from=date_from,
+        date_to=date_to,
+        min_quality=min_quality,
+        sort=sort,
+        offset=offset,
         limit=limit,
     )
-    return {"assets": [_public_competitor_asset(item) for item in assets], "count": len(assets)}
+    return {
+        "assets": [_public_competitor_asset(item) for item in assets],
+        "count": len(assets),
+        "total": total,
+        "offset": max(0, int(offset or 0)),
+        "limit": limit,
+    }
+
+
+@app.patch("/api/competitor-assets/{asset_id}", dependencies=[Depends(_verify_access)])
+def update_competitor_asset(asset_id: str, req: CompetitorAssetPatchRequest):
+    allowed_statuses = {"auto_collected", "approved", "featured", "rejected", "needs_review"}
+    updates = {key: value for key, value in req.model_dump(exclude_unset=True).items() if value is not None}
+    if "review_status" in updates and updates["review_status"] not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="review_status 不合法。")
+    with competitor_lock:
+        assets = _load_competitor_assets()
+        found = None
+        for index, item in enumerate(assets):
+            if str(item.get("id") or "") == asset_id:
+                updated = _ensure_asset_admin_defaults({**item, **updates, "updated_at": _utc_now()})
+                assets[index] = updated
+                found = updated
+                break
+        if not found:
+            raise HTTPException(status_code=404, detail="竞品素材不存在。")
+        _save_competitor_assets(assets)
+    return {"ok": True, "asset": _public_competitor_asset(found)}
+
+
+@app.post("/api/competitor-assets/bulk-review", dependencies=[Depends(_verify_access)])
+def bulk_review_competitor_assets(req: CompetitorBulkReviewRequest):
+    wanted = {str(item) for item in req.asset_ids}
+    changed = []
+    with competitor_lock:
+        assets = _load_competitor_assets()
+        for index, item in enumerate(assets):
+            if str(item.get("id") or "") in wanted:
+                updated = _ensure_asset_admin_defaults({**item, "review_status": req.review_status, "updated_at": _utc_now()})
+                assets[index] = updated
+                changed.append(updated)
+        _save_competitor_assets(assets)
+    return {"ok": True, "updated_count": len(changed), "assets": [_public_competitor_asset(item) for item in changed]}
 
 
 @app.post("/api/competitor-research/jobs", dependencies=[Depends(_verify_access)])
@@ -1984,6 +2957,203 @@ def competitor_research_job(job_id: str):
     if not found:
         raise HTTPException(status_code=404, detail="竞品调研任务不存在。")
     return found
+
+
+@app.get("/api/hotspots", dependencies=[Depends(_verify_access)])
+def list_hotspots(
+    q: str = "",
+    category: str = "",
+    target_market: str = "",
+    platform: str = "",
+    source_type: str = "",
+    status: str = "",
+    active_only: bool = False,
+    offset: int = 0,
+    limit: int = 50,
+):
+    limit = max(1, min(int(limit or 50), 200))
+    hotspots, total = _search_hotspots(
+        q=q,
+        category=category,
+        target_market=target_market,
+        platform=platform,
+        source_type=source_type,
+        status=status,
+        active_only=active_only,
+        offset=offset,
+        limit=limit,
+    )
+    return {"hotspots": hotspots, "count": len(hotspots), "total": total, "offset": max(0, int(offset or 0)), "limit": limit}
+
+
+@app.post("/api/hotspots", dependencies=[Depends(_verify_access)])
+def create_hotspot(req: HotspotRequest):
+    hotspot = _normalize_hotspot(req.model_dump())
+    upsert = _upsert_hotspots([hotspot])
+    return {"ok": True, "upsert": upsert, "hotspot": hotspot}
+
+
+@app.patch("/api/hotspots/{hotspot_id}", dependencies=[Depends(_verify_access)])
+def update_hotspot(hotspot_id: str, req: HotspotPatchRequest):
+    updates = {key: value for key, value in req.model_dump(exclude_unset=True).items() if value is not None}
+    with competitor_lock:
+        hotspots = _load_hotspots()
+        found = None
+        for index, item in enumerate(hotspots):
+            current = _normalize_hotspot(item)
+            if current.get("id") == hotspot_id:
+                found = _normalize_hotspot({**current, **updates, "updated_at": _utc_now()})
+                hotspots[index] = found
+                break
+        if not found:
+            raise HTTPException(status_code=404, detail="热点不存在。")
+        _save_hotspots(hotspots)
+    return {"ok": True, "hotspot": found}
+
+
+@app.delete("/api/hotspots/{hotspot_id}", dependencies=[Depends(_verify_access)])
+def delete_hotspot(hotspot_id: str):
+    with competitor_lock:
+        hotspots = [_normalize_hotspot(item) for item in _load_hotspots()]
+        next_items = [item for item in hotspots if item.get("id") != hotspot_id]
+        if len(next_items) == len(hotspots):
+            raise HTTPException(status_code=404, detail="热点不存在。")
+        _save_hotspots(next_items)
+    return {"ok": True}
+
+
+@app.post("/api/hotspots/refresh", dependencies=[Depends(_verify_access)])
+def refresh_hotspots(req: HotspotRefreshRequest):
+    result = _refresh_hotspots(req)
+    return {"ok": True, **result, "hotspots": result.get("hotspots", [])[:50]}
+
+
+@app.get("/api/hotspot-sources", dependencies=[Depends(_verify_access)])
+def list_hotspot_sources():
+    return {"sources": _load_hotspot_sources()}
+
+
+@app.post("/api/hotspot-sources", dependencies=[Depends(_verify_access)])
+def create_hotspot_source(req: HotspotSourceRequest):
+    now = _utc_now()
+    source = {
+        **req.model_dump(),
+        "id": _stable_id("hotspot-source", req.source_type, req.name, req.url),
+        "created_at": now,
+        "updated_at": now,
+    }
+    sources = _load_hotspot_sources()
+    sources = [item for item in sources if item.get("id") != source["id"]]
+    sources.insert(0, source)
+    _save_hotspot_sources(sources)
+    return {"ok": True, "source": source}
+
+
+@app.patch("/api/hotspot-sources/{source_id}", dependencies=[Depends(_verify_access)])
+def update_hotspot_source(source_id: str, req: HotspotSourcePatchRequest):
+    updates = {key: value for key, value in req.model_dump(exclude_unset=True).items() if value is not None}
+    with competitor_lock:
+        sources = _load_hotspot_sources()
+        found = None
+        for index, item in enumerate(sources):
+            if str(item.get("id") or "") == source_id:
+                found = {**item, **updates, "updated_at": _utc_now()}
+                sources[index] = found
+                break
+        if not found:
+            raise HTTPException(status_code=404, detail="热点源不存在。")
+        _save_hotspot_sources(sources)
+    return {"ok": True, "source": found}
+
+
+@app.delete("/api/hotspot-sources/{source_id}", dependencies=[Depends(_verify_access)])
+def delete_hotspot_source(source_id: str):
+    with competitor_lock:
+        sources = _load_hotspot_sources()
+        next_sources = [item for item in sources if str(item.get("id") or "") != source_id]
+        if len(next_sources) == len(sources):
+            raise HTTPException(status_code=404, detail="热点源不存在。")
+        _save_hotspot_sources(next_sources)
+    return {"ok": True}
+
+
+@app.get("/api/competitor-configs", dependencies=[Depends(_verify_access)])
+def list_competitor_configs(category: str = ""):
+    configs = _load_competitor_configs()
+    if category:
+        configs = [item for item in configs if str(item.get("category") or "").lower() == category.lower()]
+    return {"configs": configs}
+
+
+@app.post("/api/competitor-configs", dependencies=[Depends(_verify_access)])
+def upsert_competitor_config(req: CompetitorConfigRequest):
+    now = _utc_now()
+    incoming = {**req.model_dump(), "id": _stable_id("competitor-config", req.category), "updated_at": now}
+    configs = _load_competitor_configs()
+    replaced = False
+    for index, item in enumerate(configs):
+        if str(item.get("category") or "").lower() == req.category.lower():
+            incoming["created_at"] = item.get("created_at") or now
+            configs[index] = incoming
+            replaced = True
+            break
+    if not replaced:
+        incoming["created_at"] = now
+        configs.insert(0, incoming)
+    _save_competitor_configs(configs)
+    return {"ok": True, "config": incoming}
+
+
+@app.patch("/api/competitor-configs/{category}", dependencies=[Depends(_verify_access)])
+def patch_competitor_config(category: str, req: CompetitorConfigPatchRequest):
+    now = _utc_now()
+    updates = {key: value for key, value in req.model_dump(exclude_unset=True).items() if value is not None}
+    configs = _load_competitor_configs()
+    found = None
+    for index, item in enumerate(configs):
+        if str(item.get("category") or "").lower() == category.lower():
+            found = {**item, **updates, "updated_at": now}
+            configs[index] = found
+            break
+    if not found:
+        found = {
+            "id": _stable_id("competitor-config", category),
+            "category": category,
+            "brands": updates.get("brands", []),
+            "keywords": updates.get("keywords", []),
+            "platforms": updates.get("platforms", []),
+            "target_market": updates.get("target_market", ""),
+            "refresh_frequency": updates.get("refresh_frequency", "manual"),
+            "notes": updates.get("notes", ""),
+            "created_at": now,
+            "updated_at": now,
+        }
+        configs.insert(0, found)
+    _save_competitor_configs(configs)
+    return {"ok": True, "config": found}
+
+
+@app.get("/api/competitor-collection-runs", dependencies=[Depends(_verify_access)])
+def list_competitor_collection_runs(limit: int = 50):
+    return {"runs": _load_collection_runs()[: max(1, min(int(limit or 50), 200))]}
+
+
+@app.post("/api/competitor-collection-runs", dependencies=[Depends(_verify_access)])
+def create_competitor_collection_run(req: CompetitorCollectionRunRequest):
+    now = _utc_now()
+    run = {
+        "id": uuid.uuid4().hex[:12],
+        "created_at": now,
+        "updated_at": now,
+        "request": req.model_dump(),
+        "status": req.status,
+        "error_message": req.error_message,
+        "note": "首版记录采集配置与运行状态；实际自动采集由 Rainforest/YouTube 刷新接口或外部调度触发。",
+    }
+    runs = _load_collection_runs()
+    runs.insert(0, run)
+    _save_collection_runs(runs)
+    return {"ok": True, "run": run}
 
 
 @app.get("/api/nova-reel/jobs", dependencies=[Depends(_verify_access)])

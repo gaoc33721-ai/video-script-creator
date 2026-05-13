@@ -262,6 +262,7 @@ bash scripts/deploy_ecs_fargate.sh
 | `NOVA_REEL_OUTPUT_S3_URI` | Environment | `s3://.../runtime/nova-reel-poc` |
 | `NOVA_REEL_ESTIMATED_USD_PER_SECOND` | Environment | `0.08` |
 | `NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK` | Environment | `2` |
+| `APP_BASE_PATH` | Environment | `/admin` |
 | `APP_DATA_DIR` | Environment | `/app/data` |
 | `STORAGE_BACKEND` | Environment | `local` 或 `s3` |
 | `S3_BUCKET` | Environment | `video-script-creator-prod-assets` |

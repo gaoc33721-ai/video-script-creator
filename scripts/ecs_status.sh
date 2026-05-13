@@ -3,6 +3,11 @@ set -euo pipefail
 
 APP_NAME="${APP_NAME:-video-script-creator}"
 APP_RUNTIME="${APP_RUNTIME:-api}"
+APP_BASE_PATH="${APP_BASE_PATH:-}"
+if [[ -n "$APP_BASE_PATH" && "$APP_BASE_PATH" != /* ]]; then
+  APP_BASE_PATH="/${APP_BASE_PATH}"
+fi
+APP_BASE_PATH="${APP_BASE_PATH%/}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-eu-central-1}}"
 CLUSTER_NAME="${CLUSTER_NAME:-${APP_NAME}-cluster}"
 SERVICE_NAME="${SERVICE_NAME:-$APP_NAME}"
@@ -11,7 +16,7 @@ ALB_NAME="${ALB_NAME:-${APP_NAME}-alb}"
 SINCE="${SINCE:-30m}"
 
 if [[ "$APP_RUNTIME" == "api" ]]; then
-  DEFAULT_HEALTH_CHECK_PATH="/healthz"
+  DEFAULT_HEALTH_CHECK_PATH="${APP_BASE_PATH}/healthz"
 else
   DEFAULT_HEALTH_CHECK_PATH="/_stcore/health"
 fi
@@ -45,5 +50,5 @@ aws logs tail "$LOG_GROUP" \
   --since "$SINCE"
 
 echo
-echo "Open: ${PUBLIC_APP_URL}"
+echo "Open: ${PUBLIC_APP_URL%/}${APP_BASE_PATH}/"
 echo "ALB: http://${ALB_DNS}"

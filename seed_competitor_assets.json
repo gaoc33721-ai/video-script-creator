@@ -1,0 +1,319 @@
+[
+  {
+    "id": "seed:samsung-newsroom:bespoke-ai-laundry-setup-20260410",
+    "source_type": "official_video_page",
+    "platform": "Samsung Global Newsroom",
+    "channel": "Samsung Global Newsroom",
+    "brand": "Samsung",
+    "category": "Laundry / Washer Dryer Combo",
+    "asin": "",
+    "amazon_domain": "",
+    "title": "Discover Your Ideal Bespoke AI Laundry Appliance Setup",
+    "original_copy": "Official Samsung video page introducing Bespoke AI Laundry Combo, Laundry Hub and washer/dryer setup choices for different home layouts.",
+    "source_url": "https://news.samsung.com/global/video-discover-your-ideal-bespoke-ai-laundry-appliance-setup",
+    "canonical_url": "https://news.samsung.com/global/video-discover-your-ideal-bespoke-ai-laundry-appliance-setup",
+    "embed_url": "",
+    "image_url": "",
+    "media": [
+      {
+        "id": "seed:samsung-newsroom:bespoke-ai-laundry-setup-20260410:video",
+        "brand": "Samsung",
+        "category": "Laundry / Washer Dryer Combo",
+        "product_url": "https://news.samsung.com/global/video-discover-your-ideal-bespoke-ai-laundry-appliance-setup",
+        "media_type": "video",
+        "media_url": "https://news.samsung.com/global/video-discover-your-ideal-bespoke-ai-laundry-appliance-setup",
+        "thumbnail_url": "",
+        "title": "Official video page: Bespoke AI laundry setup choices",
+        "rights_status": "link_only_no_raw_video",
+        "source_payload": {
+          "evidence_note": "Official public video page; raw video was not downloaded."
+        }
+      }
+    ],
+    "ai_tags": ["official video", "laundry combo", "space planning", "AI Home", "setup guide", "lifestyle segmentation"],
+    "ai_analysis": "适合参考“按居住空间和家庭规模做分层”的脚本结构：先用用户场景做入口，再把一体洗烘、大容量塔式和独立套装拆成三个选择路径。可借鉴点是把复杂产品线讲成决策辅助，镜头上适合用空间对比、容量数字和屏幕交互串联。",
+    "quality_score": 91,
+    "rights_status": "link_only_no_raw_video",
+    "review_status": "featured",
+    "metadata": {
+      "asset_type": "video",
+      "published_at": "2026-04-10T00:00:00Z",
+      "collected_method": "seed_official_public_link",
+      "has_video": true,
+      "has_raw_video": false,
+      "source_article_title": "Discover Your Ideal Bespoke AI Laundry Appliance Setup",
+      "rights_status": "link_only_no_raw_video"
+    },
+    "source_payload": {
+      "note": "Seeded public evidence link. Store links, metadata and analysis only."
+    },
+    "collected_at": "2026-05-13T00:00:00Z",
+    "created_at": "2026-05-13T00:00:00Z",
+    "updated_at": "2026-05-13T00:00:00Z"
+  },
+  {
+    "id": "seed:samsung-youtube:bespoke-ai-refrigerator-owrng3-cmks",
+    "source_type": "youtube_public_video",
+    "platform": "YouTube",
+    "channel": "Samsung",
+    "brand": "Samsung",
+    "category": "Refrigerator / AI Family Hub",
+    "asin": "",
+    "amazon_domain": "",
+    "title": "Bespoke AI Refrigerator lifestyle brand film",
+    "original_copy": "Public Samsung YouTube video evidence for Bespoke AI Refrigerator positioning around AI, smart kitchen and family lifestyle.",
+    "source_url": "https://www.youtube.com/watch?v=OwRng3-Cmks",
+    "canonical_url": "https://www.youtube.com/watch?v=OwRng3-Cmks",
+    "embed_url": "https://www.youtube.com/embed/OwRng3-Cmks",
+    "image_url": "https://i.ytimg.com/vi/OwRng3-Cmks/hqdefault.jpg",
+    "media": [
+      {
+        "id": "seed:samsung-youtube:bespoke-ai-refrigerator-owrng3-cmks:video",
+        "brand": "Samsung",
+        "category": "Refrigerator / AI Family Hub",
+        "product_url": "https://www.youtube.com/watch?v=OwRng3-Cmks",
+        "media_type": "video",
+        "media_url": "https://www.youtube.com/watch?v=OwRng3-Cmks",
+        "thumbnail_url": "https://i.ytimg.com/vi/OwRng3-Cmks/hqdefault.jpg",
+        "title": "YouTube video: Bespoke AI Refrigerator",
+        "rights_status": "link_only_no_raw_video",
+        "source_payload": {
+          "youtube_video_id": "OwRng3-Cmks",
+          "evidence_note": "YouTube public page and thumbnail only; raw video was not downloaded."
+        }
+      }
+    ],
+    "ai_tags": ["YouTube", "refrigerator", "AI kitchen", "Family Hub", "lifestyle", "smart home"],
+    "ai_analysis": "适合参考高端冰箱的“生活方式 + 智能中枢”叙事：以厨房日常为情绪入口，用屏幕、食材识别、家庭沟通等能力表现科技感。脚本生成时可借鉴其产品静物、屏幕特写、家庭场景切换，但需避免复刻具体品牌视觉和口号。",
+    "quality_score": 88,
+    "rights_status": "link_only_no_raw_video",
+    "review_status": "approved",
+    "metadata": {
+      "asset_type": "video",
+      "youtube_video_id": "OwRng3-Cmks",
+      "collected_method": "seed_public_youtube_reference",
+      "has_video": true,
+      "has_raw_video": false,
+      "thumbnail_url": "https://i.ytimg.com/vi/OwRng3-Cmks/hqdefault.jpg",
+      "rights_status": "link_only_no_raw_video"
+    },
+    "source_payload": {
+      "note": "Seeded public evidence link. Store links, thumbnails, metadata and analysis only."
+    },
+    "collected_at": "2026-05-13T00:00:00Z",
+    "created_at": "2026-05-13T00:00:00Z",
+    "updated_at": "2026-05-13T00:00:00Z"
+  },
+  {
+    "id": "seed:bosch-youtube:dishwasher-unlocked-bbqmotykqlu",
+    "source_type": "official_howto_video",
+    "platform": "YouTube",
+    "channel": "Bosch Home USA",
+    "brand": "Bosch",
+    "category": "Dishwasher",
+    "asin": "",
+    "amazon_domain": "",
+    "title": "Your Bosch Dishwasher UNLOCKED: Features, Racks, Cycles & More",
+    "original_copy": "Official Bosch dishwasher how-to video covering racks, cycles and daily usage education.",
+    "source_url": "https://www.youtube.com/watch?v=bBqmOtykqlU",
+    "canonical_url": "https://www.youtube.com/watch?v=bBqmOtykqlU",
+    "embed_url": "https://www.youtube.com/embed/bBqmOtykqlU",
+    "image_url": "https://i.ytimg.com/vi/bBqmOtykqlU/hqdefault.jpg",
+    "media": [
+      {
+        "id": "seed:bosch-youtube:dishwasher-unlocked-bbqmotykqlu:video",
+        "brand": "Bosch",
+        "category": "Dishwasher",
+        "product_url": "https://www.youtube.com/watch?v=bBqmOtykqlU",
+        "media_type": "video",
+        "media_url": "https://www.youtube.com/watch?v=bBqmOtykqlU",
+        "thumbnail_url": "https://i.ytimg.com/vi/bBqmOtykqlU/hqdefault.jpg",
+        "title": "Official how-to video: Bosch dishwasher features",
+        "rights_status": "link_only_no_raw_video",
+        "source_payload": {
+          "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+          "youtube_video_id": "bBqmOtykqlU"
+        }
+      }
+    ],
+    "ai_tags": ["how-to", "dishwasher", "racks", "cycles", "usage education", "feature walkthrough"],
+    "ai_analysis": "适合参考“功能教育型短视频”的节奏：用打开门体、拉出碗篮、切到控制面板、展示循环选择的近景动作，把复杂功能拆成可执行步骤。对洗碗机脚本尤其适合生成可拍摄的手部操作和前后对比镜头。",
+    "quality_score": 87,
+    "rights_status": "link_only_no_raw_video",
+    "review_status": "approved",
+    "metadata": {
+      "asset_type": "video",
+      "youtube_video_id": "bBqmOtykqlU",
+      "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+      "collected_method": "seed_official_public_link",
+      "has_video": true,
+      "has_raw_video": false,
+      "rights_status": "link_only_no_raw_video"
+    },
+    "source_payload": {
+      "note": "Seeded from Bosch official how-to video index; raw video was not downloaded."
+    },
+    "collected_at": "2026-05-13T00:00:00Z",
+    "created_at": "2026-05-13T00:00:00Z",
+    "updated_at": "2026-05-13T00:00:00Z"
+  },
+  {
+    "id": "seed:bosch-youtube:french-door-fridge-coh1keu_knc",
+    "source_type": "official_howto_video",
+    "platform": "YouTube",
+    "channel": "Bosch Home USA",
+    "brand": "Bosch",
+    "category": "Refrigerator / French Door",
+    "asin": "",
+    "amazon_domain": "",
+    "title": "Bosch French Door Fridge: Discover Hidden Features for Fresher Food",
+    "original_copy": "Official Bosch refrigerator video introducing fresh-food organization and hidden feature education.",
+    "source_url": "https://www.youtube.com/watch?v=cOH1KeU_KNc",
+    "canonical_url": "https://www.youtube.com/watch?v=cOH1KeU_KNc",
+    "embed_url": "https://www.youtube.com/embed/cOH1KeU_KNc",
+    "image_url": "https://i.ytimg.com/vi/cOH1KeU_KNc/hqdefault.jpg",
+    "media": [
+      {
+        "id": "seed:bosch-youtube:french-door-fridge-coh1keu_knc:video",
+        "brand": "Bosch",
+        "category": "Refrigerator / French Door",
+        "product_url": "https://www.youtube.com/watch?v=cOH1KeU_KNc",
+        "media_type": "video",
+        "media_url": "https://www.youtube.com/watch?v=cOH1KeU_KNc",
+        "thumbnail_url": "https://i.ytimg.com/vi/cOH1KeU_KNc/hqdefault.jpg",
+        "title": "Official how-to video: Bosch French Door refrigerator",
+        "rights_status": "link_only_no_raw_video",
+        "source_payload": {
+          "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+          "youtube_video_id": "cOH1KeU_KNc"
+        }
+      }
+    ],
+    "ai_tags": ["refrigerator", "freshness", "French door", "organization", "storage zones", "how-to"],
+    "ai_analysis": "适合参考“打开冰箱门后逐层讲解”的结构：用抽屉、门架、保鲜区和食材摆放建立可信细节。对于冰箱产品视频，可借鉴其分区展示、食材特写、手部拿取动作和功能点字幕节奏。",
+    "quality_score": 85,
+    "rights_status": "link_only_no_raw_video",
+    "review_status": "approved",
+    "metadata": {
+      "asset_type": "video",
+      "youtube_video_id": "cOH1KeU_KNc",
+      "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+      "collected_method": "seed_official_public_link",
+      "has_video": true,
+      "has_raw_video": false,
+      "rights_status": "link_only_no_raw_video"
+    },
+    "source_payload": {
+      "note": "Seeded from Bosch official how-to video index; raw video was not downloaded."
+    },
+    "collected_at": "2026-05-13T00:00:00Z",
+    "created_at": "2026-05-13T00:00:00Z",
+    "updated_at": "2026-05-13T00:00:00Z"
+  },
+  {
+    "id": "seed:bosch-youtube:verocafe-home-connect-uwntku4cbiq",
+    "source_type": "official_howto_video",
+    "platform": "YouTube",
+    "channel": "Bosch Home USA",
+    "brand": "Bosch",
+    "category": "Coffee Machine / Connected Appliance",
+    "asin": "",
+    "amazon_domain": "",
+    "title": "How to Brew Coffee with the Home Connect App",
+    "original_copy": "Official Bosch video showing connected coffee machine control through the Home Connect app.",
+    "source_url": "https://www.youtube.com/watch?v=UWnTKu4cbiQ",
+    "canonical_url": "https://www.youtube.com/watch?v=UWnTKu4cbiQ",
+    "embed_url": "https://www.youtube.com/embed/UWnTKu4cbiQ",
+    "image_url": "https://i.ytimg.com/vi/UWnTKu4cbiQ/hqdefault.jpg",
+    "media": [
+      {
+        "id": "seed:bosch-youtube:verocafe-home-connect-uwntku4cbiq:video",
+        "brand": "Bosch",
+        "category": "Coffee Machine / Connected Appliance",
+        "product_url": "https://www.youtube.com/watch?v=UWnTKu4cbiQ",
+        "media_type": "video",
+        "media_url": "https://www.youtube.com/watch?v=UWnTKu4cbiQ",
+        "thumbnail_url": "https://i.ytimg.com/vi/UWnTKu4cbiQ/hqdefault.jpg",
+        "title": "Official how-to video: Home Connect coffee brewing",
+        "rights_status": "link_only_no_raw_video",
+        "source_payload": {
+          "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+          "youtube_video_id": "UWnTKu4cbiQ"
+        }
+      }
+    ],
+    "ai_tags": ["connected appliance", "app control", "coffee", "personalization", "smart home", "UI close-up"],
+    "ai_analysis": "适合参考智能家电的“手机 App + 设备动作反馈”表达：手机界面选择口味，切到机器执行，再用饮品成品做情绪收尾。对带 IoT、语音或屏幕控制的产品，可借鉴这种跨屏操作链路。",
+    "quality_score": 83,
+    "rights_status": "link_only_no_raw_video",
+    "review_status": "approved",
+    "metadata": {
+      "asset_type": "video",
+      "youtube_video_id": "UWnTKu4cbiQ",
+      "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+      "collected_method": "seed_official_public_link",
+      "has_video": true,
+      "has_raw_video": false,
+      "rights_status": "link_only_no_raw_video"
+    },
+    "source_payload": {
+      "note": "Seeded from Bosch official how-to video index; raw video was not downloaded."
+    },
+    "collected_at": "2026-05-13T00:00:00Z",
+    "created_at": "2026-05-13T00:00:00Z",
+    "updated_at": "2026-05-13T00:00:00Z"
+  },
+  {
+    "id": "seed:bosch-youtube:unlimited-9-vacuum-tk3sdnw7tmw",
+    "source_type": "official_howto_video",
+    "platform": "YouTube",
+    "channel": "Bosch Home USA",
+    "brand": "Bosch",
+    "category": "Vacuum / Cordless Cleaner",
+    "asin": "",
+    "amazon_domain": "",
+    "title": "Clean effortlessly with the Unlimited 9 cordless vacuum",
+    "original_copy": "Official Bosch vacuum video evidence focused on ergonomic cleaning and daily household surfaces.",
+    "source_url": "https://www.youtube.com/watch?v=tK3sdNW7Tmw",
+    "canonical_url": "https://www.youtube.com/watch?v=tK3sdNW7Tmw",
+    "embed_url": "https://www.youtube.com/embed/tK3sdNW7Tmw",
+    "image_url": "https://i.ytimg.com/vi/tK3sdNW7Tmw/hqdefault.jpg",
+    "media": [
+      {
+        "id": "seed:bosch-youtube:unlimited-9-vacuum-tk3sdnw7tmw:video",
+        "brand": "Bosch",
+        "category": "Vacuum / Cordless Cleaner",
+        "product_url": "https://www.youtube.com/watch?v=tK3sdNW7Tmw",
+        "media_type": "video",
+        "media_url": "https://www.youtube.com/watch?v=tK3sdNW7Tmw",
+        "thumbnail_url": "https://i.ytimg.com/vi/tK3sdNW7Tmw/hqdefault.jpg",
+        "title": "Official video: Unlimited 9 cordless vacuum",
+        "rights_status": "link_only_no_raw_video",
+        "source_payload": {
+          "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+          "youtube_video_id": "tK3sdNW7Tmw"
+        }
+      }
+    ],
+    "ai_tags": ["vacuum", "cordless", "ergonomics", "surface switching", "daily cleaning", "mobility"],
+    "ai_analysis": "适合参考清洁类短视频的动作密度：地面、沙发、缝隙和高处快速切换，突出轻便握持和不同表面一镜多用。对清洁电器脚本可借鉴“问题表面 -> 机器动作 -> 干净结果”的三段循环。",
+    "quality_score": 82,
+    "rights_status": "link_only_no_raw_video",
+    "review_status": "approved",
+    "metadata": {
+      "asset_type": "video",
+      "youtube_video_id": "tK3sdNW7Tmw",
+      "source_index_url": "https://www.bosch-home.com/us/experience-bosch/how-to-videos",
+      "collected_method": "seed_official_public_link",
+      "has_video": true,
+      "has_raw_video": false,
+      "rights_status": "link_only_no_raw_video"
+    },
+    "source_payload": {
+      "note": "Seeded from Bosch official how-to video index; raw video was not downloaded."
+    },
+    "collected_at": "2026-05-13T00:00:00Z",
+    "created_at": "2026-05-13T00:00:00Z",
+    "updated_at": "2026-05-13T00:00:00Z"
+  }
+]

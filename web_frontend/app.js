@@ -24,9 +24,26 @@ const state = {
   competitorResearchTimer: null,
   lastDiscoveredAsins: [],
   lastDiscoveredVideoIds: [],
+  currentPage: "dashboard",
+  competitorAssets: [],
+  selectedAssetIds: new Set(),
+  hotspots: [],
+  hotspotSources: [],
+  collectionRuns: [],
+  competitorConfigs: [],
 };
 
 const $ = (id) => document.getElementById(id);
+const APP_BASE_PATH = String(window.__APP_BASE_PATH__ || "").replace(/\/+$/, "");
+
+function appPath(path) {
+  if (!path) return APP_BASE_PATH || "/";
+  if (/^(https?:)?\/\//i.test(path) || path.startsWith("data:") || path.startsWith("blob:")) {
+    return path;
+  }
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `${APP_BASE_PATH}${normalized}`;
+}
 
 function authHeaders(headers = {}) {
   const nextHeaders = new Headers(headers);
@@ -37,7 +54,7 @@ function authHeaders(headers = {}) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(appPath(path), {
     ...options,
     credentials: "same-origin",
     headers: authHeaders(options.headers || {}),
@@ -57,7 +74,7 @@ async function api(path, options = {}) {
 }
 
 async function fetchProtectedBlob(path) {
-  const response = await fetch(path, {
+  const response = await fetch(appPath(path), {
     credentials: "same-origin",
     headers: authHeaders(),
   });
@@ -137,7 +154,7 @@ async function submitAuth(event) {
   $("authSubmit").disabled = true;
   setMessage("authMessage", "正在校验...");
   try {
-    const response = await fetch("/api/auth/login", {
+    const response = await fetch(appPath("/api/auth/login"), {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -165,7 +182,7 @@ async function submitAuth(event) {
 
 async function initializeAuth() {
   try {
-    const response = await fetch("/api/auth/status", { credentials: "same-origin" });
+    const response = await fetch(appPath("/api/auth/status"), { credentials: "same-origin" });
     const status = response.ok ? await response.json() : { enabled: true };
     state.authEnabled = Boolean(status.enabled);
     if (!state.authEnabled) {
@@ -173,7 +190,7 @@ async function initializeAuth() {
       await startApp();
       return;
     }
-    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+    await fetch(appPath("/api/auth/logout"), { method: "POST", credentials: "same-origin" }).catch(() => {});
     showAuth();
   } catch (error) {
     clearAuth(error.message || "请重新输入访问密码。");
@@ -236,6 +253,94 @@ async function loadSummary() {
     ["缓存状态", summary.loaded ? "已加载" : "未加载"],
   ]
     .map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`)
+    .join("");
+}
+
+function showPage(page) {
+  state.currentPage = page || "dashboard";
+  document.querySelectorAll(".workspace-page").forEach((node) => {
+    node.classList.toggle("active", node.id === `page${capitalizePage(state.currentPage)}`);
+  });
+  document.querySelectorAll(".admin-nav button[data-page]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.page === state.currentPage);
+  });
+  loadPageData(state.currentPage).catch((error) => {
+    console.warn("Failed to load page data", error);
+  });
+}
+
+function capitalizePage(page) {
+  const aliases = {
+    dashboard: "Dashboard",
+    scripts: "Scripts",
+    assets: "Assets",
+    hotspots: "Hotspots",
+    collection: "Collection",
+    config: "Config",
+  };
+  return aliases[page] || "Dashboard";
+}
+
+async function loadPageData(page) {
+  if (page === "dashboard") await loadAdminOverview();
+  if (page === "assets") await loadCompetitorAssets();
+  if (page === "hotspots") await Promise.all([loadHotspots(), loadHotspotSources()]);
+  if (page === "collection") await loadCollectionRuns();
+  if (page === "config") await Promise.all([loadCompetitorConfigs(), loadHotspotSources()]);
+}
+
+async function loadAdminOverview() {
+  const data = await api("/api/admin/overview");
+  const metrics = data.metrics || {};
+  $("adminMetrics").innerHTML = [
+    ["素材总量", metrics.asset_count || 0],
+    ["视频/动图", metrics.video_gif_count || 0],
+    ["今日新增", metrics.today_new_assets || 0],
+    ["待审核", metrics.pending_review_count || 0],
+    ["有效热点", metrics.active_hotspot_count || 0],
+    ["近期失败", metrics.recent_failed_runs || 0],
+  ]
+    .map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`)
+    .join("");
+  renderDashboardAssets(data.latest_assets || []);
+  renderDashboardHotspots(data.hotspots || []);
+}
+
+function renderDashboardAssets(assets) {
+  const target = $("dashboardAssets");
+  if (!target) return;
+  if (!assets.length) {
+    target.innerHTML = '<div class="empty-state small"><strong>暂无素材</strong><span>进入素材库导入链接或刷新入库。</span></div>';
+    return;
+  }
+  target.innerHTML = assets
+    .map(
+      (asset) => `
+        <button type="button" class="compact-item" data-page-link="assets">
+          <strong>${escapeHtml(asset.title || "Untitled")}</strong>
+          <span>${escapeHtml(asset.platform || asset.source_type || "素材")} · ${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(asset.review_status || "")}</span>
+        </button>
+      `
+    )
+    .join("");
+}
+
+function renderDashboardHotspots(hotspots) {
+  const target = $("dashboardHotspots");
+  if (!target) return;
+  if (!hotspots.length) {
+    target.innerHTML = '<div class="empty-state small"><strong>暂无有效热点</strong><span>可先刷新公开源或人工补录热点。</span></div>';
+    return;
+  }
+  target.innerHTML = hotspots
+    .map(
+      (item) => `
+        <button type="button" class="compact-item" data-page-link="hotspots">
+          <strong>${escapeHtml(item.title || "")}</strong>
+          <span>${escapeHtml(item.source_name || "")} · ${escapeHtml(item.target_market || "通用")} · ${escapeHtml(item.valid_to || "")}</span>
+        </button>
+      `
+    )
     .join("");
 }
 
@@ -315,6 +420,10 @@ function formPayload(form) {
     target_audience: data.get("target_audience") || "",
     pain_points: data.get("pain_points") || "",
     custom_requirements: data.get("custom_requirements") || "",
+    use_competitor_context: data.get("use_competitor_context") === "on",
+    use_hotspot_context: data.get("use_hotspot_context") === "on",
+    competitor_asset_ids: Array.from(state.selectedAssetIds || []).slice(0, 20),
+    hotspot_ids: [],
   };
 }
 
@@ -570,19 +679,23 @@ async function loadCompetitorAssets() {
   setMessage("competitorMessage", "正在加载已入库竞品素材...");
   try {
     const params = new URLSearchParams({
-      limit: "8",
+      limit: "24",
     });
-    const category = ($("competitorCategory")?.value || "").trim();
+    const category = competitorCategoryValue();
     const source = competitorSourceValue();
     const q = ($("competitorAssetQuery")?.value || "").trim();
     const mediaType = $("competitorMediaType")?.value || "";
+    const reviewStatus = $("competitorReviewStatus")?.value || "";
     if (category) params.set("category", category);
     if (source) params.set("source", source);
     if (q) params.set("q", q);
     if (mediaType) params.set("media_type", mediaType);
+    if (reviewStatus) params.set("review_status", reviewStatus);
     const data = await api(`/api/competitor-assets/search?${params.toString()}`);
+    state.competitorAssets = data.assets || [];
+    state.selectedAssetIds.clear();
     renderCompetitorAssets(data.assets || []);
-    setMessage("competitorMessage", `已加载 ${data.count || 0} 条素材。`, "ok");
+    setMessage("competitorMessage", `已加载 ${data.count || 0} / ${data.total || data.count || 0} 条素材。`, "ok");
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
   }
@@ -591,34 +704,51 @@ async function loadCompetitorAssets() {
 function renderCompetitorAssets(assets, targetId = "competitorAssets") {
   const target = $(targetId);
   if (!target) return;
+  if (targetId === "competitorAssets") {
+    state.competitorAssets = assets || [];
+  }
   if (!assets.length) {
     target.innerHTML = '<div class="empty-state small"><strong>暂无素材</strong><span>可先发现 ASIN 或刷新入库。</span></div>';
     return;
   }
-  target.innerHTML = assets.map(renderCompetitorAsset).join("");
+  target.innerHTML = assets.map((asset) => renderCompetitorAsset(asset, targetId === "competitorAssets")).join("");
 }
 
-function renderCompetitorAsset(asset) {
+function renderCompetitorAsset(asset, interactive = true) {
   const media = asset.media || [];
   const videos = media.filter((item) => item.media_type === "video");
+  const gifs = media.filter((item) => item.media_type === "gif");
   const firstImage = asset.image_url || media.find((item) => item.thumbnail_url || item.media_url)?.thumbnail_url || media.find((item) => item.media_type === "image")?.media_url || "";
   const tags = (asset.ai_tags || []).slice(0, 5).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("");
-  const mediaLine = `${videos.length} 条视频 / ${media.length} 个媒体项`;
+  const mediaLine = `${videos.length} 条视频 / ${gifs.length} 条动图 / ${media.length} 个媒体项`;
   const sourceLabel = asset.platform || asset.source_type || "素材";
   const assetKey = asset.asin ? `ASIN ${asset.asin}` : sourceLabel;
   const evidenceLabel = asset.platform ? `打开 ${asset.platform} 证据` : "打开素材证据";
   const contentId = asset.metadata?.platform_content_id || asset.metadata?.youtube_video_id || "";
   const publishedAt = asset.metadata?.published_at ? `发布 ${formatDateTime(asset.metadata.published_at)}` : "";
   const embedLink = asset.embed_url ? `<a href="${escapeAttr(asset.embed_url)}" target="_blank" rel="noreferrer">嵌入预览</a>` : "";
+  const checked = state.selectedAssetIds.has(asset.id);
+  const actions = interactive
+    ? `
+            <button type="button" class="link-button asset-detail" data-asset-id="${escapeAttr(asset.id || "")}">详情</button>
+            <button type="button" class="link-button asset-review" data-asset-id="${escapeAttr(asset.id || "")}" data-status="approved">通过</button>
+            <button type="button" class="link-button asset-review" data-asset-id="${escapeAttr(asset.id || "")}" data-status="featured">精选</button>
+      `
+    : "";
+  const selector = interactive
+    ? `<label class="asset-select"><input type="checkbox" class="asset-checkbox" data-asset-id="${escapeAttr(asset.id || "")}" ${checked ? "checked" : ""} /> 选择</label>`
+    : "";
   return `
-    <article class="competitor-asset">
-      ${firstImage ? `<img src="${escapeAttr(firstImage)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : `<div class="asset-image-empty"><strong>${escapeHtml(sourceLabel)}</strong><span>无缩略图</span></div>`}
+    <article class="competitor-asset" data-asset-id="${escapeAttr(asset.id || "")}">
+      ${firstImage ? `<img src="${escapeAttr(appPath(firstImage))}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : `<div class="asset-image-empty"><strong>${escapeHtml(sourceLabel)}</strong><span>无缩略图</span></div>`}
       <div>
         <div class="asset-meta">
+          ${selector}
           <span>${escapeHtml(asset.brand || "Unknown")}</span>
           <span>${escapeHtml(assetKey)}</span>
           ${contentId ? `<span>ID ${escapeHtml(contentId)}</span>` : ""}
           <span>分数 ${escapeHtml(asset.quality_score || 0)}</span>
+          <span>${escapeHtml(asset.review_status || "auto_collected")}</span>
           ${publishedAt ? `<span>${escapeHtml(publishedAt)}</span>` : ""}
         </div>
         <h4>${escapeHtml(asset.title || "Untitled")}</h4>
@@ -628,12 +758,87 @@ function renderCompetitorAsset(asset) {
           <span>${escapeHtml(mediaLine)}</span>
           <span class="asset-links">
             ${embedLink}
+            ${actions}
             <a href="${escapeAttr(asset.source_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(evidenceLabel)}</a>
           </span>
         </div>
       </div>
     </article>
   `;
+}
+
+function findAsset(assetId) {
+  return (state.competitorAssets || []).find((item) => String(item.id) === String(assetId));
+}
+
+async function updateAssetReview(assetId, reviewStatus) {
+  if (!assetId) return;
+  setMessage("competitorMessage", "正在更新素材审核状态...");
+  try {
+    const data = await api(`/api/competitor-assets/${encodeURIComponent(assetId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ review_status: reviewStatus }),
+    });
+    state.competitorAssets = state.competitorAssets.map((item) => (item.id === assetId ? data.asset : item));
+    renderCompetitorAssets(state.competitorAssets);
+    setMessage("competitorMessage", `素材已标记为 ${reviewStatus}。`, "ok");
+    await loadAdminOverview().catch(() => {});
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function bulkReviewAssets(reviewStatus) {
+  const assetIds = Array.from(state.selectedAssetIds || []);
+  if (!assetIds.length) {
+    setMessage("competitorMessage", "请先勾选要批量处理的素材。", "error");
+    return;
+  }
+  setMessage("competitorMessage", "正在批量更新素材状态...");
+  try {
+    await api("/api/competitor-assets/bulk-review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asset_ids: assetIds, review_status: reviewStatus }),
+    });
+    state.selectedAssetIds.clear();
+    await loadCompetitorAssets();
+    setMessage("competitorMessage", `已批量标记 ${assetIds.length} 条素材为 ${reviewStatus}。`, "ok");
+    await loadAdminOverview().catch(() => {});
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+function openAssetDrawer(assetId) {
+  const asset = findAsset(assetId);
+  if (!asset) return;
+  const media = asset.media || [];
+  const preview = asset.image_url || media.find((item) => item.thumbnail_url)?.thumbnail_url || "";
+  const metadata = asset.metadata ? JSON.stringify(asset.metadata, null, 2) : "{}";
+  $("assetDrawerBody").innerHTML = `
+    <div class="drawer-header">
+      <span>${escapeHtml(asset.platform || asset.source_type || "素材")}</span>
+      <h2>${escapeHtml(asset.title || "Untitled")}</h2>
+      <p>${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(asset.review_status || "")} · ${escapeHtml(asset.rights_status || "")}</p>
+    </div>
+    ${preview ? `<img class="drawer-preview" src="${escapeAttr(appPath(preview))}" alt="" referrerpolicy="no-referrer" />` : ""}
+    <dl class="drawer-meta">
+      <dt>原始链接</dt><dd><a href="${escapeAttr(asset.source_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(asset.source_url || "-")}</a></dd>
+      <dt>嵌入预览</dt><dd>${asset.embed_url ? `<a href="${escapeAttr(asset.embed_url)}" target="_blank" rel="noreferrer">${escapeHtml(asset.embed_url)}</a>` : "-"}</dd>
+      <dt>AI 分析</dt><dd>${escapeHtml(asset.ai_analysis || "-")}</dd>
+      <dt>标签</dt><dd>${escapeHtml((asset.ai_tags || []).join("、") || "-")}</dd>
+      <dt>公开元数据</dt><dd><pre>${escapeHtml(metadata)}</pre></dd>
+    </dl>
+  `;
+  $("assetDrawer").classList.remove("hidden");
+  $("assetDrawer").setAttribute("aria-hidden", "false");
+}
+
+function closeAssetDrawer() {
+  $("assetDrawer").classList.add("hidden");
+  $("assetDrawer").setAttribute("aria-hidden", "true");
 }
 
 async function submitCompetitorResearch(event) {
@@ -691,6 +896,238 @@ function renderCompetitorReport(job) {
   $("competitorReportBody").innerHTML = markdownToHtml(job.report || "");
   renderCompetitorAssets(job.evidence || [], "competitorEvidence");
   $("competitorReportSection").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function loadHotspots() {
+  const params = new URLSearchParams({ limit: "100" });
+  const category = $("hotspotCategory")?.value?.trim();
+  const market = $("hotspotMarket")?.value?.trim();
+  const platform = $("hotspotPlatform")?.value?.trim();
+  if (category) params.set("category", category);
+  if (market) params.set("target_market", market);
+  if (platform) params.set("platform", platform);
+  const data = await api(`/api/hotspots?${params.toString()}`);
+  state.hotspots = data.hotspots || [];
+  renderHotspots();
+}
+
+function renderHotspots() {
+  const target = $("hotspotRows");
+  if (!target) return;
+  if (!state.hotspots.length) {
+    target.innerHTML = '<tr><td colspan="8">暂无热点，可刷新公开源或人工新增。</td></tr>';
+    return;
+  }
+  target.innerHTML = state.hotspots
+    .map(
+      (item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.title || "")}</strong><span>${escapeHtml((item.tags || []).join("、"))}</span></td>
+          <td>${escapeHtml(item.source_name || item.source_type || "")}</td>
+          <td>${escapeHtml(item.target_market || "通用")}</td>
+          <td>${escapeHtml(item.category || "通用")}</td>
+          <td>${escapeHtml(item.heat_score || 0)}</td>
+          <td>${escapeHtml(item.valid_from || "")} 至 ${escapeHtml(item.valid_to || "")}</td>
+          <td>${escapeHtml(item.status || "")}</td>
+          <td><button type="button" class="link-button hotspot-status" data-hotspot-id="${escapeAttr(item.id)}" data-status="${item.status === "active" ? "archived" : "active"}">${item.status === "active" ? "归档" : "启用"}</button></td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
+async function submitHotspot(event) {
+  event.preventDefault();
+  const title = $("hotspotTitle").value.trim();
+  if (!title) {
+    setMessage("hotspotMessage", "请填写热点标题。", "error");
+    return;
+  }
+  try {
+    const payload = {
+      title,
+      source_type: "manual",
+      source_name: "人工录入",
+      category: $("hotspotCategory").value.trim(),
+      target_market: $("hotspotMarket").value.trim(),
+      platform: $("hotspotPlatform").value.trim(),
+      heat_score: Number($("hotspotScore").value || 70),
+      valid_to: $("hotspotValidTo").value || "",
+      tags: splitList($("hotspotTags").value || ""),
+      status: "active",
+    };
+    await api("/api/hotspots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setMessage("hotspotMessage", "热点已保存。", "ok");
+    $("hotspotTitle").value = "";
+    $("hotspotTags").value = "";
+    await loadHotspots();
+    await loadAdminOverview().catch(() => {});
+  } catch (error) {
+    setMessage("hotspotMessage", error.message, "error");
+  }
+}
+
+async function refreshHotspots() {
+  setMessage("hotspotMessage", "正在刷新公开热点源...");
+  try {
+    const data = await api("/api/hotspots/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: $("hotspotCategory")?.value?.trim() || $("categorySelect")?.value || "",
+        target_market: $("hotspotMarket")?.value?.trim() || "北美 (US/CA)",
+        platform: $("hotspotPlatform")?.value?.trim() || "",
+      }),
+    });
+    setMessage("hotspotMessage", `已刷新 ${data.upsert?.total || 0} 条热点。`, "ok");
+    await loadHotspots();
+    await loadAdminOverview().catch(() => {});
+  } catch (error) {
+    setMessage("hotspotMessage", error.message, "error");
+  }
+}
+
+async function updateHotspotStatus(hotspotId, status) {
+  await api(`/api/hotspots/${encodeURIComponent(hotspotId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  await loadHotspots();
+  await loadAdminOverview().catch(() => {});
+}
+
+async function loadHotspotSources() {
+  const data = await api("/api/hotspot-sources");
+  state.hotspotSources = data.sources || [];
+  renderHotspotSources();
+}
+
+function renderHotspotSources() {
+  const target = $("hotspotSources");
+  if (!target) return;
+  if (!state.hotspotSources.length) {
+    target.innerHTML = '<div class="empty-state small"><strong>暂无热点源</strong><span>系统会提供默认公开源。</span></div>';
+    return;
+  }
+  target.innerHTML = state.hotspotSources
+    .map(
+      (source) => `
+        <article class="compact-item static">
+          <strong>${escapeHtml(source.name || source.source_type)}</strong>
+          <span>${escapeHtml(source.source_type || "")} · ${source.enabled ? "启用" : "停用"} · ${escapeHtml(source.target_market || "通用")}</span>
+        </article>
+      `
+    )
+    .join("");
+}
+
+async function loadCollectionRuns() {
+  const data = await api("/api/competitor-collection-runs?limit=50");
+  state.collectionRuns = data.runs || [];
+  renderCollectionRuns();
+}
+
+function renderCollectionRuns() {
+  const target = $("collectionRuns");
+  if (!target) return;
+  if (!state.collectionRuns.length) {
+    target.innerHTML = '<div class="empty-state small"><strong>暂无采集任务</strong><span>可先记录一个平台采集计划。</span></div>';
+    return;
+  }
+  target.innerHTML = state.collectionRuns
+    .map((run) => {
+      const request = run.request || {};
+      return `
+        <article class="compact-item static">
+          <strong>${escapeHtml(request.category || "通用品类")} · ${escapeHtml(request.platform || request.source || "平台")}</strong>
+          <span>${escapeHtml(run.status || "")} · ${escapeHtml(request.target_market || "")} · ${escapeHtml(formatDateTime(run.created_at))}</span>
+          ${run.error_message ? `<span class="error-text">${escapeHtml(run.error_message)}</span>` : ""}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function submitCollectionRun(event) {
+  event.preventDefault();
+  try {
+    await api("/api/competitor-collection-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: $("collectionCategory").value.trim(),
+        target_market: $("collectionMarket").value.trim(),
+        platform: $("collectionPlatform").value,
+        source: $("collectionPlatform").value.toLowerCase(),
+        brands: splitList($("collectionBrands").value || ""),
+        keywords: splitList($("collectionKeywords").value || ""),
+        status: $("collectionStatus").value,
+      }),
+    });
+    setMessage("collectionMessage", "采集任务已记录。", "ok");
+    await loadCollectionRuns();
+    await loadAdminOverview().catch(() => {});
+  } catch (error) {
+    setMessage("collectionMessage", error.message, "error");
+  }
+}
+
+async function loadCompetitorConfigs() {
+  const data = await api("/api/competitor-configs");
+  state.competitorConfigs = data.configs || [];
+  renderCompetitorConfigs();
+}
+
+function renderCompetitorConfigs() {
+  const target = $("configList");
+  if (!target) return;
+  if (!state.competitorConfigs.length) {
+    target.innerHTML = '<div class="empty-state small"><strong>暂无品类配置</strong><span>保存后可复用品牌和关键词模板。</span></div>';
+    return;
+  }
+  target.innerHTML = state.competitorConfigs
+    .map(
+      (config) => `
+        <article class="compact-item static">
+          <strong>${escapeHtml(config.category || "")}</strong>
+          <span>品牌：${escapeHtml((config.brands || []).join("、") || "-")}</span>
+          <span>关键词：${escapeHtml((config.keywords || []).join("、") || "-")}</span>
+        </article>
+      `
+    )
+    .join("");
+}
+
+async function submitCompetitorConfig(event) {
+  event.preventDefault();
+  const category = $("configCategory").value.trim();
+  if (!category) {
+    setMessage("configMessage", "请填写品类。", "error");
+    return;
+  }
+  try {
+    await api("/api/competitor-configs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category,
+        target_market: $("configMarket").value.trim(),
+        refresh_frequency: $("configFrequency").value,
+        brands: splitList($("configBrands").value || ""),
+        keywords: splitList($("configKeywords").value || ""),
+        platforms: splitList($("configPlatforms").value || ""),
+      }),
+    });
+    setMessage("configMessage", "配置已保存。", "ok");
+    await loadCompetitorConfigs();
+  } catch (error) {
+    setMessage("configMessage", error.message, "error");
+  }
 }
 
 async function submitGeneration(event) {
@@ -1195,7 +1632,7 @@ function renderVideoJobs(jobs) {
   $("videoJobs").innerHTML =
     (jobs || []).map((job) => {
       const preview = job.preview_url
-        ? `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
+        ? `<video class="video-preview" controls src="${escapeAttr(appPath(job.preview_url))}"></video><a class="download-link" href="${escapeAttr(appPath(job.preview_url))}" target="_blank" rel="noreferrer">打开视频</a>`
         : "";
       const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
       return `
@@ -1328,7 +1765,7 @@ async function startApp() {
   state.appReady = true;
   renderVideoTypePicker();
   try {
-    await Promise.all([loadSummary(), loadOptions(), loadJobs()]);
+    await Promise.all([loadSummary(), loadOptions(), loadJobs(), loadAdminOverview()]);
     if (!state.jobsTimer) {
       state.jobsTimer = setInterval(loadJobs, 5000);
     }
@@ -1338,6 +1775,12 @@ async function startApp() {
   }
 }
 
+$("appShell").addEventListener("click", (event) => {
+  const pageButton = event.target.closest("[data-page], [data-page-link]");
+  if (!pageButton) return;
+  const page = pageButton.dataset.page || pageButton.dataset.pageLink;
+  if (page) showPage(page);
+});
 $("authForm").addEventListener("submit", submitAuth);
 $("categorySelect").addEventListener("change", updateModels);
 $("modelSearch").addEventListener("input", filterModels);
@@ -1420,6 +1863,7 @@ if ($("imagePreviewModal")) {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeStoryboardImagePreview();
+    closeAssetDrawer();
   }
 });
 $("discoverRainforest").addEventListener("click", discoverRainforest);
@@ -1429,7 +1873,26 @@ $("importSocialUrls").addEventListener("click", importSocialUrls);
 $("discoverYouTube").addEventListener("click", discoverYouTube);
 $("refreshYouTube").addEventListener("click", refreshYouTube);
 $("refreshSocialThumbnails").addEventListener("click", refreshSocialThumbnails);
+$("bulkApproveAssets").addEventListener("click", () => bulkReviewAssets("approved"));
+$("bulkFeatureAssets").addEventListener("click", () => bulkReviewAssets("featured"));
 $("competitorResearchForm").addEventListener("submit", submitCompetitorResearch);
+$("competitorAssets").addEventListener("click", (event) => {
+  const checkbox = event.target.closest(".asset-checkbox");
+  if (checkbox) {
+    if (checkbox.checked) state.selectedAssetIds.add(checkbox.dataset.assetId);
+    else state.selectedAssetIds.delete(checkbox.dataset.assetId);
+    return;
+  }
+  const detail = event.target.closest(".asset-detail");
+  if (detail) {
+    openAssetDrawer(detail.dataset.assetId);
+    return;
+  }
+  const review = event.target.closest(".asset-review");
+  if (review) {
+    updateAssetReview(review.dataset.assetId, review.dataset.status);
+  }
+});
 $("competitorDiscovery").addEventListener("click", (event) => {
   const chip = event.target.closest(".asin-chip");
   if (!chip) return;
@@ -1448,5 +1911,24 @@ $("competitorDiscovery").addEventListener("click", (event) => {
 if ($("videoVariantSelect")) $("videoVariantSelect").addEventListener("change", updateVideoPrompt);
 if ($("submitVideo")) $("submitVideo").addEventListener("click", submitVideoGeneration);
 if ($("refreshVideo")) $("refreshVideo").addEventListener("click", refreshVideoGeneration);
+if ($("assetDrawerClose")) $("assetDrawerClose").addEventListener("click", closeAssetDrawer);
+if ($("assetDrawerCloseButton")) $("assetDrawerCloseButton").addEventListener("click", closeAssetDrawer);
+$("hotspotForm").addEventListener("submit", submitHotspot);
+$("loadHotspots").addEventListener("click", loadHotspots);
+$("refreshHotspots").addEventListener("click", refreshHotspots);
+$("hotspotRows").addEventListener("click", async (event) => {
+  const button = event.target.closest(".hotspot-status");
+  if (!button) return;
+  try {
+    await updateHotspotStatus(button.dataset.hotspotId, button.dataset.status);
+    setMessage("hotspotMessage", "热点状态已更新。", "ok");
+  } catch (error) {
+    setMessage("hotspotMessage", error.message, "error");
+  }
+});
+$("collectionRunForm").addEventListener("submit", submitCollectionRun);
+$("loadCollectionRuns").addEventListener("click", loadCollectionRuns);
+$("competitorConfigForm").addEventListener("submit", submitCompetitorConfig);
+$("loadConfigs").addEventListener("click", () => Promise.all([loadCompetitorConfigs(), loadHotspotSources()]));
 
 initializeAuth();

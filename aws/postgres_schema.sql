@@ -156,3 +156,69 @@ create table if not exists competitor_configs (
   updated_by text,
   updated_at timestamptz not null default now()
 );
+
+create table if not exists industry_hotspots (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  source_type text not null default 'manual',
+  source_name text,
+  source_url text,
+  category text,
+  target_market text,
+  platform text,
+  heat_score integer not null default 0,
+  valid_from date,
+  valid_to date,
+  status text not null default 'active',
+  tags text[] not null default '{}',
+  notes text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_industry_hotspots_lookup
+  on industry_hotspots (status, target_market, category, platform, valid_to);
+
+create index if not exists idx_industry_hotspots_source
+  on industry_hotspots (source_type, source_name);
+
+create table if not exists hotspot_sources (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  source_type text not null,
+  url text,
+  target_market text,
+  category text,
+  platform text,
+  enabled boolean not null default true,
+  keywords text[] not null default '{}',
+  config jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_hotspot_sources_enabled
+  on hotspot_sources (enabled, source_type);
+
+create table if not exists competitor_collection_runs (
+  id uuid primary key default gen_random_uuid(),
+  category text,
+  target_market text,
+  platform text,
+  source_type text,
+  request_payload jsonb not null default '{}'::jsonb,
+  status text not null default 'queued',
+  inserted_count integer not null default 0,
+  updated_count integer not null default 0,
+  error_message text,
+  started_at timestamptz,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_competitor_collection_runs_lookup
+  on competitor_collection_runs (status, category, platform, created_at desc);
+
+alter table script_jobs add column if not exists context_snapshot jsonb not null default '{}'::jsonb;

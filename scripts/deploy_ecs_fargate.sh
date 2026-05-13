@@ -3,6 +3,11 @@ set -euo pipefail
 
 APP_NAME="${APP_NAME:-video-script-creator}"
 APP_RUNTIME="${APP_RUNTIME:-api}"
+APP_BASE_PATH="${APP_BASE_PATH:-}"
+if [[ -n "$APP_BASE_PATH" && "$APP_BASE_PATH" != /* ]]; then
+  APP_BASE_PATH="/${APP_BASE_PATH}"
+fi
+APP_BASE_PATH="${APP_BASE_PATH%/}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-eu-central-1}}"
 BEDROCK_AWS_REGION="${BEDROCK_AWS_REGION:-$AWS_REGION}"
 BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-eu.anthropic.claude-sonnet-4-5-20250929-v1:0}"
@@ -45,7 +50,7 @@ ALLOWED_HTTP_CIDRS="${ALLOWED_HTTP_CIDRS:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-8501}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
 if [[ "$APP_RUNTIME" == "api" ]]; then
-  DEFAULT_HEALTH_CHECK_PATH="/healthz"
+  DEFAULT_HEALTH_CHECK_PATH="${APP_BASE_PATH}/healthz"
 else
   DEFAULT_HEALTH_CHECK_PATH="/_stcore/health"
 fi
@@ -72,6 +77,7 @@ TASK_SG_NAME="${TASK_SG_NAME:-${APP_NAME}-task-sg}"
 
 echo "Deploying ${APP_NAME} to ECS Fargate in ${AWS_REGION}"
 echo "Image: ${IMAGE_URI}"
+echo "Base path: ${APP_BASE_PATH:-/}"
 
 aws ecr describe-repositories --repository-names "$ECR_REPO" --region "$AWS_REGION" >/dev/null 2>&1 \
   || aws ecr create-repository --repository-name "$ECR_REPO" --region "$AWS_REGION" >/dev/null
@@ -537,6 +543,7 @@ python3 - "$TASK_DEF_FILE" <<PY
 import json, os, sys
 env = [
     {"name": "APP_RUNTIME", "value": "${APP_RUNTIME}"},
+    {"name": "APP_BASE_PATH", "value": "${APP_BASE_PATH}"},
     {"name": "BEDROCK_AWS_REGION", "value": "${BEDROCK_AWS_REGION}"},
     {"name": "BEDROCK_MODEL_ID", "value": "${BEDROCK_MODEL_ID}"},
     {"name": "BEDROCK_MODEL_FALLBACK_IDS", "value": "${BEDROCK_MODEL_FALLBACK_IDS}"},
