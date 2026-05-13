@@ -33,6 +33,7 @@ FRIDGE_BEDROCK_REGION = (
 FRIDGE_BEDROCK_MAX_TOKENS = int(os.getenv("FRIDGE_BEDROCK_MAX_TOKENS", "2048"))
 FRIDGE_CANONICAL_HOST = os.getenv("FRIDGE_CANONICAL_HOST", "videoscript.hisense.com").strip().lower()
 FRIDGE_CANONICAL_SCHEME = os.getenv("FRIDGE_CANONICAL_SCHEME", "https").strip() or "https"
+FRIDGE_DUPLICATE_WINDOW_SECONDS = int(os.getenv("FRIDGE_DUPLICATE_WINDOW_SECONDS", "30"))
 
 
 SPEC_ALIASES = {
@@ -249,6 +250,7 @@ class FridgeSessionPatchRequest(BaseModel):
 class FridgeMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=3000)
     model: str = Field(default="", max_length=120)
+    request_id: str = Field(default="", max_length=80)
 
 
 class FridgeFeedbackRequest(BaseModel):
@@ -261,6 +263,16 @@ class FridgeFeedbackRequest(BaseModel):
 
 def _now_iso() -> str:
     return dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _parse_iso(value: str) -> dt.datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return dt.datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
 
 
 def _safe_slug(text: str) -> str:
@@ -742,6 +754,33 @@ class FridgeKnowledgeStore:
         self.storage.write_json(self.feedback_key(), feedback[:1000])
         return item
 
+    def find_duplicate_message(self, session: dict, question: str, request_id: str = "", selected_model: str = "") -> dict | None:
+        messages = list(session.get("messages") or [])
+        if not messages:
+            return None
+        if request_id:
+            for index, message in enumerate(messages):
+                if message.get("role") == "user" and message.get("request_id") == request_id:
+                    for candidate in messages[index + 1 :]:
+                        if candidate.get("role") == "assistant" and candidate.get("content"):
+                            return candidate
+        normalized_question = _text(question)
+        if len(messages) >= 2:
+            user_message = messages[-2]
+            assistant_message = messages[-1]
+            created_at = _parse_iso(assistant_message.get("created_at", "")) or _parse_iso(user_message.get("created_at", ""))
+            is_recent = bool(created_at and (dt.datetime.utcnow() - created_at).total_seconds() <= FRIDGE_DUPLICATE_WINDOW_SECONDS)
+            if (
+                is_recent
+                and user_message.get("role") == "user"
+                and assistant_message.get("role") == "assistant"
+                and _text(user_message.get("content")) == normalized_question
+                and _text(user_message.get("model")) == _text(selected_model)
+                and assistant_message.get("content")
+            ):
+                return assistant_message
+        return None
+
     def build_evidence(self, question: str, selected_model: str = "") -> dict:
         specs = self.load_dataset("specs")
         marketing = self.load_dataset("marketing")
@@ -1101,10 +1140,20 @@ def register_fridge_routes(
             session = next((item for item in sessions if item.get("id") == session_id), None)
             if not session:
                 raise HTTPException(status_code=404, detail="会话不存在。")
+            duplicate_message = store.find_duplicate_message(session, req.message, req.request_id, req.model)
+            if duplicate_message:
+                return {
+                    "session": session,
+                    "message": duplicate_message,
+                    "evidence": duplicate_message.get("sources", {}),
+                    "deduplicated": True,
+                }
             user_message = {
                 "id": uuid.uuid4().hex[:12],
                 "role": "user",
                 "content": req.message,
+                "request_id": req.request_id or uuid.uuid4().hex[:12],
+                "model": req.model,
                 "created_at": _now_iso(),
             }
             history = list(session.get("messages") or [])

@@ -396,7 +396,7 @@ function quickQuestionTemplates() {
 
 function renderQuickQuestions() {
   $("quickQuestions").innerHTML = quickQuestionTemplates()
-    .map((question) => `<button type="button" class="quick-button" data-question="${escapeAttr(question)}">${escapeHtml(question)}</button>`)
+    .map((question) => `<button type="button" class="quick-button" data-question="${escapeAttr(question)}"${state.busy ? " disabled" : ""}>${escapeHtml(question)}</button>`)
     .join("");
 }
 
@@ -489,20 +489,30 @@ function renderFeedback(messageId) {
 async function sendQuestion(text) {
   const question = String(text || "").trim();
   if (!question || state.busy) return;
+  state.busy = true;
+  const requestId = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`).replace(/[^A-Za-z0-9_.-]/g, "");
+  $("sendButton").disabled = true;
+  renderQuickQuestions();
   let session = activeSession();
   if (!session) {
-    session = await createSession("新会话");
+    try {
+      session = await createSession("新会话");
+    } catch (error) {
+      state.busy = false;
+      $("sendButton").disabled = false;
+      renderQuickQuestions();
+      setMessage("chatMessage", friendlyErrorMessage(error), "error");
+      return;
+    }
   }
-  state.busy = true;
   state.pending = { text: question, created_at: new Date().toISOString() };
-  $("sendButton").disabled = true;
   setMessage("chatMessage", "");
   renderMessages();
   let rendered = false;
   try {
     const data = await fridgeApi(`/api/fridge/sessions/${encodeURIComponent(session.id)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ message: question, model: state.selectedModel || "" }),
+      body: JSON.stringify({ message: question, model: state.selectedModel || "", request_id: requestId }),
     });
     upsertSession(data.session);
     state.activeSessionId = data.session.id;
@@ -523,6 +533,7 @@ async function sendQuestion(text) {
     state.pending = null;
     state.busy = false;
     $("sendButton").disabled = false;
+    renderQuickQuestions();
     if (!rendered) {
       renderMessages();
     }
@@ -682,7 +693,8 @@ function bindEvents() {
   });
   $("quickQuestions").addEventListener("click", (event) => {
     const button = event.target.closest("[data-question]");
-    if (!button) return;
+    if (!button || button.disabled || state.busy) return;
+    event.preventDefault();
     sendQuestion(button.dataset.question || "");
   });
   $("sessionList").addEventListener("click", async (event) => {
