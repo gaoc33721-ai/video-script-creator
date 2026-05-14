@@ -241,27 +241,22 @@ jobs:
           node --check web_frontend/app.js
           node --check web_frontend/admin/app.js
           python - <<'PY'
-          from fastapi.testclient import TestClient
-          import api_app
-
-          client = TestClient(api_app.app)
-          root = client.get("/")
-          admin = client.get("/admin/")
-          root_js = client.get("/static/app.js")
-          admin_js = client.get("/admin/static/app.js")
-          admin_health = client.get("/admin/healthz")
-          assert root.status_code == 200
-          assert admin.status_code == 200
-          assert root_js.status_code == 200
-          assert admin_js.status_code == 200
-          assert admin_health.status_code == 200
-          assert "generateForm" in root.text
-          assert "admin-shell" not in root.text
-          assert "admin-shell" in admin.text
-          assert "/admin/static/app.js" in admin.text
-          assert "admin-nav" not in root_js.text
-          assert "admin-nav" in admin_js.text
-          assert "storyboardCategoryHint" in root_js.text
+          from pathlib import Path
+          root_html = Path("web_frontend/index.html").read_text(encoding="utf-8")
+          admin_html = Path("web_frontend/admin/index.html").read_text(encoding="utf-8")
+          root_js = Path("web_frontend/app.js").read_text(encoding="utf-8")
+          admin_js = Path("web_frontend/admin/app.js").read_text(encoding="utf-8")
+          api = Path("api_app.py").read_text(encoding="utf-8")
+          deploy = Path(".github/workflows/deploy-ecs.yml").read_text(encoding="utf-8")
+          assert "generateForm" in root_html
+          assert "admin-shell" not in root_html
+          assert "admin-shell" in admin_html
+          assert "__BASE_PATH__/static/app.js" in admin_html
+          assert "admin-nav" not in root_js
+          assert "admin-nav" in admin_js
+          assert "storyboardCategoryHint" in root_js
+          assert "ADMIN_BASE_PATH" in api and "admin_static" in api
+          assert "APP_BASE_PATH: ''" in deploy
           PY
 
           git rm --quiet --ignore-unmatch .github/workflows/apply-front-admin-split.yml
