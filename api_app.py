@@ -51,6 +51,7 @@ os.makedirs(APP_DATA_DIR, exist_ok=True)
 APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip().strip("/")
 if APP_BASE_PATH == "/":
     APP_BASE_PATH = ""
+ADMIN_BASE_PATH = "/admin"
 
 STORAGE = RuntimeStorage()
 PRODUCT_FEATURE_STORE = ProductFeatureStore(STORAGE)
@@ -182,8 +183,10 @@ app = FastAPI(title="海外爆款内容引擎 API")
 
 @app.middleware("http")
 async def _app_base_path_middleware(request: Request, call_next):
-    if APP_BASE_PATH:
-        path = request.scope.get("path") or ""
+    path = request.scope.get("path") or ""
+    if path == f"{ADMIN_BASE_PATH}/healthz" or path == f"{ADMIN_BASE_PATH}/api" or path.startswith(f"{ADMIN_BASE_PATH}/api/"):
+        request.scope["path"] = path[len(ADMIN_BASE_PATH):] or "/"
+    elif APP_BASE_PATH and APP_BASE_PATH != ADMIN_BASE_PATH:
         if path == APP_BASE_PATH:
             request.scope["path"] = "/"
         elif path.startswith(f"{APP_BASE_PATH}/"):
@@ -343,8 +346,9 @@ competitor_lock = threading.Lock()
 
 static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
 if os.path.isdir(static_dir):
-    if APP_BASE_PATH:
-        app.mount(f"{APP_BASE_PATH}/static", StaticFiles(directory=static_dir), name="static_prefixed")
+    admin_static_dir = os.path.join(static_dir, "admin")
+    if os.path.isdir(admin_static_dir):
+        app.mount(f"{ADMIN_BASE_PATH}/static", StaticFiles(directory=admin_static_dir), name="admin_static")
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 register_fridge_routes(app, STORAGE, _current_access_password, _clean_access_token, _access_control_active)
@@ -2542,14 +2546,12 @@ def _run_competitor_research_job(job_id: str):
         )
 
 
-@app.get("/", response_class=HTMLResponse)
-def index():
-    path = os.path.join(static_dir, "index.html")
+def _render_static_html(path: str, base_path: str = ""):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as handle:
             html = handle.read()
-            html = html.replace("__APP_BASE_PATH__", APP_BASE_PATH)
-            html = html.replace("__BASE_PATH__", APP_BASE_PATH)
+            html = html.replace("__APP_BASE_PATH__", base_path)
+            html = html.replace("__BASE_PATH__", base_path)
             return HTMLResponse(
                 html,
                 headers={"Cache-Control": "no-store, max-age=0"},
@@ -2559,6 +2561,16 @@ def index():
         headers={"Cache-Control": "no-store, max-age=0"},
     )
 
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return _render_static_html(os.path.join(static_dir, "index.html"), "")
+
+
+@app.get(ADMIN_BASE_PATH, response_class=HTMLResponse)
+@app.get(f"{ADMIN_BASE_PATH}/", response_class=HTMLResponse)
+def admin_index():
+    return _render_static_html(os.path.join(static_dir, "admin", "index.html"), ADMIN_BASE_PATH)
 
 @app.get("/healthz")
 def healthz():
