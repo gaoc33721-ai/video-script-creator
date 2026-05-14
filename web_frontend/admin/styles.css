@@ -1140,6 +1140,43 @@ button,
   font-size: 12px;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.status-pending,
+.status-review {
+  background: #fff8e6;
+  border-color: rgba(176, 114, 0, 0.24);
+  color: #8a5a00;
+}
+
+.status-approved {
+  background: #eefaf6;
+  border-color: rgba(0, 128, 96, 0.22);
+  color: #006b52;
+}
+
+.status-featured {
+  background: #f5f0ff;
+  border-color: rgba(104, 75, 180, 0.22);
+  color: #5f3fa3;
+}
+
+.status-rejected {
+  background: #fff2f2;
+  border-color: rgba(215, 0, 21, 0.2);
+  color: #b00020;
+}
+
 .competitor-asset h4 {
   margin: 8px 0;
   font-size: 17px;
@@ -1190,6 +1227,16 @@ button,
   color: var(--brand-dark);
   font-weight: 800;
   cursor: pointer;
+}
+
+.link-button.danger,
+button.danger {
+  color: #b00020;
+}
+
+button.secondary.danger {
+  border-color: rgba(215, 0, 21, 0.24);
+  background: #fff8f8;
 }
 
 .asset-links {
@@ -1251,7 +1298,8 @@ button,
   color: var(--muted);
 }
 
-.policy-note {
+.policy-note,
+.workflow-note {
   display: grid;
   gap: 6px;
   margin: 18px 0;
@@ -1262,6 +1310,7 @@ button,
 }
 
 .policy-note span,
+.workflow-note span,
 .error-text {
   color: var(--muted);
 }
@@ -1353,6 +1402,18 @@ button,
 .drawer-meta dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.drawer-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.drawer-status span:last-child {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .drawer-meta pre {

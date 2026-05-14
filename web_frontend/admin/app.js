@@ -30,6 +30,7 @@ const state = {
   selectedAssetIds: new Set(),
   hotspots: [],
   hotspotSources: [],
+  collectionTimer: null,
   collectionRuns: [],
   competitorConfigs: [],
 };
@@ -40,7 +41,39 @@ const on = (id, eventName, handler) => {
   if (node) node.addEventListener(eventName, handler);
   return node;
 };
-const APP_BASE_PATH = String(window.__APP_BASE_PATH__ || "").replace(/\/+$/, "");
+const APP_BASE_PATH = String(window.APP_BASE_PATH || window.__APP_BASE_PATH__ || "").replace(/\/+$/, "");
+const REVIEW_STATUS_META = {
+  auto_collected: {
+    label: "待审核",
+    className: "status-pending",
+    hint: "系统采集入库，尚未人工判断，默认只作为待看素材。",
+    afterAction: "会回到待审核列表，等待业务复核。",
+  },
+  needs_review: {
+    label: "需复核",
+    className: "status-review",
+    hint: "品牌、来源或内容价值还不确定，需要再次确认。",
+    afterAction: "会进入需复核列表，暂不作为优先引用素材。",
+  },
+  approved: {
+    label: "已通过审核",
+    className: "status-approved",
+    hint: "来源和内容价值已确认，可进入调研报告、深度分析和脚本上下文候选。",
+    afterAction: "会进入调研报告、深度分析和脚本上下文候选。",
+  },
+  featured: {
+    label: "精选案例",
+    className: "status-featured",
+    hint: "高质量标杆素材，脚本生成会优先引用，也可用于调研和深度分析。",
+    afterAction: "会作为高质量标杆被脚本生成优先引用。",
+  },
+  rejected: {
+    label: "不采用",
+    className: "status-rejected",
+    hint: "保留证据记录，但默认不再进入调研报告、深度分析或脚本候选。",
+    afterAction: "会保留证据记录，但默认不再进入业务使用候选。",
+  },
+};
 
 function appPath(path) {
   if (!path) return APP_BASE_PATH || "/";
@@ -49,6 +82,19 @@ function appPath(path) {
   }
   const normalized = path.startsWith("/") ? path : `/${path}`;
   return `${APP_BASE_PATH}${normalized}`;
+}
+
+function reviewStatusMeta(status) {
+  return REVIEW_STATUS_META[String(status || "auto_collected").toLowerCase()] || REVIEW_STATUS_META.auto_collected;
+}
+
+function reviewStatusLabel(status) {
+  return reviewStatusMeta(status).label;
+}
+
+function reviewStatusBadge(status) {
+  const meta = reviewStatusMeta(status);
+  return `<span class="status-pill ${escapeAttr(meta.className)}" title="${escapeAttr(meta.hint)}">${escapeHtml(meta.label)}</span>`;
 }
 
 function authHeaders(headers = {}) {
@@ -264,6 +310,10 @@ async function loadSummary() {
 
 function showPage(page) {
   state.currentPage = page || "dashboard";
+  if (state.currentPage !== "collection" && state.collectionTimer) {
+    clearTimeout(state.collectionTimer);
+    state.collectionTimer = null;
+  }
   document.querySelectorAll(".workspace-page").forEach((node) => {
     node.classList.toggle("active", node.id === `page${capitalizePage(state.currentPage)}`);
   });
@@ -299,10 +349,10 @@ async function loadAdminOverview() {
   const metrics = data.metrics || {};
   $("adminMetrics").innerHTML = [
     ["素材总量", metrics.asset_count || 0],
-    ["视频/动图", metrics.video_gif_count || 0],
-    ["今日新增", metrics.today_new_assets || 0],
     ["待审核", metrics.pending_review_count || 0],
-    ["有效热点", metrics.active_hotspot_count || 0],
+    ["已通过", metrics.approved_count || 0],
+    ["精选", metrics.featured_count || 0],
+    ["今日新增", metrics.today_new_assets || 0],
     ["近期失败", metrics.recent_failed_runs || 0],
   ]
     .map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`)
@@ -323,7 +373,7 @@ function renderDashboardAssets(assets) {
       (asset) => `
         <button type="button" class="compact-item" data-page-link="assets">
           <strong>${escapeHtml(asset.title || "Untitled")}</strong>
-          <span>${escapeHtml(asset.platform || asset.source_type || "素材")} · ${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(asset.review_status || "")}</span>
+          <span>${escapeHtml(asset.platform || asset.source_type || "素材")} · ${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(reviewStatusLabel(asset.review_status))}</span>
         </button>
       `
     )
@@ -782,10 +832,28 @@ function renderCompetitorAssets(assets, targetId = "competitorAssets") {
     state.competitorAssets = assets || [];
   }
   if (!assets.length) {
-    target.innerHTML = '<div class="empty-state small"><strong>暂无素材</strong><span>可先发现 ASIN 或刷新入库。</span></div>';
+    target.innerHTML = '<div class="empty-state small"><strong>暂无素材</strong><span>可先发现 ASIN 或刷新入库，再把可用素材标为通过审核或精选案例。</span></div>';
     return;
   }
   target.innerHTML = assets.map((asset) => renderCompetitorAsset(asset, targetId === "competitorAssets")).join("");
+}
+
+function reviewActionButtons(asset) {
+  const assetId = escapeAttr(asset.id || "");
+  const status = String(asset.review_status || "auto_collected").toLowerCase();
+  const buttons = [`<button type="button" class="link-button asset-detail" data-asset-id="${assetId}">详情</button>`];
+  if (status === "featured") {
+    buttons.push(`<button type="button" class="link-button asset-review" data-asset-id="${assetId}" data-status="approved">取消精选</button>`);
+  } else if (status !== "approved") {
+    buttons.push(`<button type="button" class="link-button asset-review" data-asset-id="${assetId}" data-status="approved">通过审核</button>`);
+  }
+  if (status !== "featured") {
+    buttons.push(`<button type="button" class="link-button asset-review" data-asset-id="${assetId}" data-status="featured">设为精选</button>`);
+  }
+  if (status !== "rejected") {
+    buttons.push(`<button type="button" class="link-button asset-review danger" data-asset-id="${assetId}" data-status="rejected">不采用</button>`);
+  }
+  return buttons.join("");
 }
 
 function renderCompetitorAsset(asset, interactive = true) {
@@ -804,13 +872,7 @@ function renderCompetitorAsset(asset, interactive = true) {
   const embedLink = asset.embed_url ? `<a href="${escapeAttr(asset.embed_url)}" target="_blank" rel="noreferrer">嵌入预览</a>` : "";
   const emptyPreviewLabel = asset.embed_url || asset.embed_html ? "可嵌入预览" : "无缩略图";
   const checked = state.selectedAssetIds.has(asset.id);
-  const actions = interactive
-    ? `
-            <button type="button" class="link-button asset-detail" data-asset-id="${escapeAttr(asset.id || "")}">详情</button>
-            <button type="button" class="link-button asset-review" data-asset-id="${escapeAttr(asset.id || "")}" data-status="approved">通过</button>
-            <button type="button" class="link-button asset-review" data-asset-id="${escapeAttr(asset.id || "")}" data-status="featured">精选</button>
-      `
-    : "";
+  const actions = interactive ? reviewActionButtons(asset) : "";
   const selector = interactive
     ? `<label class="asset-select"><input type="checkbox" class="asset-checkbox" data-asset-id="${escapeAttr(asset.id || "")}" ${checked ? "checked" : ""} /> 选择</label>`
     : "";
@@ -824,7 +886,7 @@ function renderCompetitorAsset(asset, interactive = true) {
           <span>${escapeHtml(assetKey)}</span>
           ${contentId ? `<span>ID ${escapeHtml(contentId)}</span>` : ""}
           <span>分数 ${escapeHtml(asset.quality_score || 0)}</span>
-          <span>${escapeHtml(asset.review_status || "auto_collected")}</span>
+          ${reviewStatusBadge(asset.review_status)}
           ${publishedAt ? `<span>${escapeHtml(publishedAt)}</span>` : ""}
         </div>
         <h4>${escapeHtml(asset.title || "Untitled")}</h4>
@@ -858,7 +920,8 @@ async function updateAssetReview(assetId, reviewStatus) {
     });
     state.competitorAssets = state.competitorAssets.map((item) => (item.id === assetId ? data.asset : item));
     renderCompetitorAssets(state.competitorAssets);
-    setMessage("competitorMessage", `素材已标记为 ${reviewStatus}。`, "ok");
+    const meta = reviewStatusMeta(reviewStatus);
+    setMessage("competitorMessage", `素材已标记为“${meta.label}”：${meta.afterAction}`, "ok");
     await loadAdminOverview().catch(() => {});
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
@@ -880,7 +943,8 @@ async function bulkReviewAssets(reviewStatus) {
     });
     state.selectedAssetIds.clear();
     await loadCompetitorAssets();
-    setMessage("competitorMessage", `已批量标记 ${assetIds.length} 条素材为 ${reviewStatus}。`, "ok");
+    const meta = reviewStatusMeta(reviewStatus);
+    setMessage("competitorMessage", `已将 ${assetIds.length} 条素材标记为“${meta.label}”：${meta.afterAction}`, "ok");
     await loadAdminOverview().catch(() => {});
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
@@ -910,11 +974,12 @@ function renderAssetDrawer(asset, loading = false) {
   const metadata = asset.metadata ? JSON.stringify(asset.metadata, null, 2) : "{}";
   const embedUrl = asset.embed_url || "";
   const evidenceStatus = asset.metadata?.evidence_status || "";
+  const reviewMeta = reviewStatusMeta(asset.review_status);
   $("assetDrawerBody").innerHTML = `
     <div class="drawer-header">
       <span>${escapeHtml(asset.platform || asset.source_type || "素材")}</span>
       <h2>${escapeHtml(asset.title || "Untitled")}</h2>
-      <p>${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(asset.review_status || "")} · ${escapeHtml(asset.rights_status || "")}</p>
+      <p>${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(reviewMeta.label)} · ${escapeHtml(asset.rights_status || "")}</p>
     </div>
     ${loading ? '<div class="empty-state small"><strong>正在加载完整详情</strong><span>卡片已先显示，完整元数据和深度分析马上补齐。</span></div>' : ""}
     ${preview ? `<img class="drawer-preview" src="${escapeAttr(appPath(preview))}" alt="" referrerpolicy="no-referrer" />` : ""}
@@ -923,6 +988,7 @@ function renderAssetDrawer(asset, loading = false) {
       <dt>原始链接</dt><dd><a href="${escapeAttr(asset.source_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(asset.source_url || "-")}</a></dd>
       <dt>嵌入预览</dt><dd>${embedUrl ? `<a href="${escapeAttr(embedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(embedUrl)}</a>` : "-"}</dd>
       <dt>证据状态</dt><dd>${escapeHtml(evidenceStatus || "-")}</dd>
+      <dt>业务状态</dt><dd class="drawer-status">${reviewStatusBadge(asset.review_status)}<span>${escapeHtml(reviewMeta.hint)}</span></dd>
       <dt>AI 分析</dt><dd>${escapeHtml(asset.ai_analysis || "-")}</dd>
       ${renderDeepAnalysisBlock(asset)}
       <dt>标签</dt><dd>${escapeHtml((asset.ai_tags || []).join("、") || "-")}</dd>
@@ -1141,25 +1207,61 @@ function renderHotspotSources() {
 }
 
 async function loadCollectionRuns() {
+  if (state.collectionTimer) {
+    clearTimeout(state.collectionTimer);
+    state.collectionTimer = null;
+  }
   const data = await api("/api/competitor-collection-runs?limit=50");
   state.collectionRuns = data.runs || [];
   renderCollectionRuns();
+  const hasActiveRun = state.collectionRuns.some((run) => ["queued", "running"].includes(String(run.status || "").toLowerCase()));
+  if (state.currentPage === "collection" && hasActiveRun) {
+    state.collectionTimer = setTimeout(() => {
+      loadCollectionRuns().catch((error) => console.warn("Failed to refresh collection runs", error));
+    }, 4000);
+  }
+}
+
+function collectionStatusLabel(status) {
+  const value = String(status || "").toLowerCase();
+  const labels = {
+    queued: "排队中",
+    running: "执行中",
+    succeeded: "已完成",
+    partial: "部分完成",
+    failed: "失败",
+    recorded: "历史记录",
+  };
+  return labels[value] || status || "-";
 }
 
 function renderCollectionRuns() {
   const target = $("collectionRuns");
   if (!target) return;
   if (!state.collectionRuns.length) {
-    target.innerHTML = '<div class="empty-state small"><strong>暂无采集任务</strong><span>可先记录一个平台采集计划。</span></div>';
+    target.innerHTML = '<div class="empty-state small"><strong>暂无采集任务</strong><span>提交后会自动刷新状态；完成后到竞品素材库审核素材。</span></div>';
     return;
   }
   target.innerHTML = state.collectionRuns
     .map((run) => {
-      const request = run.request || {};
+      const request = run.resolved_request || run.request || {};
+      const summary = run.result_summary || {};
+      const upsert = summary.upsert || {};
+      const statusLine = [
+        collectionStatusLabel(run.status),
+        run.current_step || "",
+        request.target_market || "",
+        formatDateTime(run.created_at),
+      ].filter(Boolean).join(" · ");
+      const resultLine = summary.fetched_count || upsert.total
+        ? `发现 ${summary.discovered_count || 0} 条，抓取 ${summary.fetched_count || 0} 条，入库/更新 ${upsert.total || 0} 条`
+        : "";
       return `
         <article class="compact-item static">
           <strong>${escapeHtml(request.category || "通用品类")} · ${escapeHtml(request.platform || request.source || "平台")}</strong>
-          <span>${escapeHtml(run.status || "")} · ${escapeHtml(request.target_market || "")} · ${escapeHtml(formatDateTime(run.created_at))}</span>
+          <span>${escapeHtml(statusLine)}</span>
+          ${run.config_applied ? '<span>已套用品类配置中的品牌/关键词。</span>' : ""}
+          ${resultLine ? `<span>${escapeHtml(resultLine)}</span>` : ""}
           ${run.error_message ? `<span class="error-text">${escapeHtml(run.error_message)}</span>` : ""}
         </article>
       `;
@@ -1180,10 +1282,10 @@ async function submitCollectionRun(event) {
         source: $("collectionPlatform").value.toLowerCase(),
         brands: splitList($("collectionBrands").value || ""),
         keywords: splitList($("collectionKeywords").value || ""),
-        status: $("collectionStatus").value,
+        status: "queued",
       }),
     });
-    setMessage("collectionMessage", "采集任务已记录。", "ok");
+    setMessage("collectionMessage", "采集任务已提交，后台正在执行。", "ok");
     await loadCollectionRuns();
     await loadAdminOverview().catch(() => {});
   } catch (error) {
@@ -1209,6 +1311,7 @@ function renderCompetitorConfigs() {
       (config) => `
         <article class="compact-item static">
           <strong>${escapeHtml(config.category || "")}</strong>
+          <span>默认市场：${escapeHtml(config.target_market || "-")} · 刷新频率：${escapeHtml(config.refresh_frequency || "manual")}</span>
           <span>品牌：${escapeHtml((config.brands || []).join("、") || "-")}</span>
           <span>关键词：${escapeHtml((config.keywords || []).join("、") || "-")}</span>
         </article>
@@ -2039,6 +2142,7 @@ on("refreshSocialThumbnails", "click", refreshSocialThumbnails);
 on("deepAnalyzeAssets", "click", runDeepAnalysisAssets);
 on("bulkApproveAssets", "click", () => bulkReviewAssets("approved"));
 on("bulkFeatureAssets", "click", () => bulkReviewAssets("featured"));
+on("bulkRejectAssets", "click", () => bulkReviewAssets("rejected"));
 on("competitorResearchForm", "submit", submitCompetitorResearch);
 on("competitorAssets", "click", (event) => {
   const checkbox = event.target.closest(".asset-checkbox");

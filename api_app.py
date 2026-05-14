@@ -601,7 +601,7 @@ class CompetitorConfigPatchRequest(BaseModel):
 
 class CompetitorCollectionRunRequest(BaseModel):
     category: str = ""
-    target_market: str = "北美 (US/CA)"
+    target_market: str = ""
     platform: str = ""
     source: str = ""
     brands: list[str] = Field(default_factory=list, max_length=80)
@@ -877,6 +877,28 @@ def _visible_competitor_assets(assets: list[dict]) -> list[dict]:
     return [item for item in assets if not _is_social_profile_asset(item)]
 
 
+def _asset_review_status(asset: dict) -> str:
+    return str((asset or {}).get("review_status") or "auto_collected").strip().lower()
+
+
+def _business_usable_competitor_assets(assets: list[dict]) -> list[dict]:
+    return [item for item in assets if _asset_review_status(item) != "rejected"]
+
+
+def _unique_competitor_assets(assets: list[dict], limit: int) -> list[dict]:
+    seen = set()
+    unique = []
+    for asset in assets:
+        asset_id = str((asset or {}).get("id") or "")
+        if not asset_id or asset_id in seen:
+            continue
+        seen.add(asset_id)
+        unique.append(asset)
+        if len(unique) >= limit:
+            break
+    return unique
+
+
 def _upsert_competitor_assets(new_assets):
     now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
     with competitor_lock:
@@ -1089,6 +1111,143 @@ def _save_collection_runs(runs):
     cleaned = [dict(item) for item in runs if isinstance(item, dict)]
     cleaned.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
     return _write_json(COMPETITOR_COLLECTION_RUNS_KEY, cleaned[:500])
+
+
+def _public_collection_run(run: dict) -> dict:
+    item = dict(run or {})
+    status = str(item.get("status") or "").lower()
+    if status == "queued" and "progress" not in item and not item.get("current_step"):
+        item["status"] = "recorded"
+        item["progress"] = 0
+        item["current_step"] = "历史采集计划记录；请重新提交以执行后台采集。"
+    return item
+
+
+def _update_collection_run(run_id: str, **fields):
+    with competitor_lock:
+        runs = _load_collection_runs()
+        for run in runs:
+            if str(run.get("id") or "") == str(run_id):
+                run.update(fields)
+                run["updated_at"] = _utc_now()
+                if fields.get("status") in {"succeeded", "failed", "partial"}:
+                    run["completed_at"] = run["updated_at"]
+                break
+        _save_collection_runs(runs)
+
+
+def _collection_config_for_category(category: str) -> dict:
+    wanted = str(category or "").strip().lower()
+    if not wanted:
+        return {}
+    for config in _load_competitor_configs():
+        if str(config.get("category") or "").strip().lower() == wanted:
+            return config
+    return {}
+
+
+def _resolve_collection_request(request: dict) -> tuple[dict, dict]:
+    resolved = dict(request or {})
+    config = _collection_config_for_category(resolved.get("category", ""))
+    if config:
+        if not str(resolved.get("target_market") or "").strip():
+            resolved["target_market"] = config.get("target_market") or "北美 (US/CA)"
+        if not _clean_list(resolved.get("brands") or [], limit=80):
+            resolved["brands"] = _clean_list(config.get("brands") or [], limit=80)
+        if not _clean_list(resolved.get("keywords") or [], limit=80):
+            resolved["keywords"] = _clean_list(config.get("keywords") or [], limit=80)
+        if not str(resolved.get("platform") or "").strip() and config.get("platforms"):
+            resolved["platform"] = str((config.get("platforms") or [""])[0] or "")
+    resolved["target_market"] = str(resolved.get("target_market") or "北美 (US/CA)").strip() or "北美 (US/CA)"
+    resolved["brands"] = _clean_list(resolved.get("brands") or [], limit=80)
+    resolved["keywords"] = _clean_list(resolved.get("keywords") or [], limit=80)
+    return resolved, config
+
+
+def _collection_result_summary(result: dict) -> dict:
+    discovery = result.get("discovery") or {}
+    discovered_items = discovery.get("asins") or discovery.get("video_ids") or discovery.get("assets") or []
+    return {
+        "requested_count": result.get("requested_asin_count") or result.get("requested_video_count") or 0,
+        "fetched_count": result.get("fetched_count") or 0,
+        "discovered_count": len(discovered_items),
+        "upsert": result.get("upsert") or {},
+        "errors": (result.get("errors") or [])[:10],
+        "note": result.get("note") or "",
+    }
+
+
+def _run_competitor_collection_job(run_id: str):
+    run = next((item for item in _load_collection_runs() if str(item.get("id") or "") == str(run_id)), None)
+    if not run:
+        return
+    request, config = _resolve_collection_request(run.get("request") or {})
+    platform_text = str(request.get("platform") or request.get("source") or "").strip()
+    platform_key = platform_text.lower()
+    if platform_key == "amazon":
+        platform_key = "rainforest"
+    _update_collection_run(
+        run_id,
+        status="running",
+        progress=10,
+        current_step="正在准备采集参数",
+        resolved_request=request,
+        config_applied=bool(config),
+    )
+    try:
+        if platform_key in {"rainforest", "amazon"}:
+            _update_collection_run(run_id, progress=25, current_step="正在通过 Rainforest 搜索并刷新 Amazon 素材")
+            result = rainforest_refresh(
+                RainforestRefreshRequest(
+                    category=request.get("category") or "",
+                    target_market=request.get("target_market") or "北美 (US/CA)",
+                    amazon_domain=request.get("amazon_domain") or "",
+                    brands=request.get("brands") or [],
+                    keywords=request.get("keywords") or [],
+                    asins=request.get("asins") or [],
+                    use_discovery=True,
+                )
+            )
+        elif platform_key == "youtube":
+            _update_collection_run(run_id, progress=25, current_step="正在通过 YouTube API 发现并刷新素材")
+            result = youtube_refresh(
+                YouTubeRefreshRequest(
+                    category=request.get("category") or "",
+                    target_market=request.get("target_market") or "北美 (US/CA)",
+                    brands=request.get("brands") or [],
+                    keywords=request.get("keywords") or [],
+                    video_ids=request.get("video_ids") or [],
+                    use_discovery=True,
+                )
+            )
+        else:
+            raise ValueError("采集任务当前仅支持 Amazon/Rainforest 和 YouTube；TikTok、Instagram 等平台请在竞品素材库导入具体 URL。")
+        summary = _collection_result_summary(result)
+        status = "partial" if summary.get("errors") else "succeeded"
+        _update_collection_run(
+            run_id,
+            status=status,
+            progress=100,
+            current_step="采集完成，已写入竞品素材库" if status == "succeeded" else "部分素材已入库，存在失败项",
+            result_summary=summary,
+            error_message="；".join(str(item.get("error") or item) for item in summary.get("errors", [])[:3]) if status == "partial" else "",
+        )
+    except HTTPException as exc:
+        _update_collection_run(
+            run_id,
+            status="failed",
+            progress=100,
+            current_step="采集失败",
+            error_message=str(exc.detail or exc),
+        )
+    except Exception as exc:
+        _update_collection_run(
+            run_id,
+            status="failed",
+            progress=100,
+            current_step="采集失败",
+            error_message=str(exc),
+        )
 
 
 def _update_competitor_research_job(job_id, **fields):
@@ -2701,11 +2860,19 @@ def _asset_evidence_lines(assets):
         tags = "、".join(asset.get("ai_tags") or [])
         platform = asset.get("platform") or asset.get("source_type") or "Unknown"
         source_id = f"ASIN: {asset.get('asin')} / Domain: {asset.get('amazon_domain')}" if asset.get("asin") else f"Platform: {platform} / Source: {asset.get('source_type') or '-'}"
+        review_label = {
+            "featured": "精选案例",
+            "approved": "已通过审核",
+            "auto_collected": "待审核",
+            "needs_review": "需复核",
+            "rejected": "不采用",
+        }.get(_asset_review_status(asset), _asset_review_status(asset))
         lines.append(
             "\n".join(
                 [
                     f"[{index}] {asset.get('brand') or 'Unknown'} | {asset.get('title') or 'Untitled'}",
                     f"- {source_id}",
+                    f"- Business status: {review_label}",
                     f"- Link: {asset.get('source_url') or ''}",
                     f"- Score: {asset.get('quality_score') or 0} / Rating: {metadata.get('rating') or '-'} / Reviews: {metadata.get('reviews') or '-'} / Media: {media_hint}",
                     f"- Tags: {tags or '无'}",
@@ -2934,6 +3101,40 @@ def _normalize_deep_analysis_payload(payload: dict, asset: dict) -> dict:
     return normalized
 
 
+def _search_research_assets(req: CompetitorResearchRequest, *, q: str = "", category: str = "", review_status: str = "", limit: int = 8) -> list[dict]:
+    assets, _ = _search_competitor_assets(
+        q=q,
+        category=category,
+        platform=req.platform,
+        source=req.source,
+        review_status=review_status,
+        limit=limit,
+    )
+    return assets if review_status else _business_usable_competitor_assets(assets)
+
+
+def _select_competitor_assets_for_research(req: CompetitorResearchRequest) -> list[dict]:
+    limit = max(1, min(int(req.top_k or 8), 20))
+    candidates = []
+    for status in ("featured", "approved"):
+        candidates.extend(_search_research_assets(req, q=req.question, category=req.category, review_status=status, limit=limit))
+        unique = _unique_competitor_assets(candidates, limit)
+        if len(unique) >= limit:
+            return unique
+    candidates.extend(_search_research_assets(req, q=req.question, category=req.category, limit=limit * 2))
+    unique = _unique_competitor_assets(candidates, limit)
+    if len(unique) >= limit:
+        return unique
+    if req.category:
+        candidates.extend(_search_research_assets(req, category=req.category, limit=limit * 2))
+        unique = _unique_competitor_assets(candidates, limit)
+        if len(unique) >= limit:
+            return unique
+    if req.platform or req.source:
+        candidates.extend(_search_research_assets(req, limit=limit * 2))
+    return _unique_competitor_assets(candidates, limit)
+
+
 def _call_competitor_asset_deep_analysis(asset: dict, req: CompetitorDeepAnalysisRequest) -> dict:
     text = _call_bedrock(
         _build_competitor_asset_deep_analysis_prompt(asset, req),
@@ -3001,6 +3202,8 @@ def _select_competitor_assets_for_deep_analysis(req: CompetitorDeepAnalysisReque
             sort="quality_desc",
             limit=req.max_assets,
         )
+        if not req.review_status:
+            assets = _business_usable_competitor_assets(assets)
     if not req.force:
         assets = [asset for asset in assets if not (asset.get("deep_analysis") or {}).get("summary")]
     return assets[: req.max_assets]
@@ -3098,18 +3301,8 @@ def _run_competitor_research_job(job_id: str):
         return
     try:
         req = CompetitorResearchRequest(**(job.get("request") or {}))
-        _update_competitor_research_job(job_id, status="running", progress=25, current_step="正在检索素材证据")
-        assets, _ = _search_competitor_assets(
-            q=req.question,
-            category=req.category,
-            platform=req.platform,
-            source=req.source,
-            limit=req.top_k,
-        )
-        if not assets and req.category:
-            assets, _ = _search_competitor_assets(category=req.category, platform=req.platform, source=req.source, limit=req.top_k)
-        if not assets and (req.platform or req.source):
-            assets, _ = _search_competitor_assets(platform=req.platform, source=req.source, limit=req.top_k)
+        _update_competitor_research_job(job_id, status="running", progress=25, current_step="正在按精选/通过状态检索素材证据")
+        assets = _select_competitor_assets_for_research(req)
         if not assets:
             report = _fallback_competitor_report(req, [])
         else:
@@ -3238,7 +3431,10 @@ def admin_overview():
     recent_runs = _load_collection_runs()[:8]
     video_asset_count = sum(1 for item in assets if _asset_media_types(item) & {"video", "gif"})
     today_asset_count = sum(1 for item in assets if (_parse_date(item.get("collected_at") or item.get("created_at")) == today))
-    pending_review_count = sum(1 for item in assets if str(item.get("review_status") or "") in {"auto_collected", "needs_review"})
+    pending_review_count = sum(1 for item in assets if _asset_review_status(item) in {"auto_collected", "needs_review"})
+    approved_count = sum(1 for item in assets if _asset_review_status(item) == "approved")
+    featured_count = sum(1 for item in assets if _asset_review_status(item) == "featured")
+    rejected_count = sum(1 for item in assets if _asset_review_status(item) == "rejected")
     failed_run_count = sum(1 for item in recent_runs if str(item.get("status") or "").lower() == "failed")
     return {
         "metrics": {
@@ -3246,6 +3442,9 @@ def admin_overview():
             "video_gif_count": video_asset_count,
             "today_new_assets": today_asset_count,
             "pending_review_count": pending_review_count,
+            "approved_count": approved_count,
+            "featured_count": featured_count,
+            "rejected_count": rejected_count,
             "active_hotspot_count": active_hotspot_total,
             "recent_failed_runs": failed_run_count,
         },
@@ -4041,24 +4240,32 @@ def patch_competitor_config(category: str, req: CompetitorConfigPatchRequest):
 
 @app.get("/api/competitor-collection-runs", dependencies=[Depends(_verify_access)])
 def list_competitor_collection_runs(limit: int = 50):
-    return {"runs": _load_collection_runs()[: max(1, min(int(limit or 50), 200))]}
+    limit = max(1, min(int(limit or 50), 200))
+    return {"runs": [_public_collection_run(item) for item in _load_collection_runs()[:limit]]}
 
 
 @app.post("/api/competitor-collection-runs", dependencies=[Depends(_verify_access)])
 def create_competitor_collection_run(req: CompetitorCollectionRunRequest):
     now = _utc_now()
+    requested_status = str(req.status or "queued").lower()
+    status = requested_status if requested_status in {"succeeded", "failed"} else "queued"
     run = {
         "id": uuid.uuid4().hex[:12],
         "created_at": now,
         "updated_at": now,
         "request": req.model_dump(),
-        "status": req.status,
+        "status": status,
+        "progress": 0 if status == "queued" else 100,
+        "current_step": "已提交，等待后台执行" if status == "queued" else "手动记录",
         "error_message": req.error_message,
-        "note": "首版记录采集配置与运行状态；实际自动采集由 Rainforest/YouTube 刷新接口或外部调度触发。",
+        "note": "提交后会在当前后台进程内执行 Amazon/Rainforest 或 YouTube 入库；其他平台请在竞品素材库导入具体 URL，或接外部采集器。",
     }
-    runs = _load_collection_runs()
-    runs.insert(0, run)
-    _save_collection_runs(runs)
+    with competitor_lock:
+        runs = _load_collection_runs()
+        runs.insert(0, run)
+        _save_collection_runs(runs)
+    if status == "queued":
+        threading.Thread(target=_run_competitor_collection_job, args=(run["id"],), daemon=True).start()
     return {"ok": True, "run": run}
 
 

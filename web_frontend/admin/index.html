@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="__BASE_PATH__/static/styles.css?v=20260514-admin-fast" />
+    <link rel="stylesheet" href="__BASE_PATH__/static/styles.css?v=20260514-review-status" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -78,9 +78,13 @@
             <div class="card-head">
               <div>
                 <h2>竞品素材库</h2>
-                <p>管理主流电商和社媒平台的家电竞品短视频、动图和帖子证据。</p>
+                <p>审核采集素材，决定哪些证据可进入调研、深度分析和脚本上下文。</p>
               </div>
               <button id="loadCompetitorAssets" type="button" class="secondary">加载素材</button>
+            </div>
+            <div class="workflow-note review-guide">
+              <strong>审核口径</strong>
+              <span>通过审核：确认来源、品牌和内容价值可用；精选案例：高质量标杆，脚本生成会优先引用；不采用：保留证据记录，但默认不进入业务使用候选。</span>
             </div>
             <form id="competitorResearchForm" class="competitor-form">
               <div class="field-row">
@@ -97,7 +101,7 @@
                 <label>素材来源<select id="competitorSource" name="source"><option value="">全部来源</option><option value="rainforest">Amazon / Rainforest</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="pinterest">Pinterest</option><option value="facebook">Facebook</option><option value="social">其他电商/社媒 URL</option></select></label>
                 <label>入库检索词<input id="competitorAssetQuery" name="asset_query" placeholder="如 Ninja、SLUSHi、Reel" /></label>
                 <label>媒体类型<select id="competitorMediaType" name="media_type"><option value="">全部媒体</option><option value="video">视频</option><option value="gif">动图</option><option value="post">社媒帖</option><option value="image">图片</option></select></label>
-                <label>审核状态<select id="competitorReviewStatus"><option value="">全部状态</option><option value="auto_collected">自动入库</option><option value="needs_review">待复核</option><option value="approved">已通过</option><option value="featured">精选</option><option value="rejected">已拒绝</option></select></label>
+                <label>素材状态<select id="competitorReviewStatus"><option value="">全部状态</option><option value="auto_collected">待审核</option><option value="needs_review">需复核</option><option value="approved">已通过审核</option><option value="featured">精选案例</option><option value="rejected">不采用</option></select></label>
               </div>
               <label class="full-field">社媒/电商素材 URL<textarea id="competitorSocialUrls" name="social_urls" rows="3" placeholder="粘贴具体 YouTube 视频、Instagram Reel/Post、TikTok 视频等素材链接，多个链接可换行；账号主页只保存为采集来源线索"></textarea></label>
               <label>业务调研问题<textarea id="competitorQuestion" name="question" rows="3" placeholder="例如：北美空气炸锅竞品站内视频主要怎么展示快速、省油和易清洁？"></textarea></label>
@@ -109,8 +113,9 @@
                 <button id="deepAnalyzeAssets" type="button">并发深度分析</button>
                 <button id="discoverRainforest" type="button">发现 ASIN</button>
                 <button id="refreshRainforest" type="button">刷新入库</button>
-                <button id="bulkApproveAssets" type="button" class="secondary">批量通过</button>
-                <button id="bulkFeatureAssets" type="button" class="secondary">批量精选</button>
+                <button id="bulkApproveAssets" type="button" class="secondary">批量通过审核</button>
+                <button id="bulkFeatureAssets" type="button" class="secondary">批量设为精选</button>
+                <button id="bulkRejectAssets" type="button" class="secondary danger">批量不采用</button>
                 <button type="submit">生成调研报告</button>
               </div>
               <div id="competitorMessage" class="message"></div>
@@ -171,22 +176,25 @@
             <div class="card-head">
               <div>
                 <h2>采集任务</h2>
-                <p>记录竞品素材采集配置和最近运行状态，后续可接 EventBridge 或外部调度。</p>
+                <p>提交 Amazon 或 YouTube 采集，后台会自动发现并刷新入库；其他平台请在竞品素材库导入具体 URL。</p>
               </div>
               <button id="loadCollectionRuns" type="button" class="secondary">刷新任务</button>
+            </div>
+            <div class="workflow-note">
+              <strong>使用方式</strong>
+              <span>1. 在配置与审计保存品类默认品牌和关键词；2. 在这里填写品类、市场和平台后提交任务；3. 任务完成后到竞品素材库审核并精选素材。</span>
             </div>
             <form id="collectionRunForm" class="admin-form">
               <div class="field-row">
                 <label>品类<input id="collectionCategory" placeholder="如 空气炸锅" /></label>
                 <label>市场<input id="collectionMarket" placeholder="北美 (US/CA)" /></label>
-                <label>平台<select id="collectionPlatform"><option>Amazon</option><option>YouTube</option><option>TikTok</option><option>Instagram</option><option>Pinterest</option><option>Walmart</option><option>BestBuy</option></select></label>
+                <label>平台<select id="collectionPlatform"><option>Amazon</option><option>YouTube</option></select></label>
               </div>
               <div class="field-row">
                 <label>品牌<input id="collectionBrands" placeholder="逗号分隔" /></label>
                 <label>关键词<input id="collectionKeywords" placeholder="逗号分隔" /></label>
-                <label>状态<select id="collectionStatus"><option value="queued">待执行</option><option value="succeeded">已完成</option><option value="failed">失败</option></select></label>
               </div>
-              <button type="submit">记录采集任务</button>
+              <button type="submit">提交采集任务</button>
               <div id="collectionMessage" class="message"></div>
             </form>
             <div id="collectionRuns" class="compact-list"></div>
@@ -198,7 +206,7 @@
             <div class="card-head">
               <div>
                 <h2>配置与审计</h2>
-                <p>维护品类竞品品牌、关键词模板、热点源和合规策略。</p>
+                <p>维护品类默认品牌、关键词模板和合规策略；采集任务未填写品牌或关键词时会自动套用同品类配置。</p>
               </div>
               <button id="loadConfigs" type="button" class="secondary">刷新配置</button>
             </div>
@@ -206,7 +214,7 @@
               <div class="field-row">
                 <label>品类<input id="configCategory" placeholder="如 空气炸锅" /></label>
                 <label>默认市场<input id="configMarket" placeholder="北美 (US/CA)" /></label>
-                <label>刷新频率<select id="configFrequency"><option>manual</option><option>daily</option><option>weekly</option></select></label>
+                <label>刷新频率<select id="configFrequency"><option value="manual">manual（仅手动）</option><option value="daily">daily（审计记录）</option><option value="weekly">weekly（审计记录）</option></select></label>
               </div>
               <label>竞品品牌<input id="configBrands" placeholder="Ninja, COSORI, Philips" /></label>
               <label>关键词模板<input id="configKeywords" placeholder="air fryer, product video, demo" /></label>
@@ -216,7 +224,7 @@
             </form>
             <div class="policy-note">
               <strong>合规默认值</strong>
-              <span>竞品素材仅保存链接证据、缩略图 URL、公开元数据和结构化分析；`rights_status` 默认 `link_only_no_raw_video`。</span>
+              <span>竞品素材仅保存链接证据、缩略图 URL、公开元数据和结构化分析；`rights_status` 默认 `link_only_no_raw_video`。刷新频率目前用于审计记录，不会自动创建定时任务。</span>
             </div>
             <div id="configList" class="compact-list"></div>
             <section class="source-panel">
@@ -244,8 +252,8 @@
       </div>
     </div>
     <script>
-      window.__APP_BASE_PATH__ = "__APP_BASE_PATH__";
+      window.APP_BASE_PATH = "__APP_BASE_PATH__";
     </script>
-    <script src="__BASE_PATH__/static/app.js?v=20260514-admin-fast"></script>
+    <script src="__BASE_PATH__/static/app.js?v=20260514-review-status"></script>
   </body>
 </html>
