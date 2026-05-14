@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="__BASE_PATH__/static/styles.css?v=20260514-deep-analysis" />
+    <link rel="stylesheet" href="__BASE_PATH__/static/styles.css?v=20260514-admin-fast" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -23,11 +23,10 @@
         <div class="nav-brand">
           <p class="eyebrow">Hisense</p>
           <strong>内容后台</strong>
-          <span>竞品素材 · 行业热点 · 脚本生成</span>
+          <span>竞品素材 · 行业热点 · 配置审计</span>
         </div>
         <nav>
           <button type="button" class="active" data-page="dashboard">总览</button>
-          <button type="button" data-page="scripts">脚本生成</button>
           <button type="button" data-page="assets">竞品素材库</button>
           <button type="button" data-page="hotspots">行业热点</button>
           <button type="button" data-page="collection">采集任务</button>
@@ -40,7 +39,7 @@
           <div>
             <p class="eyebrow">Hisense International E-commerce</p>
             <h1>海外爆款内容引擎</h1>
-            <p class="lede">把竞品素材、行业热点和产品卖点沉淀为可追溯的脚本生成上下文。</p>
+            <p class="lede">把竞品素材和行业热点沉淀为可追溯的内容上下文。</p>
           </div>
           <div class="hero-panel">
             <strong>合规素材策略</strong>
@@ -65,112 +64,11 @@
               <div class="card-head">
                 <div>
                   <h2>有效热点</h2>
-                  <p>当前可供脚本引用的行业热点。</p>
+                  <p>当前可供内容策略引用的行业热点。</p>
                 </div>
                 <button type="button" class="secondary" data-page-link="hotspots">管理热点</button>
               </div>
               <div id="dashboardHotspots" class="compact-list"></div>
-            </section>
-          </section>
-        </section>
-
-        <section id="pageScripts" class="workspace-page">
-          <section class="metrics" id="metrics"></section>
-
-          <section class="card">
-            <div class="card-head">
-              <div>
-                <h2>产品卖点库</h2>
-                <p>上传新版或旧版 Excel，系统会校验字段并保存为当前知识库。</p>
-              </div>
-              <label class="upload">
-                <input id="uploadInput" type="file" accept=".xlsx,.xls" />
-                上传 Excel
-              </label>
-            </div>
-            <div id="uploadMessage" class="message"></div>
-          </section>
-
-          <section class="grid">
-            <form id="generateForm" class="card form-card">
-              <h2>脚本需求</h2>
-              <div class="field-row">
-                <label>发布渠道<select name="platform"><option>TikTok / Reels / Shorts</option><option>Amazon 主图视频</option><option>独立站详情页</option></select></label>
-                <label>目标市场<select name="target_market"><option>北美 (US/CA)</option><option>欧洲 (UK/DE/FR)</option><option>东南亚</option><option>其他</option></select></label>
-                <label>方案数<select name="variant_count"><option value="2">2</option><option value="3">3</option></select></label>
-              </div>
-              <div class="field-row">
-                <label>产品品类<select id="categorySelect" name="category"></select></label>
-                <label class="model-field">
-                  产品型号
-                  <input id="modelSearch" class="model-search" type="search" placeholder="搜索型号" autocomplete="off" aria-label="搜索产品型号" />
-                  <select id="modelSelect" name="model"></select>
-                </label>
-              </div>
-              <label>核心卖点<div id="featurePicker" class="check-list"></div></label>
-              <div class="field-row">
-                <label>视频用途<select name="video_usage"><option>站外种草</option><option>站内首推</option><option>内部培训</option><option>其他</option></select></label>
-                <label>项目类型<select name="project_type"><option>常规上新</option><option>新品上市</option><option>大促活动</option><option>教程培训</option><option>其他</option></select></label>
-                <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
-              </div>
-              <label>脚本方向<div id="videoTypePicker" class="check-list compact"></div></label>
-              <div class="context-toggles">
-                <label class="inline-toggle"><input name="use_competitor_context" type="checkbox" checked /> 引用已审核竞品素材</label>
-                <label class="inline-toggle"><input name="use_hotspot_context" type="checkbox" checked /> 引用有效行业热点</label>
-              </div>
-              <label>目标受众<input name="target_audience" placeholder="不填则按通用海外消费者处理" /></label>
-              <label>用户痛点<textarea name="pain_points" rows="3"></textarea></label>
-              <label>补充要求<textarea name="custom_requirements" rows="3"></textarea></label>
-              <button type="submit">提交脚本生成任务</button>
-              <div id="formMessage" class="message"></div>
-            </form>
-
-            <aside class="side-stack">
-              <section class="card selection-card">
-                <h2>当前选择</h2>
-                <div id="selectionSummary" class="selection-summary"></div>
-              </section>
-
-              <section class="card">
-                <div class="card-head">
-                  <div>
-                    <h2>任务中心</h2>
-                    <p>通过普通 HTTPS 轮询状态，公司网络更容易放行。</p>
-                  </div>
-                  <button id="refreshJobs" type="button">刷新</button>
-                </div>
-                <div class="job-tools">
-                  <div id="jobFilters" class="job-filters" aria-label="任务状态筛选">
-                    <button type="button" class="active" data-filter="all">全部</button>
-                    <button type="button" data-filter="running">进行中</button>
-                    <button type="button" data-filter="succeeded">已完成</button>
-                    <button type="button" data-filter="failed">失败</button>
-                  </div>
-                  <input id="jobSearch" type="search" placeholder="搜索型号 / 任务ID" />
-                </div>
-                <div id="jobs" class="jobs"></div>
-              </section>
-            </aside>
-          </section>
-
-          <section id="resultSection" class="card result-card hidden">
-            <div class="card-head">
-              <div>
-                <h2>生成结果</h2>
-                <p>生成完成后会自动显示在这里，样式与旧版脚本预览保持一致。</p>
-              </div>
-              <a id="downloadResult" class="download-link" href="#">下载 Excel（含多套方案）</a>
-            </div>
-            <div id="resultTabs" class="result-tabs"></div>
-            <div id="resultBody" class="result-body"></div>
-            <section id="storyboardSection" class="storyboard-section">
-              <div class="storyboard-head">
-                <div>
-                  <h3>分镜拍摄参考</h3>
-                  <p>系统会从脚本表格中自动拆出镜头卡片，方便业务和拍摄团队快速对齐画面。</p>
-                </div>
-              </div>
-              <div id="storyboardCards" class="storyboard-cards"></div>
             </section>
           </section>
         </section>
@@ -186,7 +84,7 @@
             </div>
             <form id="competitorResearchForm" class="competitor-form">
               <div class="field-row">
-                <label>调研品类<input id="competitorCategory" name="category" placeholder="默认使用当前产品品类" /></label>
+                <label>调研品类<input id="competitorCategory" name="category" placeholder="留空查看全部品类" /></label>
                 <label>目标市场<select id="competitorMarket" name="target_market"><option>北美 (US/CA)</option><option>欧洲 (UK/DE/FR)</option><option>英国 (UK)</option><option>德国 (DE)</option><option>法国 (FR)</option></select></label>
                 <label>Amazon 域名<input id="competitorDomain" name="amazon_domain" placeholder="留空自动匹配，如 amazon.com" /></label>
               </div>
@@ -237,7 +135,7 @@
             <div class="card-head">
               <div>
                 <h2>行业热点</h2>
-                <p>管理公开趋势、节日节点和人工补录热点，供脚本生成引用。</p>
+                <p>管理公开趋势、节日节点和人工补录热点，供内容策略引用。</p>
               </div>
               <button id="refreshHotspots" type="button">刷新公开源</button>
             </div>
@@ -348,6 +246,6 @@
     <script>
       window.__APP_BASE_PATH__ = "__APP_BASE_PATH__";
     </script>
-    <script src="__BASE_PATH__/static/app.js?v=20260514-deep-analysis"></script>
+    <script src="__BASE_PATH__/static/app.js?v=20260514-admin-fast"></script>
   </body>
 </html>

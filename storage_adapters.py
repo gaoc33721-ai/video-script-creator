@@ -91,8 +91,6 @@ class RuntimeStorage:
         return self.backend.exists(key)
 
     def read_json(self, key: str, default_value: Any) -> Any:
-        if not self.exists(key):
-            return default_value
         try:
             return json.loads(self.backend.read_bytes(key).decode("utf-8"))
         except Exception:

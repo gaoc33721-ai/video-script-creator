@@ -312,6 +312,8 @@ function formPayload(form) {
     video_type: state.selectedVideoTypes,
     expected_duration: Number(data.get("expected_duration") || 30),
     project_type: data.get("project_type"),
+    use_competitor_context: data.get("use_competitor_context") === "on",
+    use_hotspot_context: data.get("use_hotspot_context") === "on",
     target_audience: data.get("target_audience") || "",
     pain_points: data.get("pain_points") || "",
     custom_requirements: data.get("custom_requirements") || "",

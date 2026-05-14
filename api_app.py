@@ -1,5 +1,6 @@
 import base64
 import concurrent.futures
+import copy
 import datetime as dt
 import hashlib
 import hmac
@@ -70,6 +71,17 @@ COMPETITOR_CONFIGS_KEY = "competitor_configs.json"
 COMPETITOR_COLLECTION_RUNS_KEY = "competitor_collection_runs.json"
 SOCIAL_COLLECTION_SOURCES_KEY = "social_collection_sources.json"
 COMPETITOR_ANALYSIS_RUNS_KEY = "competitor_analysis_runs.json"
+ADMIN_JSON_CACHE_TTL = max(0, int(os.getenv("ADMIN_JSON_CACHE_TTL", "45")))
+ADMIN_JSON_CACHE_KEYS = {
+    COMPETITOR_ASSETS_KEY,
+    HOTSPOTS_KEY,
+    HOTSPOT_SOURCES_KEY,
+    COMPETITOR_CONFIGS_KEY,
+    COMPETITOR_COLLECTION_RUNS_KEY,
+    SOCIAL_COLLECTION_SOURCES_KEY,
+}
+_json_cache: dict[str, dict] = {}
+_json_cache_lock = threading.Lock()
 TABLE_COLUMNS = [
     "结构分段",
     "功能点",
@@ -598,12 +610,34 @@ class CompetitorCollectionRunRequest(BaseModel):
     error_message: str = ""
 
 
+def _clone_json(value):
+    try:
+        return copy.deepcopy(value)
+    except Exception:
+        return value
+
+
 def _read_json(key, default_value):
-    return STORAGE.read_json(key, default_value)
+    ttl = ADMIN_JSON_CACHE_TTL if key in ADMIN_JSON_CACHE_KEYS else 0
+    if ttl:
+        now = time.monotonic()
+        with _json_cache_lock:
+            cached = _json_cache.get(key)
+            if cached and cached.get("expires_at", 0) > now:
+                return _clone_json(cached.get("value"))
+    value = STORAGE.read_json(key, default_value)
+    if ttl:
+        with _json_cache_lock:
+            _json_cache[key] = {"value": _clone_json(value), "expires_at": time.monotonic() + ttl}
+    return value
 
 
 def _write_json(key, payload):
-    return STORAGE.write_json(key, payload)
+    ok = STORAGE.write_json(key, payload)
+    if ok:
+        with _json_cache_lock:
+            _json_cache.pop(key, None)
+    return ok
 
 
 def _load_products() -> pd.DataFrame:
@@ -1071,7 +1105,55 @@ def _update_competitor_research_job(job_id, **fields):
         _save_competitor_research_jobs(jobs)
 
 
-def _public_competitor_asset(asset, include_source_payload=False):
+def _truncate_public_text(value, limit=260):
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _asset_first_image_url(asset: dict) -> str:
+    media = asset.get("media") or []
+    return (
+        str(asset.get("image_url") or "")
+        or str(next((item.get("thumbnail_url") or item.get("media_url") for item in media if isinstance(item, dict) and (item.get("thumbnail_url") or item.get("media_url"))), "") or "")
+        or str(next((item.get("media_url") for item in media if isinstance(item, dict) and item.get("media_type") == "image"), "") or "")
+    )
+
+
+def _public_competitor_asset(asset, include_source_payload=False, compact=False):
+    if compact:
+        media = [item for item in (asset.get("media") or []) if isinstance(item, dict)]
+        media_types = _asset_media_types(asset)
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+        return {
+            "id": asset.get("id") or "",
+            "asin": asset.get("asin") or "",
+            "platform": asset.get("platform") or "",
+            "source_type": asset.get("source_type") or "",
+            "source_url": asset.get("source_url") or "",
+            "embed_url": asset.get("embed_url") or "",
+            "image_url": _asset_first_image_url(asset),
+            "brand": asset.get("brand") or "",
+            "category": asset.get("category") or "",
+            "title": asset.get("title") or "",
+            "ai_analysis": _truncate_public_text(asset.get("ai_analysis") or "", 220),
+            "ai_tags": _clean_list(asset.get("ai_tags") or [], limit=5),
+            "quality_score": int(asset.get("quality_score") or 0),
+            "review_status": asset.get("review_status") or "auto_collected",
+            "rights_status": asset.get("rights_status") or "link_only_no_raw_video",
+            "created_at": asset.get("created_at") or "",
+            "updated_at": asset.get("updated_at") or "",
+            "collected_at": asset.get("collected_at") or "",
+            "media_count": len(media),
+            "video_count": sum(1 for item in media if str(item.get("media_type") or "").lower() == "video"),
+            "gif_count": sum(1 for item in media if str(item.get("media_type") or "").lower() == "gif") or (1 if "gif" in media_types else 0),
+            "metadata": {
+                "platform_content_id": metadata.get("platform_content_id") or "",
+                "youtube_video_id": metadata.get("youtube_video_id") or "",
+                "published_at": metadata.get("published_at") or "",
+            },
+        }
     public = dict(asset or {})
     if not include_source_payload:
         public.pop("source_payload", None)
@@ -1092,17 +1174,6 @@ def _competitor_asset_search_text(asset):
         if isinstance(item, dict)
     )
     metadata = asset.get("metadata") or {}
-    deep_analysis = asset.get("deep_analysis") if isinstance(asset.get("deep_analysis"), dict) else {}
-    deep_text = " ".join(
-        [
-            str(deep_analysis.get("summary") or ""),
-            str(deep_analysis.get("hook_analysis") or ""),
-            str(deep_analysis.get("creative_pattern") or ""),
-            " ".join(deep_analysis.get("selling_points") or []),
-            " ".join(deep_analysis.get("script_opportunities") or []),
-            " ".join(deep_analysis.get("recommended_tags") or []),
-        ]
-    )
     return " ".join(
         [
             str(asset.get("id") or ""),
@@ -1113,9 +1184,8 @@ def _competitor_asset_search_text(asset):
             str(asset.get("brand") or ""),
             str(asset.get("category") or ""),
             str(asset.get("title") or ""),
-            str(asset.get("original_copy") or ""),
+            str(asset.get("original_copy") or "")[:800],
             str(asset.get("ai_analysis") or ""),
-            deep_text,
             " ".join(asset.get("ai_tags") or []),
             str(metadata.get("source_query") or ""),
             str(metadata.get("platform_content_id") or ""),
@@ -1159,11 +1229,18 @@ def _search_competitor_assets(
         if _is_social_profile_asset(asset) and review_lower != "rejected":
             continue
         asset = _ensure_asset_admin_defaults(asset)
-        search_text = _competitor_asset_search_text(asset)
+        search_text = ""
+        if q_lower:
+            search_text = _competitor_asset_search_text(asset)
         if q_lower and q_lower not in search_text:
             continue
-        if category_lower and category_lower not in str(asset.get("category") or "").lower() and category_lower not in search_text:
-            continue
+        if category_lower:
+            asset_category = str(asset.get("category") or "").lower()
+            if category_lower not in asset_category:
+                if not search_text:
+                    search_text = _competitor_asset_search_text(asset)
+                if category_lower not in search_text:
+                    continue
         if brand_lower and brand_lower not in str(asset.get("brand") or "").lower():
             continue
         if platform_lower and platform_lower not in str(asset.get("platform") or "").lower():
@@ -3060,10 +3137,26 @@ def _run_competitor_research_job(job_id: str):
         )
 
 
+def _strip_admin_script_generation(html: str) -> str:
+    html = re.sub(r'\s*<button[^>]*data-page="scripts"[^>]*>.*?</button>', "", html, flags=re.S)
+    start = html.find('<section id="pageScripts"')
+    if start != -1:
+        end = html.find('<section id="pageAssets"', start)
+        if end != -1:
+            html = html[:start] + html[end:]
+    return (
+        html.replace("竞品素材 · 行业热点 · 脚本生成", "竞品素材 · 行业热点 · 配置审计")
+        .replace("把竞品素材、行业热点和产品卖点沉淀为可追溯的脚本生成上下文。", "把竞品素材和行业热点沉淀为可追溯的内容上下文。")
+        .replace("当前可供脚本引用的行业热点。", "当前可供内容策略引用的行业热点。")
+    )
+
+
 def _render_static_html(path: str, base_path: str = ""):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as handle:
             html = handle.read()
+            if os.path.normpath(path).endswith(os.path.normpath(os.path.join("admin", "index.html"))):
+                html = _strip_admin_script_generation(html)
             html = html.replace("__APP_BASE_PATH__", base_path)
             html = html.replace("__BASE_PATH__", base_path)
             return HTMLResponse(
@@ -3139,7 +3232,7 @@ def summary():
 @app.get("/api/admin/overview", dependencies=[Depends(_verify_access)])
 def admin_overview():
     today = dt.date.today()
-    assets = _visible_competitor_assets([_ensure_asset_admin_defaults(item) for item in _load_competitor_assets()])
+    assets = _visible_competitor_assets(_load_competitor_assets())
     hotspots, active_hotspot_total = _search_hotspots(active_only=True, limit=6)
     latest_assets = sorted(assets, key=lambda item: str(item.get("updated_at") or item.get("collected_at") or ""), reverse=True)[:6]
     recent_runs = _load_collection_runs()[:8]
@@ -3156,7 +3249,7 @@ def admin_overview():
             "active_hotspot_count": active_hotspot_total,
             "recent_failed_runs": failed_run_count,
         },
-        "latest_assets": [_public_competitor_asset(item) for item in latest_assets],
+        "latest_assets": [_public_competitor_asset(item, compact=True) for item in latest_assets],
         "hotspots": hotspots,
         "recent_runs": recent_runs,
     }
@@ -3611,6 +3704,7 @@ def competitor_asset_search(
     page: int = 1,
     page_size: int = 0,
     limit: int = 20,
+    compact: bool = True,
 ):
     if page_size:
         limit = page_size
@@ -3633,7 +3727,7 @@ def competitor_asset_search(
         limit=limit,
     )
     return {
-        "assets": [_public_competitor_asset(item) for item in assets],
+        "assets": [_public_competitor_asset(item, compact=compact) for item in assets],
         "count": len(assets),
         "total": total,
         "offset": max(0, int(offset or 0)),
@@ -3688,6 +3782,14 @@ def get_competitor_deep_analysis_run(run_id: str):
     updated_ids = found.get("updated_asset_ids") or []
     assets = _assets_by_ids(updated_ids[:20]) if updated_ids else []
     return {**found, "assets": [_public_competitor_asset(item) for item in assets]}
+
+
+@app.get("/api/competitor-assets/{asset_id}", dependencies=[Depends(_verify_access)])
+def get_competitor_asset(asset_id: str):
+    found = next((item for item in _load_competitor_assets() if str(item.get("id") or "") == asset_id), None)
+    if not found:
+        raise HTTPException(status_code=404, detail="竞品素材不存在。")
+    return {"asset": _public_competitor_asset(_ensure_asset_admin_defaults(found))}
 
 
 @app.patch("/api/competitor-assets/{asset_id}", dependencies=[Depends(_verify_access)])

@@ -315,6 +315,28 @@ button,
   max-height: 224px;
 }
 
+.context-toggles {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 4px 2px 0;
+}
+
+.inline-toggle {
+  width: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.inline-toggle input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--brand);
+}
+
 .check-item {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr);

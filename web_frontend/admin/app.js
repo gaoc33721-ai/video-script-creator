@@ -35,6 +35,11 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const on = (id, eventName, handler) => {
+  const node = $(id);
+  if (node) node.addEventListener(eventName, handler);
+  return node;
+};
 const APP_BASE_PATH = String(window.__APP_BASE_PATH__ || "").replace(/\/+$/, "");
 
 function appPath(path) {
@@ -273,7 +278,6 @@ function showPage(page) {
 function capitalizePage(page) {
   const aliases = {
     dashboard: "Dashboard",
-    scripts: "Scripts",
     assets: "Assets",
     hotspots: "Hotspots",
     collection: "Collection",
@@ -743,6 +747,10 @@ async function refreshRainforest() {
 
 async function loadCompetitorAssets() {
   setMessage("competitorMessage", "正在加载已入库竞品素材...");
+  const target = $("competitorAssets");
+  if (target) {
+    target.innerHTML = '<div class="empty-state small"><strong>正在加载素材</strong><span>先拉取轻量卡片数据，详情会在点击后加载。</span></div>';
+  }
   try {
     const params = new URLSearchParams({
       limit: "24",
@@ -782,11 +790,12 @@ function renderCompetitorAssets(assets, targetId = "competitorAssets") {
 
 function renderCompetitorAsset(asset, interactive = true) {
   const media = asset.media || [];
-  const videos = media.filter((item) => item.media_type === "video");
-  const gifs = media.filter((item) => item.media_type === "gif");
+  const videoCount = Number(asset.video_count ?? media.filter((item) => item.media_type === "video").length);
+  const gifCount = Number(asset.gif_count ?? media.filter((item) => item.media_type === "gif").length);
+  const mediaCount = Number(asset.media_count ?? media.length);
   const firstImage = asset.image_url || media.find((item) => item.thumbnail_url || item.media_url)?.thumbnail_url || media.find((item) => item.media_type === "image")?.media_url || "";
   const tags = (asset.ai_tags || []).slice(0, 5).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("");
-  const mediaLine = `${videos.length} 条视频 / ${gifs.length} 条动图 / ${media.length} 个媒体项`;
+  const mediaLine = `${videoCount} 条视频 / ${gifCount} 条动图 / ${mediaCount} 个媒体项`;
   const sourceLabel = asset.platform || asset.source_type || "素材";
   const assetKey = asset.asin ? `ASIN ${asset.asin}` : sourceLabel;
   const evidenceLabel = asset.platform ? `打开 ${asset.platform} 证据` : "打开素材证据";
@@ -878,9 +887,24 @@ async function bulkReviewAssets(reviewStatus) {
   }
 }
 
-function openAssetDrawer(assetId) {
-  const asset = findAsset(assetId);
-  if (!asset) return;
+async function openAssetDrawer(assetId) {
+  const asset = findAsset(assetId) || { id: assetId, title: "素材详情" };
+  renderAssetDrawer(asset, true);
+  $("assetDrawer").classList.remove("hidden");
+  $("assetDrawer").setAttribute("aria-hidden", "false");
+  try {
+    const data = await api(`/api/competitor-assets/${encodeURIComponent(assetId)}`);
+    const fullAsset = data.asset || asset;
+    state.competitorAssets = (state.competitorAssets || []).map((item) =>
+      String(item.id) === String(assetId) ? { ...item, ...fullAsset } : item
+    );
+    renderAssetDrawer(fullAsset, false);
+  } catch (error) {
+    renderAssetDrawer({ ...asset, ai_analysis: error.message || "详情加载失败" }, false);
+  }
+}
+
+function renderAssetDrawer(asset, loading = false) {
   const media = asset.media || [];
   const preview = asset.image_url || media.find((item) => item.thumbnail_url)?.thumbnail_url || "";
   const metadata = asset.metadata ? JSON.stringify(asset.metadata, null, 2) : "{}";
@@ -892,6 +916,7 @@ function openAssetDrawer(assetId) {
       <h2>${escapeHtml(asset.title || "Untitled")}</h2>
       <p>${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(asset.review_status || "")} · ${escapeHtml(asset.rights_status || "")}</p>
     </div>
+    ${loading ? '<div class="empty-state small"><strong>正在加载完整详情</strong><span>卡片已先显示，完整元数据和深度分析马上补齐。</span></div>' : ""}
     ${preview ? `<img class="drawer-preview" src="${escapeAttr(appPath(preview))}" alt="" referrerpolicy="no-referrer" />` : ""}
     ${embedUrl ? `<iframe class="drawer-embed" src="${escapeAttr(embedUrl)}" title="素材嵌入预览" loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" allowfullscreen></iframe>` : ""}
     <dl class="drawer-meta">
@@ -904,8 +929,6 @@ function openAssetDrawer(assetId) {
       <dt>公开元数据</dt><dd><pre>${escapeHtml(metadata)}</pre></dd>
     </dl>
   `;
-  $("assetDrawer").classList.remove("hidden");
-  $("assetDrawer").setAttribute("aria-hidden", "false");
 }
 
 function closeAssetDrawer() {
@@ -1904,15 +1927,14 @@ function formatDateTime(value) {
 async function startApp() {
   if (state.appReady) return;
   state.appReady = true;
-  renderVideoTypePicker();
   try {
-    await Promise.all([loadSummary(), loadOptions(), loadJobs(), loadAdminOverview()]);
-    if (!state.jobsTimer) {
-      state.jobsTimer = setInterval(loadJobs, 5000);
-    }
+    await loadAdminOverview();
   } catch (error) {
     state.appReady = false;
-    setMessage("formMessage", error.message, "error");
+    const adminMetrics = $("adminMetrics");
+    if (adminMetrics) {
+      adminMetrics.innerHTML = `<div class="empty-state"><strong>后台数据加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
+    }
   }
 }
 
@@ -1922,39 +1944,39 @@ $("appShell").addEventListener("click", (event) => {
   const page = pageButton.dataset.page || pageButton.dataset.pageLink;
   if (page) showPage(page);
 });
-$("authForm").addEventListener("submit", submitAuth);
-$("categorySelect").addEventListener("change", updateModels);
-$("modelSearch").addEventListener("input", filterModels);
-$("modelSelect").addEventListener("change", loadFeatures);
-$("featurePicker").addEventListener("click", (event) => {
+on("authForm", "submit", submitAuth);
+on("categorySelect", "change", updateModels);
+on("modelSearch", "input", filterModels);
+on("modelSelect", "change", loadFeatures);
+on("featurePicker", "click", (event) => {
   const item = event.target.closest(".check-item");
   if (!item) return;
   state.selectedFeatures = toggleValue(state.selectedFeatures, item.dataset.value);
   renderFeaturePicker();
   updateSelectionSummary();
 });
-$("videoTypePicker").addEventListener("click", (event) => {
+on("videoTypePicker", "click", (event) => {
   const item = event.target.closest(".check-item");
   if (!item) return;
   state.selectedVideoTypes = toggleValue(state.selectedVideoTypes, item.dataset.value);
   renderVideoTypePicker();
 });
-$("generateForm").addEventListener("submit", submitGeneration);
-$("uploadInput").addEventListener("change", uploadFile);
-$("refreshJobs").addEventListener("click", loadJobs);
-$("jobFilters").addEventListener("click", (event) => {
+on("generateForm", "submit", submitGeneration);
+on("uploadInput", "change", uploadFile);
+on("refreshJobs", "click", loadJobs);
+on("jobFilters", "click", (event) => {
   const button = event.target.closest("button[data-filter]");
   if (!button) return;
   state.jobFilter = button.dataset.filter || "all";
   state.jobsExpanded = false;
   loadJobs();
 });
-$("jobSearch").addEventListener("input", (event) => {
+on("jobSearch", "input", (event) => {
   state.jobSearch = event.target.value || "";
   state.jobsExpanded = false;
   loadJobs();
 });
-$("jobs").addEventListener("click", async (event) => {
+on("jobs", "click", async (event) => {
   const downloadButton = event.target.closest(".download-job");
   if (downloadButton) {
     try {
@@ -1970,7 +1992,7 @@ $("jobs").addEventListener("click", async (event) => {
   state.activeJobId = job.id;
   renderResult(job);
 });
-$("downloadResult").addEventListener("click", async (event) => {
+on("downloadResult", "click", async (event) => {
   event.preventDefault();
   try {
     await downloadJob($("downloadResult").dataset.jobId);
@@ -1978,18 +2000,18 @@ $("downloadResult").addEventListener("click", async (event) => {
     setMessage("formMessage", error.message, "error");
   }
 });
-$("resultTabs").addEventListener("click", async (event) => {
+on("resultTabs", "click", async (event) => {
   const tab = event.target.closest(".result-tab");
   if (!tab || !state.renderedJobId) return;
   const job = await api(`/api/jobs/${encodeURIComponent(state.renderedJobId)}`);
   renderResult(job, Number(tab.dataset.index || 0));
 });
-$("storyboardCards").addEventListener("click", (event) => {
+on("storyboardCards", "click", (event) => {
   const button = event.target.closest(".storyboard-generate");
   if (!button) return;
   submitCanvasImage(Number(button.dataset.shotIndex || 0));
 });
-$("storyboardCards").addEventListener("dblclick", (event) => {
+on("storyboardCards", "dblclick", (event) => {
   const image = event.target.closest("[data-storyboard-preview]");
   if (!image) return;
   openStoryboardImagePreview(image);
@@ -2007,18 +2029,18 @@ document.addEventListener("keydown", (event) => {
     closeAssetDrawer();
   }
 });
-$("discoverRainforest").addEventListener("click", discoverRainforest);
-$("refreshRainforest").addEventListener("click", refreshRainforest);
-$("loadCompetitorAssets").addEventListener("click", loadCompetitorAssets);
-$("importSocialUrls").addEventListener("click", importSocialUrls);
-$("discoverYouTube").addEventListener("click", discoverYouTube);
-$("refreshYouTube").addEventListener("click", refreshYouTube);
-$("refreshSocialThumbnails").addEventListener("click", refreshSocialThumbnails);
-$("deepAnalyzeAssets").addEventListener("click", runDeepAnalysisAssets);
-$("bulkApproveAssets").addEventListener("click", () => bulkReviewAssets("approved"));
-$("bulkFeatureAssets").addEventListener("click", () => bulkReviewAssets("featured"));
-$("competitorResearchForm").addEventListener("submit", submitCompetitorResearch);
-$("competitorAssets").addEventListener("click", (event) => {
+on("discoverRainforest", "click", discoverRainforest);
+on("refreshRainforest", "click", refreshRainforest);
+on("loadCompetitorAssets", "click", loadCompetitorAssets);
+on("importSocialUrls", "click", importSocialUrls);
+on("discoverYouTube", "click", discoverYouTube);
+on("refreshYouTube", "click", refreshYouTube);
+on("refreshSocialThumbnails", "click", refreshSocialThumbnails);
+on("deepAnalyzeAssets", "click", runDeepAnalysisAssets);
+on("bulkApproveAssets", "click", () => bulkReviewAssets("approved"));
+on("bulkFeatureAssets", "click", () => bulkReviewAssets("featured"));
+on("competitorResearchForm", "submit", submitCompetitorResearch);
+on("competitorAssets", "click", (event) => {
   const checkbox = event.target.closest(".asset-checkbox");
   if (checkbox) {
     if (checkbox.checked) state.selectedAssetIds.add(checkbox.dataset.assetId);
@@ -2035,7 +2057,7 @@ $("competitorAssets").addEventListener("click", (event) => {
     updateAssetReview(review.dataset.assetId, review.dataset.status);
   }
 });
-$("competitorDiscovery").addEventListener("click", (event) => {
+on("competitorDiscovery", "click", (event) => {
   const chip = event.target.closest(".asin-chip");
   if (!chip) return;
   if (chip.dataset.videoId) {
@@ -2055,10 +2077,10 @@ if ($("submitVideo")) $("submitVideo").addEventListener("click", submitVideoGene
 if ($("refreshVideo")) $("refreshVideo").addEventListener("click", refreshVideoGeneration);
 if ($("assetDrawerClose")) $("assetDrawerClose").addEventListener("click", closeAssetDrawer);
 if ($("assetDrawerCloseButton")) $("assetDrawerCloseButton").addEventListener("click", closeAssetDrawer);
-$("hotspotForm").addEventListener("submit", submitHotspot);
-$("loadHotspots").addEventListener("click", loadHotspots);
-$("refreshHotspots").addEventListener("click", refreshHotspots);
-$("hotspotRows").addEventListener("click", async (event) => {
+on("hotspotForm", "submit", submitHotspot);
+on("loadHotspots", "click", loadHotspots);
+on("refreshHotspots", "click", refreshHotspots);
+on("hotspotRows", "click", async (event) => {
   const button = event.target.closest(".hotspot-status");
   if (!button) return;
   try {
@@ -2068,9 +2090,9 @@ $("hotspotRows").addEventListener("click", async (event) => {
     setMessage("hotspotMessage", error.message, "error");
   }
 });
-$("collectionRunForm").addEventListener("submit", submitCollectionRun);
-$("loadCollectionRuns").addEventListener("click", loadCollectionRuns);
-$("competitorConfigForm").addEventListener("submit", submitCompetitorConfig);
-$("loadConfigs").addEventListener("click", () => Promise.all([loadCompetitorConfigs(), loadHotspotSources()]));
+on("collectionRunForm", "submit", submitCollectionRun);
+on("loadCollectionRuns", "click", loadCollectionRuns);
+on("competitorConfigForm", "submit", submitCompetitorConfig);
+on("loadConfigs", "click", () => Promise.all([loadCompetitorConfigs(), loadHotspotSources()]));
 
 initializeAuth();

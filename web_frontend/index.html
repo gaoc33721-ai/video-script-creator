@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260513-script-columns" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260514-front-context" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -70,6 +70,10 @@
             <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
           </div>
           <label>脚本方向<div id="videoTypePicker" class="check-list compact"></div></label>
+          <div class="context-toggles">
+            <label class="inline-toggle"><input name="use_competitor_context" type="checkbox" checked /> 引用已审核竞品素材</label>
+            <label class="inline-toggle"><input name="use_hotspot_context" type="checkbox" checked /> 引用有效行业热点</label>
+          </div>
           <label>目标受众<input name="target_audience" placeholder="不填则按通用海外消费者处理" /></label>
           <label>用户痛点<textarea name="pain_points" rows="3"></textarea></label>
           <label>补充要求<textarea name="custom_requirements" rows="3"></textarea></label>
@@ -87,7 +91,7 @@
             <h2>使用流程</h2>
             <div class="guide-steps">
               <div><span>1</span><strong>选择产品</strong><small>品类、型号、核心卖点</small></div>
-              <div><span>2</span><strong>提交任务</strong><small>后台生成，不阻塞页面</small></div>
+              <div><span>2</span><strong>提交任务</strong><small>服务端异步生成，不阻塞页面</small></div>
               <div><span>3</span><strong>查看结果</strong><small>完成后预览并下载 Excel</small></div>
             </div>
           </section>
@@ -213,6 +217,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260513-script-columns"></script>
+    <script src="/static/app.js?v=20260514-front-context"></script>
   </body>
 </html>
