@@ -62,6 +62,7 @@ create table if not exists competitor_assets (
   metadata jsonb not null default '{}'::jsonb,
   ai_tags text[] not null default '{}',
   ai_analysis text,
+  deep_analysis jsonb not null default '{}'::jsonb,
   embedding vector(1536),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -74,6 +75,7 @@ alter table competitor_assets add column if not exists embed_url text;
 alter table competitor_assets add column if not exists embed_html text;
 alter table competitor_assets add column if not exists thumbnail_expires_at timestamptz;
 alter table competitor_assets add column if not exists engagement_snapshot jsonb not null default '{}'::jsonb;
+alter table competitor_assets add column if not exists deep_analysis jsonb not null default '{}'::jsonb;
 
 create index if not exists idx_competitor_assets_category
   on competitor_assets (category, brand, channel);
@@ -220,5 +222,25 @@ create table if not exists competitor_collection_runs (
 
 create index if not exists idx_competitor_collection_runs_lookup
   on competitor_collection_runs (status, category, platform, created_at desc);
+
+create table if not exists competitor_analysis_runs (
+  id uuid primary key default gen_random_uuid(),
+  status text not null default 'pending',
+  request_payload jsonb not null default '{}'::jsonb,
+  model_provider text not null default 'aws_bedrock',
+  model_id text,
+  concurrency integer not null default 4,
+  target_count integer not null default 0,
+  completed_count integer not null default 0,
+  updated_asset_ids text[] not null default '{}',
+  errors jsonb not null default '[]'::jsonb,
+  error_message text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+
+create index if not exists idx_competitor_analysis_runs_status
+  on competitor_analysis_runs (status, created_at desc);
 
 alter table script_jobs add column if not exists context_snapshot jsonb not null default '{}'::jsonb;

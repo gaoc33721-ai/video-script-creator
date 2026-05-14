@@ -1,4 +1,5 @@
 import base64
+import concurrent.futures
 import datetime as dt
 import hashlib
 import hmac
@@ -68,6 +69,7 @@ HOTSPOT_SOURCES_KEY = "hotspot_sources.json"
 COMPETITOR_CONFIGS_KEY = "competitor_configs.json"
 COMPETITOR_COLLECTION_RUNS_KEY = "competitor_collection_runs.json"
 SOCIAL_COLLECTION_SOURCES_KEY = "social_collection_sources.json"
+COMPETITOR_ANALYSIS_RUNS_KEY = "competitor_analysis_runs.json"
 TABLE_COLUMNS = [
     "结构分段",
     "功能点",
@@ -463,6 +465,20 @@ class SocialThumbnailRefreshRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=200)
 
 
+class CompetitorDeepAnalysisRequest(BaseModel):
+    asset_ids: list[str] = Field(default_factory=list, max_length=50)
+    category: str = ""
+    target_market: str = ""
+    platform: str = ""
+    source: str = ""
+    q: str = ""
+    media_type: str = ""
+    review_status: str = ""
+    max_assets: int = Field(default=12, ge=1, le=50)
+    concurrency: int = Field(default=4, ge=1, le=8)
+    force: bool = False
+
+
 class CompetitorAssetPatchRequest(BaseModel):
     review_status: str | None = None
     rights_status: str | None = None
@@ -787,6 +803,29 @@ def _save_competitor_research_jobs(jobs):
     return _write_json(COMPETITOR_RESEARCH_JOBS_KEY, jobs[:200])
 
 
+def _load_competitor_analysis_runs():
+    data = _read_json(COMPETITOR_ANALYSIS_RUNS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_competitor_analysis_runs(runs):
+    return _write_json(COMPETITOR_ANALYSIS_RUNS_KEY, runs[:200])
+
+
+def _update_competitor_analysis_run(run_id: str, **fields):
+    with competitor_lock:
+        runs = _load_competitor_analysis_runs()
+        for run in runs:
+            if run.get("id") == run_id:
+                run.update(fields)
+                now = _utc_now()
+                run["updated_at"] = now
+                if fields.get("status") in {"succeeded", "failed", "partial"}:
+                    run["completed_at"] = now
+                break
+        _save_competitor_analysis_runs(runs)
+
+
 def _load_social_collection_sources():
     data = _read_json(SOCIAL_COLLECTION_SOURCES_KEY, [])
     return data if isinstance(data, list) else []
@@ -979,6 +1018,17 @@ def _competitor_asset_search_text(asset):
         if isinstance(item, dict)
     )
     metadata = asset.get("metadata") or {}
+    deep_analysis = asset.get("deep_analysis") if isinstance(asset.get("deep_analysis"), dict) else {}
+    deep_text = " ".join(
+        [
+            str(deep_analysis.get("summary") or ""),
+            str(deep_analysis.get("hook_analysis") or ""),
+            str(deep_analysis.get("creative_pattern") or ""),
+            " ".join(deep_analysis.get("selling_points") or []),
+            " ".join(deep_analysis.get("script_opportunities") or []),
+            " ".join(deep_analysis.get("recommended_tags") or []),
+        ]
+    )
     return " ".join(
         [
             str(asset.get("id") or ""),
@@ -991,6 +1041,7 @@ def _competitor_asset_search_text(asset):
             str(asset.get("title") or ""),
             str(asset.get("original_copy") or ""),
             str(asset.get("ai_analysis") or ""),
+            deep_text,
             " ".join(asset.get("ai_tags") or []),
             str(metadata.get("source_query") or ""),
             str(metadata.get("platform_content_id") or ""),
@@ -1685,18 +1736,19 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 """.strip()
 
 
-def _call_bedrock(prompt: str, temperature=0.7, top_p=0.9) -> str:
+def _call_bedrock(prompt: str, temperature=0.7, top_p=0.9, system_prompt: str = SYSTEM_PROMPT, max_tokens: int | None = None) -> str:
     client = boto3.client("bedrock-runtime", region_name=BEDROCK_AWS_REGION)
     model_ids = [BEDROCK_MODEL_ID, *BEDROCK_MODEL_FALLBACK_IDS]
     last_error = None
+    requested_tokens = int(max_tokens or BEDROCK_MAX_TOKENS)
     for model_id in model_ids:
         try:
             response = client.converse(
                 modelId=model_id,
-                system=[{"text": SYSTEM_PROMPT}],
+                system=[{"text": system_prompt}],
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 inferenceConfig={
-                    "maxTokens": _bedrock_max_tokens_for_model(model_id, BEDROCK_MAX_TOKENS),
+                    "maxTokens": _bedrock_max_tokens_for_model(model_id, requested_tokens),
                     "temperature": temperature,
                     "topP": top_p,
                 },
@@ -2501,6 +2553,307 @@ def _fallback_competitor_report(req: CompetitorResearchRequest, assets: list[dic
     )
 
 
+DEEP_ANALYSIS_SYSTEM_PROMPT = """
+你是海外家电行业竞品短视频素材分析专家。你只能基于用户提供的入库证据、公开元数据、标题、文案、缩略图/嵌入链接字段做分析；不得声称已经观看、下载或保存竞品视频原片，不得编造播放量、评论、投放效果或未提供的画面细节。
+输出必须是可解析 JSON，面向内容策划和短视频脚本生成联动使用。
+""".strip()
+
+
+def _asset_payload_for_deep_analysis(asset: dict) -> dict:
+    metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+    media = []
+    for item in (asset.get("media") or [])[:8]:
+        if isinstance(item, dict):
+            media.append(
+                {
+                    "media_type": item.get("media_type") or "",
+                    "title": item.get("title") or "",
+                    "product_url": item.get("product_url") or "",
+                    "thumbnail_url": item.get("thumbnail_url") or "",
+                    "rights_status": item.get("rights_status") or "",
+                }
+            )
+    return {
+        "id": asset.get("id") or "",
+        "platform": asset.get("platform") or asset.get("source_type") or "",
+        "source_type": asset.get("source_type") or "",
+        "brand": asset.get("brand") or "",
+        "category": asset.get("category") or "",
+        "title": asset.get("title") or "",
+        "source_url": asset.get("source_url") or "",
+        "embed_url": asset.get("embed_url") or "",
+        "image_url": asset.get("image_url") or "",
+        "media_types": sorted(_asset_media_types(asset)),
+        "original_copy": str(asset.get("original_copy") or "")[:1200],
+        "ai_tags": asset.get("ai_tags") or [],
+        "current_analysis": asset.get("ai_analysis") or "",
+        "quality_score": asset.get("quality_score") or 0,
+        "review_status": asset.get("review_status") or "",
+        "rights_status": asset.get("rights_status") or "",
+        "metadata": {
+            "platform_content_id": metadata.get("platform_content_id") or metadata.get("youtube_video_id") or "",
+            "account_name": metadata.get("account_name") or metadata.get("channel_title") or "",
+            "published_at": metadata.get("published_at") or "",
+            "duration": metadata.get("duration") or "",
+            "view_count": metadata.get("view_count") or metadata.get("views") or "",
+            "like_count": metadata.get("like_count") or "",
+            "comment_count": metadata.get("comment_count") or "",
+            "evidence_status": metadata.get("evidence_status") or "",
+            "oembed_fetch_error": metadata.get("oembed_fetch_error") or "",
+        },
+        "media": media,
+    }
+
+
+def _build_competitor_asset_deep_analysis_prompt(asset: dict, req: CompetitorDeepAnalysisRequest) -> str:
+    payload = _asset_payload_for_deep_analysis(asset)
+    return f"""
+请对下方已入库竞品社媒/电商视频素材做深度分析，并输出严格 JSON。
+
+业务上下文：
+- 品类：{req.category or payload.get("category") or "未限定"}
+- 目标市场：{req.target_market or "未限定"}
+- 平台：{req.platform or payload.get("platform") or "未限定"}
+- 分析目标：沉淀可用于 Hisense 家电短视频脚本生成的竞品素材洞察。
+
+素材证据 JSON：
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+输出 JSON Schema：
+{{
+  "summary": "一句话总结这条素材的内容策略价值，中文，80字以内",
+  "hook_analysis": "推断其开场/标题/封面可能承担的吸引逻辑；若证据不足必须说明",
+  "creative_pattern": "内容套路归纳，如痛点解决、场景演示、功能证明、测评对比等",
+  "scene_structure": ["可复用的镜头/段落结构，3-6条，基于证据，不编造具体画面"],
+  "selling_points": ["可借鉴的卖点表达，3-6条"],
+  "visual_language": ["可借鉴的视觉/节奏/构图提示，2-5条；证据不足则写限制"],
+  "script_opportunities": ["转化为 Hisense 脚本时可借鉴的方向，3-6条"],
+  "risk_notes": ["合规、版权、证据不足或平台限制，2-5条"],
+  "recommended_tags": ["用于素材库筛选的中文标签，4-8个"],
+  "confidence": 0,
+  "quality_score": 0
+}}
+
+规则：
+1. confidence 和 quality_score 为 0-100 整数。
+2. 不要输出 Markdown，不要包裹代码块。
+3. 不得说“我观看了视频”；只能说“基于标题/描述/链接/缩略图/嵌入证据”。
+4. 强调未下载、未保存竞品视频原片。
+""".strip()
+
+
+def _extract_json_object(text: str) -> dict:
+    cleaned = _strip_code_fences(text)
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _clean_analysis_list(value, limit=8):
+    if isinstance(value, str):
+        raw = re.split(r"[\n；;]", value)
+    else:
+        raw = value or []
+    return _clean_list([str(item).strip(" -•\t") for item in raw], limit=limit)
+
+
+def _analysis_score(value) -> int:
+    match = re.search(r"\d+", str(value or ""))
+    if not match:
+        return 0
+    return max(0, min(100, int(match.group(0))))
+
+
+def _normalize_deep_analysis_payload(payload: dict, asset: dict) -> dict:
+    normalized = {
+        "summary": str(payload.get("summary") or "").strip(),
+        "hook_analysis": str(payload.get("hook_analysis") or "").strip(),
+        "creative_pattern": str(payload.get("creative_pattern") or "").strip(),
+        "scene_structure": _clean_analysis_list(payload.get("scene_structure"), limit=6),
+        "selling_points": _clean_analysis_list(payload.get("selling_points"), limit=6),
+        "visual_language": _clean_analysis_list(payload.get("visual_language"), limit=5),
+        "script_opportunities": _clean_analysis_list(payload.get("script_opportunities"), limit=6),
+        "risk_notes": _clean_analysis_list(payload.get("risk_notes"), limit=5),
+        "recommended_tags": _clean_analysis_list(payload.get("recommended_tags"), limit=8),
+        "confidence": _analysis_score(payload.get("confidence")),
+        "quality_score": _analysis_score(payload.get("quality_score")),
+    }
+    if not normalized["summary"]:
+        normalized["summary"] = f"基于{asset.get('platform') or '社媒'}链接证据完成素材策略分析，仍需结合人工复核确认画面细节。"
+    if not normalized["risk_notes"]:
+        normalized["risk_notes"] = ["仅保存链接、嵌入地址和公开元数据，未下载或保存竞品视频原片。"]
+    return normalized
+
+
+def _call_competitor_asset_deep_analysis(asset: dict, req: CompetitorDeepAnalysisRequest) -> dict:
+    text = _call_bedrock(
+        _build_competitor_asset_deep_analysis_prompt(asset, req),
+        temperature=0.2,
+        top_p=0.75,
+        system_prompt=DEEP_ANALYSIS_SYSTEM_PROMPT,
+        max_tokens=2200,
+    )
+    parsed = _extract_json_object(text)
+    if not parsed:
+        raise RuntimeError("模型返回内容不是可解析 JSON。")
+    return _normalize_deep_analysis_payload(parsed, asset)
+
+
+def _merge_deep_analysis_into_asset(asset: dict, analysis: dict) -> dict:
+    now = _utc_now()
+    item = _ensure_asset_admin_defaults(asset)
+    deep_analysis = {
+        **analysis,
+        "analyzed_at": now,
+        "model_provider": "aws_bedrock",
+        "model_id": BEDROCK_MODEL_ID,
+        "analysis_version": "competitor_asset_deep_v1",
+        "evidence_basis": "link_thumbnail_oembed_public_metadata_no_raw_video",
+    }
+    item["deep_analysis"] = deep_analysis
+    item["ai_analysis"] = "；".join(
+        part
+        for part in (
+            analysis.get("summary"),
+            f"套路：{analysis.get('creative_pattern')}" if analysis.get("creative_pattern") else "",
+            f"Hook：{analysis.get('hook_analysis')}" if analysis.get("hook_analysis") else "",
+        )
+        if part
+    )[:900]
+    tags = _clean_list(
+        list(item.get("ai_tags") or []) + list(analysis.get("recommended_tags") or []) + ["大模型深度分析"],
+        limit=30,
+    )
+    item["ai_tags"] = tags
+    if int(analysis.get("quality_score") or 0):
+        item["quality_score"] = max(int(item.get("quality_score") or 0), int(analysis.get("quality_score") or 0))
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    metadata["deep_analysis_status"] = "succeeded"
+    metadata["deep_analyzed_at"] = now
+    metadata["deep_analysis_model_id"] = BEDROCK_MODEL_ID
+    item["metadata"] = metadata
+    item["updated_at"] = now
+    return _ensure_asset_admin_defaults(item)
+
+
+def _select_competitor_assets_for_deep_analysis(req: CompetitorDeepAnalysisRequest) -> list[dict]:
+    if req.asset_ids:
+        assets = _assets_by_ids(req.asset_ids)
+    else:
+        assets, _ = _search_competitor_assets(
+            q=req.q,
+            category=req.category,
+            platform=req.platform,
+            source=req.source,
+            media_type=req.media_type,
+            review_status=req.review_status,
+            rights_status="link_only_no_raw_video",
+            sort="quality_desc",
+            limit=req.max_assets,
+        )
+    if not req.force:
+        assets = [asset for asset in assets if not (asset.get("deep_analysis") or {}).get("summary")]
+    return assets[: req.max_assets]
+
+
+def _save_analyzed_competitor_asset(asset: dict):
+    with competitor_lock:
+        assets = _load_competitor_assets()
+        by_id = {str(item.get("id") or ""): dict(item) for item in assets if item.get("id")}
+        by_id[str(asset.get("id") or "")] = asset
+        _save_competitor_assets(list(by_id.values()))
+
+
+def _run_competitor_deep_analysis_job(run_id: str):
+    run = next((item for item in _load_competitor_analysis_runs() if item.get("id") == run_id), None)
+    if not run:
+        return
+    try:
+        req = CompetitorDeepAnalysisRequest(**(run.get("request") or {}))
+        assets = _select_competitor_assets_for_deep_analysis(req)
+        target_count = len(assets)
+        if not target_count:
+            _update_competitor_analysis_run(
+                run_id,
+                status="succeeded",
+                progress=100,
+                current_step="没有需要分析的素材",
+                target_count=0,
+                completed_count=0,
+                updated_asset_ids=[],
+                errors=[],
+            )
+            return
+
+        _update_competitor_analysis_run(
+            run_id,
+            status="running",
+            progress=5,
+            current_step=f"正在并发分析 {target_count} 条素材",
+            target_count=target_count,
+            completed_count=0,
+            updated_asset_ids=[],
+            errors=[],
+        )
+        completed = 0
+        updated_ids = []
+        errors = []
+        workers = max(1, min(int(req.concurrency or 4), 8, target_count))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(_call_competitor_asset_deep_analysis, asset, req): asset for asset in assets}
+            for future in concurrent.futures.as_completed(future_map):
+                asset = future_map[future]
+                asset_id = str(asset.get("id") or "")
+                try:
+                    analysis = future.result()
+                    updated = _merge_deep_analysis_into_asset(asset, analysis)
+                    _save_analyzed_competitor_asset(updated)
+                    updated_ids.append(asset_id)
+                except Exception as exc:
+                    errors.append({"asset_id": asset_id, "title": asset.get("title") or "", "error": str(exc)[:500]})
+                completed += 1
+                _update_competitor_analysis_run(
+                    run_id,
+                    progress=min(95, 5 + int(completed * 90 / target_count)),
+                    current_step=f"已完成 {completed}/{target_count} 条",
+                    completed_count=completed,
+                    updated_asset_ids=updated_ids,
+                    errors=errors[:20],
+                )
+
+        status = "succeeded" if not errors else ("partial" if updated_ids else "failed")
+        _update_competitor_analysis_run(
+            run_id,
+            status=status,
+            progress=100,
+            current_step="已完成" if status == "succeeded" else "部分完成" if status == "partial" else "失败",
+            completed_count=completed,
+            updated_asset_ids=updated_ids,
+            errors=errors[:20],
+            error_message="" if updated_ids else (errors[0]["error"] if errors else "分析失败"),
+        )
+    except Exception as exc:
+        _update_competitor_analysis_run(
+            run_id,
+            status="failed",
+            progress=100,
+            current_step="失败",
+            error_message=str(exc),
+        )
+
+
 def _run_competitor_research_job(job_id: str):
     job = next((item for item in _load_competitor_research_jobs() if item.get("id") == job_id), None)
     if not job:
@@ -3094,6 +3447,55 @@ def competitor_asset_search(
         "offset": max(0, int(offset or 0)),
         "limit": limit,
     }
+
+
+@app.post("/api/competitor-assets/deep-analysis-runs", dependencies=[Depends(_verify_access)])
+def create_competitor_deep_analysis_run(req: CompetitorDeepAnalysisRequest):
+    selected_assets = _select_competitor_assets_for_deep_analysis(req)
+    if not selected_assets:
+        raise HTTPException(status_code=400, detail="没有匹配到需要深度分析的竞品素材。")
+    now = _utc_now()
+    run_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": run_id,
+        "created_at": now,
+        "updated_at": now,
+        "completed_at": "",
+        "status": "pending",
+        "progress": 0,
+        "current_step": "已提交",
+        "request": req.model_dump(),
+        "target_count": len(selected_assets),
+        "completed_count": 0,
+        "updated_asset_ids": [],
+        "errors": [],
+        "error_message": "",
+        "model_provider": "aws_bedrock",
+        "model_id": BEDROCK_MODEL_ID,
+        "concurrency": min(int(req.concurrency or 4), 8, len(selected_assets)),
+    }
+    with competitor_lock:
+        runs = _load_competitor_analysis_runs()
+        runs.insert(0, job)
+        _save_competitor_analysis_runs(runs)
+    threading.Thread(target=_run_competitor_deep_analysis_job, args=(run_id,), daemon=True).start()
+    return {"run_id": run_id, "job": job}
+
+
+@app.get("/api/competitor-assets/deep-analysis-runs", dependencies=[Depends(_verify_access)])
+def list_competitor_deep_analysis_runs(limit: int = 20):
+    limit = max(1, min(int(limit or 20), 100))
+    return {"jobs": _load_competitor_analysis_runs()[:limit]}
+
+
+@app.get("/api/competitor-assets/deep-analysis-runs/{run_id}", dependencies=[Depends(_verify_access)])
+def get_competitor_deep_analysis_run(run_id: str):
+    found = next((item for item in _load_competitor_analysis_runs() if item.get("id") == run_id), None)
+    if not found:
+        raise HTTPException(status_code=404, detail="深度分析任务不存在。")
+    updated_ids = found.get("updated_asset_ids") or []
+    assets = _assets_by_ids(updated_ids[:20]) if updated_ids else []
+    return {**found, "assets": [_public_competitor_asset(item) for item in assets]}
 
 
 @app.patch("/api/competitor-assets/{asset_id}", dependencies=[Depends(_verify_access)])

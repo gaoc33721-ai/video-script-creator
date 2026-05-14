@@ -22,6 +22,7 @@ const state = {
   jobFilter: "all",
   jobSearch: "",
   competitorResearchTimer: null,
+  competitorAnalysisTimer: null,
   lastDiscoveredAsins: [],
   lastDiscoveredVideoIds: [],
   currentPage: "dashboard",
@@ -641,6 +642,61 @@ async function refreshSocialThumbnails() {
   }
 }
 
+async function runDeepAnalysisAssets() {
+  if (state.competitorAnalysisTimer) {
+    clearTimeout(state.competitorAnalysisTimer);
+    state.competitorAnalysisTimer = null;
+  }
+  const selected = Array.from(state.selectedAssetIds || []);
+  const source = competitorSourceValue();
+  const payload = competitorPayload();
+  const maxAssets = selected.length ? Math.min(selected.length, 50) : 12;
+  setMessage("competitorMessage", selected.length ? `正在提交 ${selected.length} 条素材深度分析...` : "正在提交当前筛选素材深度分析...");
+  try {
+    const data = await api("/api/competitor-assets/deep-analysis-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        asset_ids: selected,
+        category: payload.category,
+        target_market: payload.target_market,
+        platform: competitorPlatformForSource(source),
+        source,
+        q: ($("competitorAssetQuery")?.value || "").trim(),
+        media_type: $("competitorMediaType")?.value || "",
+        review_status: $("competitorReviewStatus")?.value || "",
+        max_assets: maxAssets,
+        concurrency: 4,
+        force: true,
+      }),
+    });
+    setMessage("competitorMessage", `深度分析任务 ${data.run_id} 已提交，并发 ${data.job?.concurrency || 4} 路处理中...`, "ok");
+    await pollDeepAnalysisRun(data.run_id, 0);
+  } catch (error) {
+    setMessage("competitorMessage", error.message, "error");
+  }
+}
+
+async function pollDeepAnalysisRun(runId, attempt) {
+  const job = await api(`/api/competitor-assets/deep-analysis-runs/${encodeURIComponent(runId)}`);
+  const done = Number(job.completed_count || 0);
+  const total = Number(job.target_count || 0);
+  if (job.status === "succeeded" || job.status === "partial") {
+    await loadCompetitorAssets();
+    const errors = job.errors?.length ? `，失败 ${job.errors.length} 条` : "";
+    setMessage("competitorMessage", `深度分析完成：已更新 ${job.updated_asset_ids?.length || 0} / ${total} 条素材${errors}。`, job.status === "succeeded" ? "ok" : "error");
+    return;
+  }
+  if (job.status === "failed") {
+    setMessage("competitorMessage", job.error_message || "深度分析任务失败。", "error");
+    return;
+  }
+  setMessage("competitorMessage", `${job.current_step || "正在深度分析"} ${Number(job.progress || 0)}%（${done}/${total || "?"}）`);
+  if (attempt < 240) {
+    state.competitorAnalysisTimer = setTimeout(() => pollDeepAnalysisRun(runId, attempt + 1), 2500);
+  }
+}
+
 async function discoverRainforest() {
   setMessage("competitorMessage", "正在通过 Rainforest 搜索 Amazon ASIN...");
   try {
@@ -843,6 +899,7 @@ function openAssetDrawer(assetId) {
       <dt>嵌入预览</dt><dd>${embedUrl ? `<a href="${escapeAttr(embedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(embedUrl)}</a>` : "-"}</dd>
       <dt>证据状态</dt><dd>${escapeHtml(evidenceStatus || "-")}</dd>
       <dt>AI 分析</dt><dd>${escapeHtml(asset.ai_analysis || "-")}</dd>
+      ${renderDeepAnalysisBlock(asset)}
       <dt>标签</dt><dd>${escapeHtml((asset.ai_tags || []).join("、") || "-")}</dd>
       <dt>公开元数据</dt><dd><pre>${escapeHtml(metadata)}</pre></dd>
     </dl>
@@ -854,6 +911,25 @@ function openAssetDrawer(assetId) {
 function closeAssetDrawer() {
   $("assetDrawer").classList.add("hidden");
   $("assetDrawer").setAttribute("aria-hidden", "true");
+}
+
+function renderDeepAnalysisBlock(asset) {
+  const deep = asset.deep_analysis || {};
+  if (!deep.summary) return "";
+  const list = (items) => (items || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const meta = [deep.model_id, deep.analyzed_at ? formatDateTime(deep.analyzed_at) : ""].filter(Boolean).join(" · ");
+  return `
+    <dt>大模型深度分析</dt>
+    <dd class="deep-analysis-block">
+      <strong>${escapeHtml(deep.summary || "")}</strong>
+      ${deep.creative_pattern ? `<p>内容套路：${escapeHtml(deep.creative_pattern)}</p>` : ""}
+      ${deep.hook_analysis ? `<p>Hook 判断：${escapeHtml(deep.hook_analysis)}</p>` : ""}
+      ${deep.selling_points?.length ? `<p>卖点表达</p><ul>${list(deep.selling_points)}</ul>` : ""}
+      ${deep.script_opportunities?.length ? `<p>脚本机会</p><ul>${list(deep.script_opportunities)}</ul>` : ""}
+      ${deep.risk_notes?.length ? `<p>限制与风险</p><ul>${list(deep.risk_notes)}</ul>` : ""}
+      <span>${escapeHtml(meta || "已完成深度分析")}</span>
+    </dd>
+  `;
 }
 
 async function submitCompetitorResearch(event) {
@@ -1938,6 +2014,7 @@ $("importSocialUrls").addEventListener("click", importSocialUrls);
 $("discoverYouTube").addEventListener("click", discoverYouTube);
 $("refreshYouTube").addEventListener("click", refreshYouTube);
 $("refreshSocialThumbnails").addEventListener("click", refreshSocialThumbnails);
+$("deepAnalyzeAssets").addEventListener("click", runDeepAnalysisAssets);
 $("bulkApproveAssets").addEventListener("click", () => bulkReviewAssets("approved"));
 $("bulkFeatureAssets").addEventListener("click", () => bulkReviewAssets("featured"));
 $("competitorResearchForm").addEventListener("submit", submitCompetitorResearch);
