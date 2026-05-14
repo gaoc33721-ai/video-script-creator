@@ -150,10 +150,13 @@ def rainforest_request(api_key: str, params: dict[str, Any], *, timeout: int = 2
     request_params = {"api_key": api_key, **params}
     try:
         response = requests.get(RAINFOREST_ENDPOINT, params=request_params, timeout=timeout)
-        response.raise_for_status()
+        if not response.ok:
+            raise RainforestApiError(f"Rainforest HTTP 请求失败：status={response.status_code}")
         data = response.json()
+    except RainforestApiError:
+        raise
     except requests.RequestException as exc:
-        raise RainforestApiError(f"Rainforest 网络请求失败：{exc}") from exc
+        raise RainforestApiError(f"Rainforest 网络请求失败：{exc.__class__.__name__}") from exc
     except ValueError as exc:
         raise RainforestApiError("Rainforest 返回不是合法 JSON。") from exc
 
@@ -202,6 +205,12 @@ def normalize_product_response(
         "media_count": len(media),
         "video_count": sum(1 for item in media if item.get("media_type") == "video"),
         "image_count": sum(1 for item in media if item.get("media_type") == "image"),
+        "video_sources": _media_source_counts(media, "video"),
+        "image_sources": _media_source_counts(media, "image"),
+        "has_customer_or_creator_video": any(
+            item.get("media_type") == "video" and _is_customer_or_creator_video(item)
+            for item in media
+        ),
     }
 
     asset = {
@@ -235,7 +244,17 @@ def normalize_product_response(
 def normalize_product_media(product: dict[str, Any], asin: str, amazon_domain: str, product_url: str) -> list[dict[str, Any]]:
     media: list[dict[str, Any]] = []
 
-    for video in _collect_named_media(product, {"videos", "video_blocks", "image_block_videos", "customer_videos"}):
+    for video in _collect_named_media(
+        product,
+        {
+            "videos",
+            "videos_additional",
+            "video_blocks",
+            "image_block_videos",
+            "customer_videos",
+            "related_videos",
+        },
+    ):
         item = _normalize_media_item(video, "video", asin, amazon_domain, product_url)
         if item:
             media.append(item)
@@ -245,7 +264,7 @@ def normalize_product_media(product: dict[str, Any], asin: str, amazon_domain: s
         main_image["title"] = main_image.get("title") or "Main product image"
         media.append(main_image)
 
-    for image in _collect_named_media(product, {"images", "image_blocks"}):
+    for image in _collect_named_media(product, {"images", "image_blocks", "all_images", "a_plus_images", "aplus_images"}):
         item = _normalize_media_item(image, "image", asin, amazon_domain, product_url)
         if item:
             media.append(item)
@@ -300,12 +319,20 @@ def heuristic_asset_analysis(asset: dict[str, Any]) -> tuple[list[str], str]:
     tags = [tag for tag, needles in tag_rules if any(needle in text for needle in needles)]
     if (asset.get("metadata") or {}).get("has_video"):
         tags.append("含站内视频")
+    if (asset.get("metadata") or {}).get("has_customer_or_creator_video"):
+        tags.append("站内关联视频线索")
     if (asset.get("metadata") or {}).get("has_a_plus_content"):
         tags.append("含A+内容")
     if not tags:
         tags = ["Amazon站内素材", "竞品文案参考"]
 
-    media_hint = "有站内视频，可优先作为视频表达参考" if (asset.get("metadata") or {}).get("has_video") else "暂未识别到站内视频，可作为商品页文案和图片证据"
+    metadata = asset.get("metadata") or {}
+    if metadata.get("has_video"):
+        video_count = metadata.get("video_count") or 0
+        source_hint = "，含站内关联视频线索" if metadata.get("has_customer_or_creator_video") else ""
+        media_hint = f"识别到 {video_count} 条站内视频{source_hint}，可优先作为视频表达参考"
+    else:
+        media_hint = "暂未识别到站内视频，可作为商品页文案和图片证据"
     analysis = (
         f"{asset.get('brand') or '竞品'} 的该 Amazon 素材围绕“{asset.get('title') or '商品卖点'}”展开，"
         f"可参考其标题、五点描述、图片/A+模块中的利益点排序。{media_hint}；"
@@ -330,7 +357,7 @@ def _normalize_media_item(value: Any, media_type: str, asin: str, amazon_domain:
     thumbnail = _extract_thumbnail(raw)
     title = str(raw.get("title") or raw.get("name") or raw.get("alt") or raw.get("variant") or "").strip()
     media_id = re.sub(r"[^A-Za-z0-9_.:-]+", "_", f"{asin}:{media_type}:{link}")[:220]
-    return {
+    item = {
         "id": media_id,
         "asin": asin,
         "amazon_domain": amazon_domain,
@@ -339,29 +366,50 @@ def _normalize_media_item(value: Any, media_type: str, asin: str, amazon_domain:
         "media_url": link,
         "thumbnail_url": thumbnail,
         "title": title,
+        "media_source": str(raw.get("media_source") or raw.get("group_type") or raw.get("type") or "").strip(),
         "source_payload": _trim_payload(raw),
         "rights_status": "link_only_no_raw_video",
     }
+    if raw.get("duration_seconds"):
+        item["duration_seconds"] = _to_int(raw.get("duration_seconds"))
+    if raw.get("video_author") or raw.get("public_name") or raw.get("vendor_name"):
+        item["author"] = str(raw.get("video_author") or raw.get("public_name") or raw.get("vendor_name") or "").strip()
+    if raw.get("video_age"):
+        item["age"] = str(raw.get("video_age") or "").strip()
+    if raw.get("video_mime_type"):
+        item["mime_type"] = str(raw.get("video_mime_type") or "").strip()
+    if raw.get("group_id") or raw.get("id"):
+        item["platform_media_id"] = str(raw.get("group_id") or raw.get("id") or "").strip()
+    return item
 
 
 def _collect_named_media(value: Any, target_keys: set[str]) -> list[Any]:
     collected: list[Any] = []
+
+    def add_item(candidate: Any, source_key: str):
+        if isinstance(candidate, dict):
+            item = dict(candidate)
+            item.setdefault("media_source", source_key)
+            collected.append(item)
+        else:
+            collected.append(candidate)
 
     def visit(node: Any, key_name: str = ""):
         if isinstance(node, dict):
             normalized_key = key_name.lower()
             if normalized_key in target_keys:
                 if isinstance(node, dict) and _extract_link(node):
-                    collected.append(node)
+                    add_item(node, normalized_key)
                 else:
                     for child in _iter_list_like(node):
-                        collected.append(child)
+                        add_item(child, normalized_key)
                 return
             for key, child in node.items():
                 visit(child, str(key))
         elif isinstance(node, list):
             if key_name.lower() in target_keys:
-                collected.extend(node)
+                for child in node:
+                    add_item(child, key_name.lower())
                 return
             for child in node:
                 visit(child, key_name)
@@ -401,12 +449,42 @@ def _extract_link(value: Any) -> str:
 def _extract_thumbnail(value: Any) -> str:
     if not isinstance(value, dict):
         return ""
-    for key in ("thumbnail", "thumbnail_url", "preview", "preview_image", "poster", "image", "thumb"):
+    for key in (
+        "thumbnail",
+        "thumbnail_url",
+        "video_image_url",
+        "video_image_url_unchanged",
+        "preview",
+        "preview_image",
+        "poster",
+        "image",
+        "thumb",
+    ):
         candidate = value.get(key)
         link = _extract_link(candidate)
         if link:
             return link
     return ""
+
+
+def _media_source_counts(media: list[dict[str, Any]], media_type: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in media:
+        if item.get("media_type") != media_type:
+            continue
+        source = str(item.get("media_source") or "unknown").strip() or "unknown"
+        counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
+def _is_customer_or_creator_video(item: dict[str, Any]) -> bool:
+    source = str(item.get("media_source") or "").lower()
+    payload = item.get("source_payload") if isinstance(item.get("source_payload"), dict) else {}
+    return bool(
+        source in {"videos_additional", "customer_videos", "related_videos"}
+        or payload.get("public_name")
+        or payload.get("vendor_name")
+    )
 
 
 def _first_media_thumbnail(media: list[dict[str, Any]]) -> str:

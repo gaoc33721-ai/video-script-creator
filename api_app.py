@@ -96,6 +96,7 @@ SYSTEM_PROMPT = f"""##角色
 6. 表现手法必须具体到镜头动作和画面内容：不要写“展示产品功能”这种空话，要写“披萨放入腔体，手指按下触控面板，屏幕数字跳动，切到拉丝芝士和产品门体反光特写”这类产品清晰露出的可拍画面。
 7. 每套方案必须明显不同：开场 hook、产品视角、物品状态、道具环境、镜头组织至少两处不同。避免三套都只是“产品特写 + 功能展示 + 品牌收尾”。
 8. 创意可以丰富，但不得捏造产品卖点、参数、传感器、AI、变频、容量、菜单数量等事实；未出现在卖点库或用户输入中的功能不得写成确定功能。
+9. 结构分段必须像可拍摄分镜，而不是粗略目录：不允许只用“开场 / 产品切入 / 功能展示1 / 功能展示2 / 收尾”这种 5 段模板。需要按期望时长拆成足够多的短镜头，并把结构分段写成“生活场景任务 + 卖点证据”的具体名称。
 
 ##格式与语言硬约束
 1. 第一输出必须是标准 Markdown 表格，绝对不要包裹在 ```markdown 或 ``` 代码块中。
@@ -229,7 +230,18 @@ def _extract_secret_password(secret_value: str) -> str:
     try:
         payload = json.loads(text)
         if isinstance(payload, dict):
-            for key in ("password", "APP_ACCESS_PASSWORD", "app_access_password", "value"):
+            for key in (
+                "password",
+                "APP_ACCESS_PASSWORD",
+                "app_access_password",
+                "RAINFOREST_API_KEY",
+                "YOUTUBE_API_KEY",
+                "SOCIAL_OEMBED_ACCESS_TOKEN",
+                "api_key",
+                "access_token",
+                "token",
+                "value",
+            ):
                 if payload.get(key):
                     return str(payload[key]).strip()
     except Exception:
@@ -1531,6 +1543,73 @@ def _has_expected_table(content: str) -> bool:
     return TABLE_HEADER_LINE in text and TABLE_SEPARATOR_LINE in text and "总时长" in text
 
 
+def _duration_structure_profile(expected_duration) -> tuple[int, int, int]:
+    try:
+        expected = int(float(expected_duration))
+    except (TypeError, ValueError):
+        expected = 30
+    expected = max(6, min(90, expected))
+    if expected <= 12:
+        min_segments = 3
+    elif expected <= 20:
+        min_segments = 5
+    elif expected <= 30:
+        min_segments = 7
+    elif expected <= 45:
+        min_segments = 9
+    elif expected <= 60:
+        min_segments = 11
+    else:
+        min_segments = 13
+    max_segment_seconds = 8 if expected > 60 else 6
+    return expected, min_segments, max_segment_seconds
+
+
+def _duration_structure_guidance(expected_duration) -> str:
+    expected, min_segments, max_segment_seconds = _duration_structure_profile(expected_duration)
+    min_lifestyle_details = max(3, min_segments - 3)
+    return f"""分段密度硬要求：
+- 正文镜头行（不含表头、分隔行和“总时长”行）至少 {min_segments} 行，所有行时长相加必须精确等于 {expected} 秒，“总时长”行也必须写 {expected}秒。
+- 单行时长以 2-6 秒为主，最长不超过 {max_segment_seconds} 秒；不要把多个生活动作或多个卖点塞进一个长段。
+- “结构分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“生活场景任务 + 卖点证据”的具体名称，例如“晚餐后水槽堆满｜痛点开场”“半篮餐具入仓｜Half Load 证据”“开门取出干燥杯碗｜结果验证”。
+- 结构顺序至少覆盖：生活化痛点开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；30 秒以上额外加入等待切换、前后对比或二次使用镜头。
+- 每套至少出现 {min_lifestyle_details} 个生活化物品/场景细节（如晚餐盘、咖啡杯、便当盒、锅具、早餐台面、电影夜零食、运动衣物、食材保鲜盒等，按品类选择），人物只允许手部、手臂、背影、越肩视角或生活痕迹。"""
+
+
+def _duration_seconds(cell) -> int:
+    match = re.search(r"\d{1,3}", str(cell or ""))
+    return int(match.group(0)) if match else 0
+
+
+def _script_body_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "结构分段" not in df.columns:
+        return df.iloc[0:0]
+    mask = ~df.apply(lambda row: any("总时长" in str(value) or "total" in str(value).lower() for value in row), axis=1)
+    return df[mask]
+
+
+def _has_rich_duration_structure(content: str, expected_duration) -> bool:
+    table_lines, _ = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty or "时长" not in df.columns:
+        return False
+    expected, min_segments, max_segment_seconds = _duration_structure_profile(expected_duration)
+    body = _script_body_rows(df)
+    if len(body) < min_segments:
+        return False
+    durations = [_duration_seconds(value) for value in body["时长"].tolist()]
+    if any(value <= 0 for value in durations):
+        return False
+    if any(value > max_segment_seconds for value in durations):
+        return False
+    body_total = sum(durations)
+    total_rows = df.drop(body.index, errors="ignore")
+    total_seconds = 0
+    if not total_rows.empty and "时长" in total_rows.columns:
+        total_seconds = _duration_seconds(total_rows.iloc[-1].get("时长", ""))
+    return body_total == expected and (total_seconds == expected or total_seconds == 0)
+
+
 def _extract_first_md_table(text: str):
     if not text:
         return [], ""
@@ -1696,6 +1775,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
     context_snapshot = context_snapshot or {"competitor_assets": [], "hotspots": []}
     competitor_context = _competitor_context_prompt(context_snapshot.get("competitor_assets") or [])
     hotspot_context = _hotspot_context_prompt(context_snapshot.get("hotspots") or [])
+    duration_guidance = _duration_structure_guidance(req.expected_duration)
     return f"""
 请生成【方案{variant_no}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
 - 必须先输出一张符合系统要求的 Markdown 表格（10列，行内时长为秒，最后一行为总时长）。
@@ -1712,6 +1792,8 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列必须以中文为主。
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
+
+{duration_guidance}
 
 输入参数：
 - 发布渠道：{req.platform}
@@ -2338,6 +2420,7 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
     feature_lines = "\n".join(
         f"- {item['name']}: {item['tagline']}。{item['description']}" for item in features
     )
+    duration_guidance = _duration_structure_guidance(req.expected_duration)
     repair_prompt = f"""
 请把下面这段视频脚本内容改写成固定字段的 Markdown 表格。
 
@@ -2352,6 +2435,9 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 6. 只输出表格和表格后的“整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings”，不要输出解释。
 7. 旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是英文，其余列以中文为主。
 8. 不要编造产品卖点；如没有竞品链接，竞品链接和竞品盖帽留空。
+9. 少人露出：只允许手部、手臂、背影、越肩视角或生活痕迹，产品和被处理物品必须是主视觉。
+
+{duration_guidance}
 
 产品信息：
 - 产品品类：{req.category}
@@ -2444,6 +2530,11 @@ def _run_generation(job_id: str):
                     content = retry_content
             if not _has_expected_table(content):
                 _update_job(job_id, progress=int((i / total) * 80) + 15, current_step=f"修复方案 {i + 1} 为表格格式")
+                repaired = _repair_to_expected_table(content, req, features)
+                if _has_expected_table(repaired):
+                    content = repaired
+            if _has_expected_table(content) and not _has_rich_duration_structure(content, req.expected_duration):
+                _update_job(job_id, progress=int((i / total) * 80) + 18, current_step=f"细化方案 {i + 1} 的分段和时长")
                 repaired = _repair_to_expected_table(content, req, features)
                 if _has_expected_table(repaired):
                     content = repaired
@@ -2668,6 +2759,14 @@ def _clean_analysis_list(value, limit=8):
     return _clean_list([str(item).strip(" -•\t") for item in raw], limit=limit)
 
 
+def _clean_analysis_text(value, *, limit=600) -> str:
+    if isinstance(value, list):
+        return "；".join(_clean_analysis_list(value, limit=8))[:limit]
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)[:limit]
+    return str(value or "").strip()[:limit]
+
+
 def _analysis_score(value) -> int:
     match = re.search(r"\d+", str(value or ""))
     if not match:
@@ -2677,9 +2776,9 @@ def _analysis_score(value) -> int:
 
 def _normalize_deep_analysis_payload(payload: dict, asset: dict) -> dict:
     normalized = {
-        "summary": str(payload.get("summary") or "").strip(),
-        "hook_analysis": str(payload.get("hook_analysis") or "").strip(),
-        "creative_pattern": str(payload.get("creative_pattern") or "").strip(),
+        "summary": _clean_analysis_text(payload.get("summary"), limit=180),
+        "hook_analysis": _clean_analysis_text(payload.get("hook_analysis"), limit=500),
+        "creative_pattern": _clean_analysis_text(payload.get("creative_pattern"), limit=500),
         "scene_structure": _clean_analysis_list(payload.get("scene_structure"), limit=6),
         "selling_points": _clean_analysis_list(payload.get("selling_points"), limit=6),
         "visual_language": _clean_analysis_list(payload.get("visual_language"), limit=5),

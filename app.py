@@ -1031,6 +1031,93 @@ def _parse_md_table_to_df(table_lines):
         normalized.append(r)
     return pd.DataFrame(normalized, columns=header)
 
+def _duration_structure_profile(expected_duration):
+    try:
+        expected = int(float(expected_duration))
+    except (TypeError, ValueError):
+        expected = 30
+    expected = max(6, min(90, expected))
+    if expected <= 12:
+        min_segments = 3
+    elif expected <= 20:
+        min_segments = 5
+    elif expected <= 30:
+        min_segments = 7
+    elif expected <= 45:
+        min_segments = 9
+    elif expected <= 60:
+        min_segments = 11
+    else:
+        min_segments = 13
+    max_segment_seconds = 8 if expected > 60 else 6
+    return expected, min_segments, max_segment_seconds
+
+def _duration_structure_guidance(expected_duration):
+    expected, min_segments, max_segment_seconds = _duration_structure_profile(expected_duration)
+    min_lifestyle_details = max(3, min_segments - 3)
+    return f"""分段密度硬要求：
+- 正文镜头行（不含表头、分隔行和“总时长”行）至少 {min_segments} 行，所有行时长相加必须精确等于 {expected} 秒，“总时长”行也必须写 {expected}秒。
+- 单行时长以 2-6 秒为主，最长不超过 {max_segment_seconds} 秒；不要把多个生活动作或多个卖点塞进一个长段。
+- “结构分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“生活场景任务 + 卖点证据”的具体名称，例如“晚餐后水槽堆满｜痛点开场”“半篮餐具入仓｜Half Load 证据”“开门取出干燥杯碗｜结果验证”。
+- 结构顺序至少覆盖：生活化痛点开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；30 秒以上额外加入等待切换、前后对比或二次使用镜头。
+- 每套至少出现 {min_lifestyle_details} 个生活化物品/场景细节（如晚餐盘、咖啡杯、便当盒、锅具、早餐台面、电影夜零食、运动衣物、食材保鲜盒等，按品类选择），人物只允许手部、手臂、背影、越肩视角或生活痕迹。"""
+
+def _duration_seconds(cell):
+    match = re.search(r"\d{1,3}", str(cell or ""))
+    return int(match.group(0)) if match else 0
+
+def _script_body_rows(df):
+    if df.empty or "结构分段" not in df.columns:
+        return df.iloc[0:0]
+    mask = ~df.apply(lambda row: any("总时长" in str(value) or "total" in str(value).lower() for value in row), axis=1)
+    return df[mask]
+
+def _has_rich_duration_structure(content, expected_duration):
+    table_lines, _ = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty or "时长" not in df.columns:
+        return False
+    expected, min_segments, max_segment_seconds = _duration_structure_profile(expected_duration)
+    body = _script_body_rows(df)
+    if len(body) < min_segments:
+        return False
+    durations = [_duration_seconds(value) for value in body["时长"].tolist()]
+    if any(value <= 0 for value in durations):
+        return False
+    if any(value > max_segment_seconds for value in durations):
+        return False
+    body_total = sum(durations)
+    total_rows = df.drop(body.index, errors="ignore")
+    total_seconds = 0
+    if not total_rows.empty and "时长" in total_rows.columns:
+        total_seconds = _duration_seconds(total_rows.iloc[-1].get("时长", ""))
+    return body_total == expected and (total_seconds == expected or total_seconds == 0)
+
+def _build_duration_repair_prompt(content, request, table_header_line):
+    expected_duration = request.get("期望视频时长(秒)", 30)
+    return f"""
+请把下面脚本重写成更细、更生活化、少人露出的短视频分镜表格。
+
+硬性要求：
+1. 第一行必须逐字等于：{table_header_line}
+2. 第二行必须是 Markdown 表格分隔行。
+3. 后续每一行都必须有且只有 10 个字段，最后一行必须是“总时长”统计。
+4. 只输出表格和表格后的“整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings”，不要输出解释。
+5. 少人露出：只允许手部、手臂、背影、越肩视角或生活痕迹，产品和被处理物品必须是主视觉。
+6. 不要编造产品卖点；如没有竞品链接，竞品链接和竞品盖帽留空。
+
+{_duration_structure_guidance(expected_duration)}
+
+产品信息：
+- 产品品类：{request.get("产品品类", "")}
+- 产品型号：{request.get("产品型号", "")}
+- 核心卖点：{request.get("核心卖点", "")}
+- 自定义需求：{request.get("自定义需求") or "无"}
+
+原始内容：
+{content}
+""".strip()
+
 def _build_excel_bytes(variants, config_dict, product_category, competitor_items=None):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -1128,7 +1215,13 @@ def _extract_secret_password(secret_string):
             import json
             payload = json.loads(stripped)
             if isinstance(payload, dict):
-                return str(payload.get("password") or payload.get("APP_ACCESS_PASSWORD") or "")
+                return str(
+                    payload.get("password")
+                    or payload.get("APP_ACCESS_PASSWORD")
+                    or payload.get("app_access_password")
+                    or payload.get("value")
+                    or ""
+                )
         except Exception:
             pass
     return secret_string
@@ -2007,6 +2100,7 @@ SYSTEM_PROMPT = """##角色
 6. 表现手法必须具体到镜头动作和画面内容：不要写“展示产品功能”这种空话，要写“披萨放入腔体，手指按下触控面板，屏幕数字跳动，切到拉丝芝士和产品门体反光特写”这类产品清晰露出的可拍画面。
 7. 每套方案必须明显不同：开场 hook、产品视角、物品状态、道具环境、镜头组织至少两处不同。避免三套都只是“产品特写 + 功能展示 + 品牌收尾”。
 8. 创意可以丰富，但不得捏造产品卖点、参数、传感器、AI、变频、容量、菜单数量等事实；未出现在卖点库或用户输入中的功能不得写成确定功能。
+9. 结构分段必须像可拍摄分镜，而不是粗略目录：不允许只用“开场 / 产品切入 / 功能展示1 / 功能展示2 / 收尾”这种 5 段模板。需要按期望时长拆成足够多的短镜头，并把结构分段写成“生活场景任务 + 卖点证据”的具体名称。
 
 ##格式与语言硬约束
 1. 第一输出必须是标准 Markdown 表格，绝对不要包裹在 ```markdown 或 ``` 代码块中。
@@ -2101,6 +2195,7 @@ def _update_script_job(job_id, **fields):
 
 
 def _build_variant_prompt(i, request, competitor_links_inline, table_header_line):
+    duration_guidance = _duration_structure_guidance(request.get("期望视频时长(秒)", 30))
     return f"""
 请生成【方案{i}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
 - 必须先输出一张符合系统要求的 Markdown 表格（10列，行内时长为秒，最后一行为总时长）。
@@ -2119,6 +2214,8 @@ def _build_variant_prompt(i, request, competitor_links_inline, table_header_line
 - 英文列格式强约束：两列英文内容不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数；例如核心卖点没有“变频/Inverter”，就不得把“变频”写入案例、竞品盖帽或脚本内容。
 - 自定义需求优先级高于默认方向，但不得违背产品卖点事实：{request.get("自定义需求") or "无"}
+
+{duration_guidance}
 
 输入参数：
 - 目标平台：{request.get("目标平台", "")}
@@ -2184,6 +2281,14 @@ def run_script_generation_job(job_id):
                 content_retry = _strip_code_fences(content_retry)
                 if (table_header_line in content_retry) and ("总时长" in content_retry):
                     content = content_retry
+
+            if (table_header_line in content) and ("总时长" in content) and not _has_rich_duration_structure(content, request.get("期望视频时长(秒)", 30)):
+                _update_script_job(job_id, status="running", progress=int((i - 1) / variant_count * 100), current_step=f"正在细化方案{i}分段")
+                structure_prompt = _build_duration_repair_prompt(content, request, table_header_line)
+                structure_try = generate_script_bedrock(structure_prompt, temperature=0.25, top_p=0.8)
+                structure_try = _strip_code_fences(structure_try)
+                if (table_header_line in structure_try) and ("总时长" in structure_try):
+                    content = structure_try
 
             ok_lang, _ = _validate_language_for_table(content)
             if not ok_lang:
