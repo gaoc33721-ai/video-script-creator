@@ -737,6 +737,7 @@ function renderCompetitorAsset(asset, interactive = true) {
   const contentId = asset.metadata?.platform_content_id || asset.metadata?.youtube_video_id || "";
   const publishedAt = asset.metadata?.published_at ? `发布 ${formatDateTime(asset.metadata.published_at)}` : "";
   const embedLink = asset.embed_url ? `<a href="${escapeAttr(asset.embed_url)}" target="_blank" rel="noreferrer">嵌入预览</a>` : "";
+  const emptyPreviewLabel = asset.embed_url || asset.embed_html ? "可嵌入预览" : "无缩略图";
   const checked = state.selectedAssetIds.has(asset.id);
   const actions = interactive
     ? `
@@ -750,7 +751,7 @@ function renderCompetitorAsset(asset, interactive = true) {
     : "";
   return `
     <article class="competitor-asset" data-asset-id="${escapeAttr(asset.id || "")}">
-      ${firstImage ? `<img src="${escapeAttr(appPath(firstImage))}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : `<div class="asset-image-empty"><strong>${escapeHtml(sourceLabel)}</strong><span>无缩略图</span></div>`}
+      ${firstImage ? `<img src="${escapeAttr(appPath(firstImage))}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : `<div class="asset-image-empty"><strong>${escapeHtml(sourceLabel)}</strong><span>${escapeHtml(emptyPreviewLabel)}</span></div>`}
       <div>
         <div class="asset-meta">
           ${selector}
@@ -827,6 +828,8 @@ function openAssetDrawer(assetId) {
   const media = asset.media || [];
   const preview = asset.image_url || media.find((item) => item.thumbnail_url)?.thumbnail_url || "";
   const metadata = asset.metadata ? JSON.stringify(asset.metadata, null, 2) : "{}";
+  const embedUrl = asset.embed_url || "";
+  const evidenceStatus = asset.metadata?.evidence_status || "";
   $("assetDrawerBody").innerHTML = `
     <div class="drawer-header">
       <span>${escapeHtml(asset.platform || asset.source_type || "素材")}</span>
@@ -834,9 +837,11 @@ function openAssetDrawer(assetId) {
       <p>${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(asset.review_status || "")} · ${escapeHtml(asset.rights_status || "")}</p>
     </div>
     ${preview ? `<img class="drawer-preview" src="${escapeAttr(appPath(preview))}" alt="" referrerpolicy="no-referrer" />` : ""}
+    ${embedUrl ? `<iframe class="drawer-embed" src="${escapeAttr(embedUrl)}" title="素材嵌入预览" loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" allowfullscreen></iframe>` : ""}
     <dl class="drawer-meta">
       <dt>原始链接</dt><dd><a href="${escapeAttr(asset.source_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(asset.source_url || "-")}</a></dd>
-      <dt>嵌入预览</dt><dd>${asset.embed_url ? `<a href="${escapeAttr(asset.embed_url)}" target="_blank" rel="noreferrer">${escapeHtml(asset.embed_url)}</a>` : "-"}</dd>
+      <dt>嵌入预览</dt><dd>${embedUrl ? `<a href="${escapeAttr(embedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(embedUrl)}</a>` : "-"}</dd>
+      <dt>证据状态</dt><dd>${escapeHtml(evidenceStatus || "-")}</dd>
       <dt>AI 分析</dt><dd>${escapeHtml(asset.ai_analysis || "-")}</dd>
       <dt>标签</dt><dd>${escapeHtml((asset.ai_tags || []).join("、") || "-")}</dd>
       <dt>公开元数据</dt><dd><pre>${escapeHtml(metadata)}</pre></dd>

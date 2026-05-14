@@ -1,5 +1,6 @@
 import datetime as dt
 import hashlib
+import html
 import json
 import re
 import urllib.error
@@ -410,10 +411,10 @@ def build_social_asset(
     oembed = oembed or {}
     now = utc_now()
     platform_key = platform.lower()
-    title = str(oembed.get("title") or _default_social_title(platform, content_id))
     caption = str(oembed.get("description") or "")
     account_name = str(oembed.get("author_name") or "")
     media_type = infer_media_type(platform, canonical_url, oembed)
+    title = str(oembed.get("title") or _default_social_title(platform, content_id, media_type))
     thumbnail = str(oembed.get("thumbnail_url") or "")
     if not thumbnail and platform == "YouTube" and content_id:
         thumbnail = f"https://i.ytimg.com/vi/{content_id}/hqdefault.jpg"
@@ -421,7 +422,9 @@ def build_social_asset(
     source_type = f"{platform_key}_oembed" if oembed else f"{platform_key}_manual"
     if platform == "Instagram" and not oembed:
         source_type = "instagram_manual"
-    embed_url = f"https://www.youtube.com/embed/{content_id}" if platform == "YouTube" and content_id else ""
+    embed_url = social_embed_url(platform, canonical_url, content_id)
+    embed_html = oembed.get("html") or fallback_embed_html(platform, embed_url)
+    evidence_status = "metadata_enriched" if thumbnail else ("embed_preview_ready" if embed_url else "link_only_needs_metadata")
     metadata = {
         "platform_content_id": content_id,
         "account_name": account_name,
@@ -438,9 +441,12 @@ def build_social_asset(
         "has_video": media_type == "video",
         "has_raw_video": False,
         "rights_status": "link_only_no_raw_video",
+        "evidence_status": evidence_status,
+        "embed_url": embed_url,
     }
     asset_id = f"{platform_key}:{content_id or _stable_id(canonical_url)}"
-    return {
+    quality_score = 72 if thumbnail else (68 if embed_url else 58)
+    asset = {
         "id": asset_id,
         "source_type": source_type,
         "platform": platform,
@@ -454,7 +460,7 @@ def build_social_asset(
         "source_url": canonical_url,
         "canonical_url": canonical_url,
         "embed_url": embed_url,
-        "embed_html": oembed.get("html") or "",
+        "embed_html": embed_html,
         "image_url": thumbnail,
         "media": [
             {
@@ -477,7 +483,7 @@ def build_social_asset(
         ],
         "ai_tags": [platform, "社媒素材", "URL入库", "视频素材" if media_type == "video" else "社媒帖"],
         "ai_analysis": build_social_analysis(platform=platform, title=title, caption=caption, media_type=media_type),
-        "quality_score": 72 if thumbnail else 62,
+        "quality_score": quality_score,
         "rights_status": "link_only_no_raw_video",
         "review_status": "manual_url",
         "metadata": metadata,
@@ -486,6 +492,86 @@ def build_social_asset(
         "created_at": now,
         "updated_at": now,
     }
+    return ensure_social_asset_fallbacks(asset)
+
+
+def ensure_social_asset_fallbacks(asset: dict[str, Any]) -> dict[str, Any]:
+    item = dict(asset or {})
+    platform = str(item.get("platform") or detect_platform(str(item.get("source_url") or item.get("canonical_url") or ""))).strip()
+    source_url = str(item.get("source_url") or item.get("canonical_url") or "").strip()
+    if platform not in {"Instagram", "YouTube", "TikTok"} or not source_url:
+        return item
+
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    content_id = str(metadata.get("platform_content_id") or metadata.get("youtube_video_id") or "").strip()
+    if not content_id:
+        content_id = extract_content_id(platform, source_url)
+    if not content_id:
+        return item
+
+    canonical_url = canonical_social_url(platform, source_url, content_id)
+    media_type = infer_media_type(platform, canonical_url, {})
+    embed_url = str(item.get("embed_url") or social_embed_url(platform, canonical_url, content_id)).strip()
+    embed_html = str(item.get("embed_html") or fallback_embed_html(platform, embed_url)).strip()
+    image_url = str(item.get("image_url") or "").strip()
+
+    item["platform"] = platform
+    item["source_url"] = canonical_url
+    item["canonical_url"] = item.get("canonical_url") or canonical_url
+    if embed_url:
+        item["embed_url"] = embed_url
+    if embed_html:
+        item["embed_html"] = embed_html
+    if _is_default_social_title(platform, item.get("title"), content_id):
+        item["title"] = _default_social_title(platform, content_id, media_type)
+
+    metadata["platform_content_id"] = content_id
+    metadata["asset_type"] = metadata.get("asset_type") or media_type
+    metadata["embed_url"] = metadata.get("embed_url") or embed_url
+    metadata["rights_status"] = metadata.get("rights_status") or "link_only_no_raw_video"
+    metadata["has_raw_video"] = False
+    if not image_url and embed_url:
+        metadata["evidence_status"] = metadata.get("evidence_status") or "embed_preview_ready"
+        if int(item.get("quality_score") or 0) < 68:
+            item["quality_score"] = 68
+    else:
+        metadata["evidence_status"] = metadata.get("evidence_status") or ("metadata_enriched" if image_url else "link_only_needs_metadata")
+    item["metadata"] = metadata
+
+    tags = [str(tag) for tag in item.get("ai_tags") or [] if str(tag).strip()]
+    for tag in ("嵌入预览", "待补元数据" if not image_url else "元数据已补齐"):
+        if tag and tag not in tags:
+            tags.append(tag)
+    item["ai_tags"] = tags[:30]
+
+    media = []
+    for media_item in item.get("media") or []:
+        if not isinstance(media_item, dict):
+            continue
+        next_item = dict(media_item)
+        next_item["product_url"] = next_item.get("product_url") or canonical_url
+        next_item["media_url"] = next_item.get("media_url") or canonical_url
+        next_item["media_type"] = next_item.get("media_type") or media_type
+        next_item["title"] = next_item.get("title") or item.get("title") or _default_social_title(platform, content_id, media_type)
+        next_item["rights_status"] = next_item.get("rights_status") or "link_only_no_raw_video"
+        media.append(next_item)
+    if not media:
+        media.append(
+            {
+                "id": f"{platform.lower()}:{content_id}:{media_type}",
+                "brand": item.get("brand") or "",
+                "category": item.get("category") or "",
+                "product_url": canonical_url,
+                "media_type": media_type,
+                "media_url": canonical_url,
+                "thumbnail_url": image_url,
+                "title": item.get("title") or _default_social_title(platform, content_id, media_type),
+                "rights_status": "link_only_no_raw_video",
+            }
+        )
+    item["media"] = media
+    return item
 
 
 def fetch_oembed_data(platform: str, url: str, *, access_token: str = "", timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
@@ -622,6 +708,28 @@ def canonical_social_url(platform: str, source_url: str, content_id: str) -> str
     return source_url
 
 
+def social_embed_url(platform: str, canonical_url: str, content_id: str) -> str:
+    if platform == "YouTube" and content_id:
+        return f"https://www.youtube.com/embed/{content_id}"
+    if platform == "Instagram" and content_id:
+        path = urllib.parse.urlparse(canonical_url).path
+        media_type = "reel" if "/reel/" in path else ("tv" if "/tv/" in path else "p")
+        return f"https://www.instagram.com/{media_type}/{content_id}/embed/captioned/"
+    if platform == "TikTok" and content_id:
+        return f"https://www.tiktok.com/embed/v2/{content_id}"
+    return ""
+
+
+def fallback_embed_html(platform: str, embed_url: str) -> str:
+    if not embed_url:
+        return ""
+    return (
+        f'<iframe src="{html.escape(embed_url, quote=True)}" '
+        f'title="{html.escape(platform, quote=True)} embed preview" '
+        'width="400" height="520" frameborder="0" scrolling="no" allowfullscreen></iframe>'
+    )
+
+
 def infer_media_type(platform: str, url: str, oembed: dict[str, Any]) -> str:
     if str(oembed.get("type") or "").lower() == "video":
         return "video"
@@ -722,8 +830,27 @@ def _match_brand(title: str, caption: str, account_name: str, brands: list[str])
     return ""
 
 
-def _default_social_title(platform: str, content_id: str) -> str:
+def _default_social_title(platform: str, content_id: str, media_type: str = "") -> str:
+    if platform == "Instagram":
+        label = "Reel" if media_type == "video" else "Post"
+        return f"Instagram {label} {content_id}" if content_id else f"Instagram {label}"
+    if platform == "TikTok":
+        return f"TikTok video {content_id}" if content_id else "TikTok video"
     return f"{platform} social asset {content_id}" if content_id else f"{platform} social asset"
+
+
+def _is_default_social_title(platform: str, title: Any, content_id: str) -> bool:
+    value = str(title or "").strip()
+    if not value:
+        return True
+    defaults = {
+        f"{platform} social asset {content_id}",
+        f"{platform} social asset",
+        f"Instagram Post {content_id}",
+        f"Instagram Reel {content_id}",
+        f"TikTok video {content_id}",
+    }
+    return value in defaults
 
 
 def _clean_url(url: str) -> str:

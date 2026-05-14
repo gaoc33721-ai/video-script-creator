@@ -36,6 +36,7 @@ from social_competitor import (
     SocialApiError,
     classify_social_url,
     discover_youtube_videos,
+    ensure_social_asset_fallbacks,
     extract_youtube_video_id,
     fetch_youtube_videos,
     normalize_social_url,
@@ -687,6 +688,8 @@ def _ensure_asset_admin_defaults(asset: dict) -> dict:
     item["created_at"] = item.get("created_at") or now
     item["updated_at"] = item.get("updated_at") or now
     item["collected_at"] = item.get("collected_at") or now
+    item["ai_tags"] = _clean_list(item.get("ai_tags") or [], limit=30)
+    item = ensure_social_asset_fallbacks(item)
     item["ai_tags"] = _clean_list(item.get("ai_tags") or [], limit=30)
 
     source_url = str(item.get("source_url") or item.get("canonical_url") or "").lower()

@@ -1330,6 +1330,15 @@ button,
   background: #fbfbfd;
 }
 
+.drawer-embed {
+  width: 100%;
+  min-height: 520px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fbfbfd;
+}
+
 .drawer-meta {
   display: grid;
   gap: 10px;
