@@ -1552,10 +1552,15 @@ function parseFirstMarkdownTable(markdown) {
 }
 
 function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
+  const categoryHint = storyboardCategoryHint(category, feature, method, subtitle);
   return [
     "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
     "Follow the storyboard exactly; do not invent another product category, room, or action.",
     category ? `Product category from brief: ${category}.` : "",
+    categoryHint ? `Product category in English: ${categoryHint.subject}.` : "",
+    categoryHint ? `Required setting: ${categoryHint.setting}.` : "",
+    categoryHint ? `Must include: ${categoryHint.must}.` : "",
+    categoryHint ? `Avoid: ${categoryHint.negative}.` : "",
     model ? `Product model from brief: Hisense ${model}.` : "",
     `Shot: ${segment}.`,
     feature ? `Product benefit: ${feature}.` : "",
@@ -1567,6 +1572,51 @@ function buildStoryboardImagePrompt({ category, model, segment, feature, method,
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function storyboardCategoryHint(category, feature, method, subtitle) {
+  const raw = [category, feature, method, subtitle].filter(Boolean).join(" ").toLowerCase();
+  if (/(空气炸锅|air\s*fry|air\s*fryer|fryer|frying|little oil|frozen food|6\.3\s*l?)/i.test(raw)) {
+    return {
+      subject: "a countertop air fryer with visible basket or drawer and control buttons",
+      setting: "modern kitchen countertop or breakfast prep counter, never a living room",
+      must: "the air fryer as the main foreground subject, food placed into or removed from the basket, and button/control interaction when mentioned",
+      negative: "television, TV screen, living room, entertainment console, sofa, media wall, unrelated appliance",
+    };
+  }
+  if (/(微波|microwave|reheat|defrost|popcorn)/i.test(raw)) {
+    return {
+      subject: "a countertop microwave oven with visible door, cavity, plate, and control panel",
+      setting: "modern kitchen countertop, never a living room",
+      must: "the microwave as the main subject, with food container, steam, plate, door, or control panel visible according to the shot",
+      negative: "television, TV screen, living room, sofa, unrelated appliance",
+    };
+  }
+  if (/(烤箱|oven|bake|roast|pizza)/i.test(raw)) {
+    return {
+      subject: "a kitchen oven with visible door, tray, cavity, and control area",
+      setting: "modern kitchen or kitchen countertop, never a living room",
+      must: "the oven as the main subject, with tray, food, oven door, interior light, or baked result visible according to the shot",
+      negative: "television, TV screen, living room, sofa, unrelated appliance",
+    };
+  }
+  if (/(冰箱|refrigerator|fridge|freezer|freshness|fresh food)/i.test(raw)) {
+    return {
+      subject: "a refrigerator with visible doors, shelves, drawers, and stored food",
+      setting: "modern kitchen, never a living room TV wall",
+      must: "the refrigerator as the main subject, with shelves, drawers, food containers, produce, or storage result cues visible",
+      negative: "television, TV screen, entertainment console, sofa, unrelated appliance",
+    };
+  }
+  if (/(洗碗|dishwasher|dishes|tableware|餐具)/i.test(raw)) {
+    return {
+      subject: "a dishwasher with visible racks, dishes, door, and control panel",
+      setting: "modern kitchen beside cabinets or a sink, never a living room",
+      must: "the dishwasher as the main subject, with open racks, dishes, cutlery, clean results, or control panel visible",
+      negative: "television, TV screen, living room, sofa, laundry appliances as main subject, unrelated appliance",
+    };
+  }
+  return null;
 }
 
 function extractVideoPrompt(content) {

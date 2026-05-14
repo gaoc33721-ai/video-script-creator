@@ -1660,6 +1660,9 @@ def _is_laundry_storyboard(text):
         )
     )
 
+def _has_any_storyboard_token(raw: str, tokens: tuple[str, ...]) -> bool:
+    return any(token in raw for token in tokens)
+
 
 def _storyboard_category_context(category, model, detection_text=""):
     raw = f"{category or ''} {model or ''} {detection_text or ''}".lower()
@@ -1675,6 +1678,87 @@ def _storyboard_category_context(category, model, detection_text=""):
                 "kitchen, stove, stovetop, oven, microwave, refrigerator, kettle, cookware, food preparation, "
                 "dining room, cooking appliance, kitchen island"
             ),
+        }
+
+    if _has_any_storyboard_token(
+        raw,
+        (
+  "空气炸锅",
+  "air fryer",
+  "air fry",
+  "fryer",
+  "frying",
+  "little oil",
+  "frozen food",
+  "6.3l",
+  "6.3 l",
+        ),
+    ):
+        return {
+  "subject": f"Hisense {model or ''} countertop air fryer with a visible basket or drawer and control buttons".strip(),
+  "setting": "a modern kitchen countertop or breakfast prep counter, never a living room",
+  "must": (
+      "The frame must clearly show a countertop air fryer as the main foreground subject. "
+      "Include food being placed into or removed from the fryer basket, the drawer/basket edge, "
+      "and the control button or panel when the shot mentions pressing a button."
+  ),
+  "negative": (
+      "television, tv screen, living room, entertainment console, sofa, media wall, bedroom, "
+      "wall-mounted display, refrigerator as main subject, microwave as main subject, oven as main subject, "
+      "unrelated appliance, product absent, empty room"
+  ),
+        }
+    if _has_any_storyboard_token(raw, ("微波", "microwave", "reheat", "defrost", "popcorn")):
+        return {
+  "subject": f"Hisense {model or ''} countertop microwave oven with visible door, cavity, and control panel".strip(),
+  "setting": "a modern kitchen countertop, never a living room",
+  "must": (
+      "The frame must clearly show a countertop microwave oven as the main subject, with the door, "
+      "control panel, plate, food container, steam, or reheated food visible according to the shot."
+  ),
+  "negative": (
+      "television, tv screen, living room, sofa, entertainment console, air fryer as main subject, "
+      "refrigerator as main subject, unrelated appliance, product absent"
+  ),
+        }
+    if _has_any_storyboard_token(raw, ("烤箱", "oven", "bake", "roast", "pizza")):
+        return {
+  "subject": f"Hisense {model or ''} kitchen oven with visible door, cavity, tray, and control area".strip(),
+  "setting": "a modern kitchen or kitchen countertop, never a living room",
+  "must": (
+      "The frame must clearly show the oven as the main subject, with food on a tray, the oven door, "
+      "interior light, control area, or baked result visible according to the shot."
+  ),
+  "negative": (
+      "television, tv screen, living room, sofa, entertainment console, refrigerator as main subject, "
+      "unrelated appliance, product absent"
+  ),
+        }
+    if _has_any_storyboard_token(raw, ("冰箱", "refrigerator", "fridge", "freezer", "freshness", "fresh food")):
+        return {
+  "subject": f"Hisense {model or ''} refrigerator with visible doors, shelves, drawers, and stored food".strip(),
+  "setting": "a modern kitchen, never a living room TV wall",
+  "must": (
+      "The frame must clearly show a refrigerator as the main subject, with open doors, shelves, "
+      "drawers, food containers, produce, or storage before-and-after cues according to the shot."
+  ),
+  "negative": (
+      "television, tv screen, entertainment console, sofa, air fryer as main subject, microwave as main subject, "
+      "unrelated appliance, product absent"
+  ),
+        }
+    if _has_any_storyboard_token(raw, ("洗碗", "dishwasher", "dishes", "tableware", "餐具")):
+        return {
+  "subject": f"Hisense {model or ''} dishwasher with visible racks, door, dishes, and control panel".strip(),
+  "setting": "a modern kitchen beside cabinets or a sink, never a living room",
+  "must": (
+      "The frame must clearly show a dishwasher as the main subject, with open racks, plates, bowls, "
+      "cutlery, clean results, or a control panel visible according to the shot."
+  ),
+  "negative": (
+      "television, tv screen, living room, sofa, entertainment console, laundry appliances as main subject, "
+      "unrelated appliance, product absent"
+  ),
         }
     return {
         "subject": f"Hisense {category or 'home appliance'} {model or ''}".strip(),
@@ -1753,14 +1837,17 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
     action_constraints = _storyboard_action_constraints(raw_prompt)
     lines = [
         "Create one premium 16:9 photorealistic e-commerce storyboard still.",
+        "Hard requirement: depict the exact storyboard row below; do not substitute another product, room, or action.",
         f"Required product and place: {context['subject']} in {context['setting']}.",
         f"Shot number: {int(shot_index) + 1}.",
-        f"Mandatory primary scene: {action_constraints or context['must']}",
-        f"Product evidence that must remain visible: {context['must']}" if action_constraints else "",
+        f"Mandatory primary scene: {context['must']}",
+        f"Camera and action constraints: {action_constraints}" if action_constraints else "",
+        "The selected product must occupy the foreground or visual center and remain recognizable.",
         f"Storyboard details to preserve: {raw_prompt}",
+        f"Do not show: {context['negative']}.",
         (
-            "Visual style: clean commercial lighting, realistic product proportions, believable human pose, natural colors, "
-            "no UI mockups, no text overlay, no watermarks, no competitor brands, no wrong product category."
+            "Visual style: clean commercial lighting, realistic product proportions, product-focused composition, "
+            "natural colors, no UI mockups, no text overlay, no watermarks, no competitor brands, no wrong product category."
         ),
     ]
     return "\n".join(line for line in lines if line).strip()[:3000]
