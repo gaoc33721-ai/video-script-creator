@@ -48,6 +48,9 @@ def normalize_social_url(
     source_url = _clean_url(url)
     if not source_url:
         raise SocialApiError("URL is required.")
+    classification = classify_social_url(source_url)
+    if classification.get("kind") != "asset":
+        raise SocialApiError(classification.get("message") or "Please provide a concrete social media post/video URL.")
     platform = detect_platform(source_url)
     content_id = extract_content_id(platform, source_url)
     canonical_url = canonical_social_url(platform, source_url, content_id)
@@ -69,6 +72,89 @@ def normalize_social_url(
         oembed=oembed,
         oembed_error=oembed_error,
     )
+
+
+def classify_social_url(url: str) -> dict[str, Any]:
+    source_url = _clean_url(url)
+    platform = detect_platform(source_url)
+    parsed = urllib.parse.urlparse(source_url)
+    parts = [part for part in parsed.path.split("/") if part]
+    lowered = [part.lower() for part in parts]
+
+    result = {
+        "url": source_url,
+        "platform": platform,
+        "kind": "asset",
+        "content_id": "",
+        "handle": "",
+        "message": "",
+    }
+
+    if platform == "YouTube":
+        video_id = extract_youtube_video_id(source_url)
+        if video_id:
+            result["content_id"] = video_id
+            return result
+        result.update(
+            kind="source",
+            handle=parts[-1] if parts else "",
+            message="YouTube channel/profile URLs are saved as collection sources; paste a specific video, Short, or Live URL to create an asset.",
+        )
+        return result
+
+    if platform == "Instagram":
+        for marker in ("reel", "p", "tv"):
+            if marker in lowered:
+                index = lowered.index(marker)
+                if len(parts) > index + 1:
+                    result["content_id"] = parts[index + 1]
+                    return result
+        result.update(
+            kind="source",
+            handle=parts[0] if parts else "",
+            message="Instagram account/profile URLs are saved as collection sources; paste a specific /reel/, /p/, or /tv/ URL to create an asset.",
+        )
+        return result
+
+    if platform == "TikTok":
+        content_id = extract_content_id(platform, source_url)
+        if re.fullmatch(r"\d{8,}", content_id or ""):
+            result["content_id"] = content_id
+            return result
+        handle = next((part for part in parts if part.startswith("@")), parts[0] if parts else "")
+        result.update(
+            kind="source",
+            handle=handle,
+            message="TikTok profile URLs are saved as collection sources; paste a specific /video/ URL to create an asset.",
+        )
+        return result
+
+    if platform == "Pinterest":
+        content_id = extract_content_id(platform, source_url)
+        if re.fullmatch(r"\d{6,}", content_id or ""):
+            result["content_id"] = content_id
+            return result
+        result.update(
+            kind="source",
+            handle=parts[0] if parts else "",
+            message="Pinterest profile/board URLs are saved as collection sources; paste a specific /pin/ URL to create an asset.",
+        )
+        return result
+
+    if platform == "Facebook":
+        content_id = extract_content_id(platform, source_url)
+        if re.fullmatch(r"\d{6,}", content_id or ""):
+            result["content_id"] = content_id
+            return result
+        result.update(
+            kind="source",
+            handle=parts[0] if parts else "",
+            message="Facebook page URLs are saved as collection sources; paste a specific reel, video, or watch URL to create an asset.",
+        )
+        return result
+
+    result["content_id"] = extract_content_id(platform, source_url)
+    return result
 
 
 def discover_youtube_videos(

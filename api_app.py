@@ -34,6 +34,7 @@ from rainforest_competitor import (
 )
 from social_competitor import (
     SocialApiError,
+    classify_social_url,
     discover_youtube_videos,
     extract_youtube_video_id,
     fetch_youtube_videos,
@@ -64,6 +65,7 @@ HOTSPOTS_KEY = "hotspots.json"
 HOTSPOT_SOURCES_KEY = "hotspot_sources.json"
 COMPETITOR_CONFIGS_KEY = "competitor_configs.json"
 COMPETITOR_COLLECTION_RUNS_KEY = "competitor_collection_runs.json"
+SOCIAL_COLLECTION_SOURCES_KEY = "social_collection_sources.json"
 TABLE_COLUMNS = [
     "结构分段",
     "功能点",
@@ -713,6 +715,37 @@ def _save_competitor_assets(assets):
     return _write_json(COMPETITOR_ASSETS_KEY, sorted_assets[:5000])
 
 
+def _is_social_profile_asset(asset: dict) -> bool:
+    item = asset or {}
+    platform = str(item.get("platform") or "").strip()
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    content_id = str(metadata.get("platform_content_id") or "").strip()
+    source_type = str(item.get("source_type") or "").strip()
+    title = str(item.get("title") or "").strip().lower()
+    image_url = str(item.get("image_url") or "").strip()
+
+    if (
+        platform == "Instagram"
+        and source_type == "instagram_manual"
+        and re.fullmatch(r"[0-9a-f]{16}", content_id or "")
+        and not image_url
+        and ("instagram social asset" in title or metadata.get("collected_method") == "manual_url")
+    ):
+        return True
+
+    source_url = str(item.get("source_url") or item.get("canonical_url") or "").strip()
+    if platform not in {"Instagram", "TikTok", "Pinterest", "Facebook", "YouTube"} or not source_url:
+        return False
+    try:
+        return classify_social_url(source_url).get("kind") != "asset"
+    except Exception:
+        return False
+
+
+def _visible_competitor_assets(assets: list[dict]) -> list[dict]:
+    return [item for item in assets if not _is_social_profile_asset(item)]
+
+
 def _upsert_competitor_assets(new_assets):
     now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
     with competitor_lock:
@@ -745,6 +778,56 @@ def _load_competitor_research_jobs():
 
 def _save_competitor_research_jobs(jobs):
     return _write_json(COMPETITOR_RESEARCH_JOBS_KEY, jobs[:200])
+
+
+def _load_social_collection_sources():
+    data = _read_json(SOCIAL_COLLECTION_SOURCES_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_social_collection_sources(sources):
+    now = _utc_now()
+    cleaned = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        item = dict(source)
+        item["id"] = str(item.get("id") or _stable_id("social-source", item.get("platform", ""), item.get("source_url", "")))
+        item["source_url"] = str(item.get("source_url") or "").strip()
+        item["platform"] = str(item.get("platform") or "Social").strip()
+        item["handle"] = str(item.get("handle") or "").strip()
+        item["category"] = str(item.get("category") or "").strip()
+        item["target_market"] = str(item.get("target_market") or "").strip()
+        item["brands"] = _clean_list(item.get("brands") or [], limit=80)
+        item["status"] = str(item.get("status") or "source_only").strip()
+        item["message"] = str(item.get("message") or "").strip()
+        item["created_at"] = item.get("created_at") or now
+        item["updated_at"] = item.get("updated_at") or now
+        cleaned.append(item)
+    cleaned.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return _write_json(SOCIAL_COLLECTION_SOURCES_KEY, cleaned[:1000])
+
+
+def _upsert_social_collection_sources(sources):
+    now = _utc_now()
+    existing = _load_social_collection_sources()
+    by_id = {str(item.get("id") or ""): dict(item) for item in existing if item.get("id")}
+    inserted = 0
+    updated = 0
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_id = str(source.get("id") or _stable_id("social-source", source.get("platform", ""), source.get("source_url", "")))
+        previous = by_id.get(source_id, {})
+        merged = {**previous, **source, "id": source_id, "updated_at": now}
+        if not previous:
+            merged["created_at"] = source.get("created_at") or now
+            inserted += 1
+        else:
+            updated += 1
+        by_id[source_id] = merged
+    _save_social_collection_sources(list(by_id.values()))
+    return {"inserted": inserted, "updated": updated, "total": inserted + updated}
 
 
 def _load_hotspots():
@@ -941,6 +1024,8 @@ def _search_competitor_assets(
     min_quality_value = max(0, int(min_quality or 0))
     matched = []
     for asset in _load_competitor_assets():
+        if _is_social_profile_asset(asset) and review_lower != "rejected":
+            continue
         asset = _ensure_asset_admin_defaults(asset)
         search_text = _competitor_asset_search_text(asset)
         if q_lower and q_lower not in search_text:
@@ -2525,7 +2610,7 @@ def summary():
 @app.get("/api/admin/overview", dependencies=[Depends(_verify_access)])
 def admin_overview():
     today = dt.date.today()
-    assets = [_ensure_asset_admin_defaults(item) for item in _load_competitor_assets()]
+    assets = _visible_competitor_assets([_ensure_asset_admin_defaults(item) for item in _load_competitor_assets()])
     hotspots, active_hotspot_total = _search_hotspots(active_only=True, limit=6)
     latest_assets = sorted(assets, key=lambda item: str(item.get("updated_at") or item.get("collected_at") or ""), reverse=True)[:6]
     recent_runs = _load_collection_runs()[:8]
@@ -2747,9 +2832,28 @@ def social_import_url(req: SocialUrlImportRequest):
 
     token = _current_social_oembed_token()
     normalized_assets = []
+    collection_sources = []
     errors = []
     for url in urls[:50]:
         try:
+            classification = classify_social_url(url)
+            if classification.get("kind") != "asset":
+                collection_sources.append(
+                    {
+                        "id": _stable_id("social-source", classification.get("platform", ""), classification.get("url", url)),
+                        "platform": classification.get("platform") or "Social",
+                        "handle": classification.get("handle") or "",
+                        "source_url": classification.get("url") or url,
+                        "category": req.category,
+                        "target_market": req.target_market,
+                        "brands": req.brands,
+                        "status": "source_only",
+                        "message": classification.get("message") or "This URL is a source/profile page, not a concrete media asset.",
+                        "created_at": _utc_now(),
+                        "updated_at": _utc_now(),
+                    }
+                )
+                continue
             normalized_assets.append(
                 normalize_social_url(
                     url,
@@ -2766,14 +2870,18 @@ def social_import_url(req: SocialUrlImportRequest):
             errors.append({"url": url, "error": str(exc)})
 
     upsert = _upsert_competitor_assets(normalized_assets)
+    source_upsert = _upsert_social_collection_sources(collection_sources) if collection_sources else {"inserted": 0, "updated": 0, "total": 0}
     return {
         "ok": True,
         "requested_url_count": len(urls),
         "imported_count": len(normalized_assets),
+        "source_count": len(collection_sources),
         "upsert": upsert,
+        "source_upsert": source_upsert,
         "errors": errors[:20],
         "assets": [_public_competitor_asset(item) for item in normalized_assets],
-        "note": "社媒 URL 入库仅保存链接、缩略图 URL、嵌入信息和结构化分析；不会下载或保存竞品视频原片。",
+        "sources": collection_sources,
+        "note": "具体 Reel/Post/视频 URL 才会入库为竞品素材；账号主页、频道页只保存为采集来源线索，不会伪造成素材。社媒 URL 入库仅保存链接、缩略图 URL、嵌入信息和结构化分析；不会下载或保存竞品视频原片。",
     }
 
 

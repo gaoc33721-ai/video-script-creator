@@ -547,9 +547,19 @@ async function importSocialUrls() {
         fetch_oembed: true,
       }),
     });
-    renderCompetitorAssets(data.assets || []);
+    const importedAssets = data.assets || [];
+    if (importedAssets.length) {
+      renderCompetitorAssets(importedAssets);
+    } else {
+      await loadCompetitorAssets();
+    }
+    const imported = data.upsert?.total || 0;
+    const sourceCount = data.source_upsert?.total || data.source_count || 0;
     const errors = data.errors?.length ? `，失败 ${data.errors.length} 条` : "";
-    setMessage("competitorMessage", `已导入/更新 ${data.upsert?.total || 0} 条社媒素材${errors}。`, "ok");
+    const sourceNote = sourceCount ? `，保存 ${sourceCount} 个账号/频道采集来源` : "";
+    const materialNote = imported ? `已导入/更新 ${imported} 条具体素材` : "未导入具体素材";
+    const nextHint = sourceCount && !imported ? "；请粘贴具体 Reel/Post/视频链接才会进入素材库" : "";
+    setMessage("competitorMessage", `${materialNote}${sourceNote}${errors}${nextHint}。`, imported || sourceCount ? "ok" : "error");
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
   }
