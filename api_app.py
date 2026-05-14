@@ -150,6 +150,7 @@ RAINFOREST_SEARCH_TOP_N = int(os.getenv("RAINFOREST_SEARCH_TOP_N", "8"))
 RAINFOREST_DISCOVERY_REQUEST_LIMIT = int(os.getenv("RAINFOREST_DISCOVERY_REQUEST_LIMIT", "6"))
 RAINFOREST_MAX_PRODUCTS_PER_REFRESH = int(os.getenv("RAINFOREST_MAX_PRODUCTS_PER_REFRESH", "30"))
 RAINFOREST_REQUEST_TIMEOUT = int(os.getenv("RAINFOREST_REQUEST_TIMEOUT", "30"))
+ENABLE_SEED_COMPETITOR_ASSETS = os.getenv("ENABLE_SEED_COMPETITOR_ASSETS", "").strip().lower() in {"1", "true", "yes", "on"}
 _RAINFOREST_API_KEY = os.getenv("RAINFOREST_API_KEY", "")
 _RAINFOREST_API_KEY_SECRET_ID = (
     os.getenv("RAINFOREST_API_KEY_SECRET_ID")
@@ -673,7 +674,47 @@ def _clean_list(values, limit=50):
     return result
 
 
+def _amazon_product_from_url(url: str) -> dict:
+    text = str(url or "").strip()
+    if not text:
+        return {}
+    parsed = urllib.parse.urlparse(text)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host.startswith("m."):
+        host = host[2:]
+    if host.startswith("smile."):
+        host = host[6:]
+    if not (host == "amazon.com" or host.startswith("amazon.") or ".amazon." in host):
+        return {}
+
+    asin = ""
+    decoded_path = urllib.parse.unquote(parsed.path or "")
+    patterns = [
+        r"/(?:[^/]+/)?dp/([A-Za-z0-9]{10})(?:[/?]|$)",
+        r"/gp/product/([A-Za-z0-9]{10})(?:[/?]|$)",
+        r"/product/([A-Za-z0-9]{10})(?:[/?]|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, decoded_path)
+        if match:
+            asin = clean_asin(match.group(1))
+            break
+    if not asin:
+        query = urllib.parse.parse_qs(parsed.query)
+        for key in ("asin", "ASIN"):
+            if query.get(key):
+                asin = clean_asin(query[key][0])
+                break
+    if not asin:
+        return {}
+    return {"asin": asin, "amazon_domain": host, "url": text}
+
+
 def _load_seed_competitor_assets():
+    if not ENABLE_SEED_COMPETITOR_ASSETS:
+        return []
     path = os.path.join(os.path.dirname(__file__), SEED_COMPETITOR_ASSETS_KEY)
     if not os.path.exists(path):
         return []
@@ -3295,15 +3336,44 @@ def social_import_url(req: SocialUrlImportRequest):
         if clean and clean not in urls:
             urls.append(clean)
     if not urls:
-        raise HTTPException(status_code=400, detail="请先输入至少一个社媒素材 URL。")
+        raise HTTPException(status_code=400, detail="请先输入至少一个 Amazon 商品或社媒素材 URL。")
 
     token = _current_social_oembed_token()
+    rainforest_api_key = _current_rainforest_api_key()
     normalized_assets = []
     collection_sources = []
     errors = []
     for url in urls[:50]:
         try:
+            amazon_product = _amazon_product_from_url(url)
+            if amazon_product:
+                if not rainforest_api_key:
+                    errors.append({"url": url, "error": "RAINFOREST_API_KEY 尚未配置，无法导入 Amazon 商品 URL。"})
+                    continue
+                amazon_domain = amazon_product.get("amazon_domain") or amazon_domain_for_market(req.target_market, "", RAINFOREST_DEFAULT_AMAZON_DOMAIN)
+                product_payload = rainforest_fetch_product(
+                    rainforest_api_key,
+                    amazon_product.get("asin") or "",
+                    amazon_domain=amazon_domain,
+                    timeout=RAINFOREST_REQUEST_TIMEOUT,
+                )
+                normalized_assets.append(
+                    normalize_product_response(
+                        product_payload,
+                        asin=amazon_product.get("asin") or "",
+                        amazon_domain=amazon_domain,
+                        category=req.category,
+                        source_query="manual_amazon_url",
+                        search_position=None,
+                        preferred_brands=req.brands,
+                    )
+                )
+                continue
+
             classification = classify_social_url(url)
+            if classification.get("platform") == "Social":
+                errors.append({"url": url, "error": "暂不支持该 URL；当前 URL 导入支持 Amazon 商品页、YouTube 视频、Instagram Reel/Post、TikTok 视频、Pinterest Pin 和 Facebook 视频。"})
+                continue
             if classification.get("kind") != "asset":
                 collection_sources.append(
                     {
@@ -3333,6 +3403,8 @@ def social_import_url(req: SocialUrlImportRequest):
             )
         except SocialApiError as exc:
             errors.append({"url": url, "error": str(exc)})
+        except RainforestApiError as exc:
+            errors.append({"url": url, "error": str(exc)})
         except Exception as exc:
             errors.append({"url": url, "error": str(exc)})
 
@@ -3348,7 +3420,7 @@ def social_import_url(req: SocialUrlImportRequest):
         "errors": errors[:20],
         "assets": [_public_competitor_asset(item) for item in normalized_assets],
         "sources": collection_sources,
-        "note": "具体 Reel/Post/视频 URL 才会入库为竞品素材；账号主页、频道页只保存为采集来源线索，不会伪造成素材。社媒 URL 入库仅保存链接、缩略图 URL、嵌入信息和结构化分析；不会下载或保存竞品视频原片。",
+        "note": "Amazon 商品 URL 会通过 Rainforest 拉取商品页图片、站内视频和 A+ 证据入库；具体 Reel/Post/视频 URL 才会入库为社媒竞品素材；账号主页、频道页只保存为采集来源线索，不会伪造成素材。系统仅保存链接、缩略图、公开元数据和结构化分析；不会下载或保存竞品视频原片。",
     }
 
 
