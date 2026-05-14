@@ -86,7 +86,6 @@ jobs:
 
           python - <<'PY'
           from pathlib import Path
-          import re
 
           def replace_section(text, start, end, replacement):
               i = text.index(start)
@@ -156,11 +155,6 @@ jobs:
           index_start = 'def _render_static_html(' if 'def _render_static_html(' in api else '@app.get("/", response_class=HTMLResponse)\ndef index():'
           api = replace_section(api, index_start, '\n\n@app.get("/healthz")', static_index_replacement)
           api_path.write_text(api, encoding="utf-8")
-
-          deploy_path = Path(".github/workflows/deploy-ecs.yml")
-          deploy = deploy_path.read_text(encoding="utf-8")
-          deploy = re.sub(r"(?m)^      APP_BASE_PATH: .*$", "      APP_BASE_PATH: ''", deploy, count=1)
-          deploy_path.write_text(deploy, encoding="utf-8")
 
           app_path = Path("web_frontend/app.js")
           app = app_path.read_text(encoding="utf-8")
@@ -247,7 +241,6 @@ jobs:
           root_js = Path("web_frontend/app.js").read_text(encoding="utf-8")
           admin_js = Path("web_frontend/admin/app.js").read_text(encoding="utf-8")
           api = Path("api_app.py").read_text(encoding="utf-8")
-          deploy = Path(".github/workflows/deploy-ecs.yml").read_text(encoding="utf-8")
           assert "generateForm" in root_html
           assert "admin-shell" not in root_html
           assert "admin-shell" in admin_html
@@ -256,11 +249,9 @@ jobs:
           assert "admin-nav" in admin_js
           assert "storyboardCategoryHint" in root_js
           assert "ADMIN_BASE_PATH" in api and "admin_static" in api
-          assert "APP_BASE_PATH: ''" in deploy
           PY
 
-          git rm --quiet --ignore-unmatch .github/workflows/apply-front-admin-split.yml
-          git add .github/workflows/deploy-ecs.yml api_app.py web_frontend/index.html web_frontend/styles.css web_frontend/app.js web_frontend/admin
+          git add api_app.py web_frontend/index.html web_frontend/styles.css web_frontend/app.js web_frontend/admin
           if git diff --cached --quiet; then
             echo "No repository changes needed; deploying current main."
           else
