@@ -72,48 +72,37 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --hard origin/main
 
           mkdir -p web_frontend/admin
-          cp web_frontend/index.html web_frontend/admin/index.html
-          cp web_frontend/styles.css web_frontend/admin/styles.css
-          cp web_frontend/app.js web_frontend/admin/app.js
+          if [ ! -f web_frontend/admin/index.html ] || ! grep -q "admin-shell" web_frontend/admin/index.html; then
+            cp web_frontend/index.html web_frontend/admin/index.html
+            cp web_frontend/styles.css web_frontend/admin/styles.css
+            cp web_frontend/app.js web_frontend/admin/app.js
+          fi
 
           git checkout f8dc2e9d481dd328429cad268046169cb1705ecf -- web_frontend/index.html web_frontend/styles.css web_frontend/app.js
 
           python - <<'PY'
           from pathlib import Path
+          import re
 
-          def replace_once(path, old, new):
-              text = Path(path).read_text(encoding="utf-8")
-              if old not in text:
-                  raise SystemExit(f"Expected block not found in {path}")
-              Path(path).write_text(text.replace(old, new, 1), encoding="utf-8")
+          def replace_section(text, start, end, replacement):
+              i = text.index(start)
+              j = text.index(end, i)
+              return text[:i] + replacement + text[j:]
 
-          replace_once(
-              "api_app.py",
-              '''APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip().strip("/")
-          if APP_BASE_PATH == "/":
-              APP_BASE_PATH = ""
-          ''',
-              '''APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip().strip("/")
-          if APP_BASE_PATH == "/":
-              APP_BASE_PATH = ""
-          ADMIN_BASE_PATH = "/admin"
-          ''',
-          )
+          api_path = Path("api_app.py")
+          api = api_path.read_text(encoding="utf-8")
+          base = 'APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip().strip("/")\nif APP_BASE_PATH == "/":\n    APP_BASE_PATH = ""\n'
+          if 'ADMIN_BASE_PATH = "/admin"' not in api:
+              api = api.replace(base, base + 'ADMIN_BASE_PATH = "/admin"\n', 1)
 
-          replace_once(
-              "api_app.py",
-              '''@app.middleware("http")
-          async def _app_base_path_middleware(request: Request, call_next):
-              if APP_BASE_PATH:
-                  path = request.scope.get("path") or ""
-                  if path == APP_BASE_PATH:
-                      request.scope["path"] = "/"
-                  elif path.startswith(f"{APP_BASE_PATH}/"):
-                      request.scope["path"] = path[len(APP_BASE_PATH):] or "/"
-              return await call_next(request)
-          ''',
+          api = replace_section(
+              api,
+              '@app.middleware("http")\nasync def _app_base_path_middleware',
+              '\n\n# --- Security: CORS ---',
               '''@app.middleware("http")
           async def _app_base_path_middleware(request: Request, call_next):
               path = request.scope.get("path") or ""
@@ -124,47 +113,22 @@ jobs:
                       request.scope["path"] = "/"
                   elif path.startswith(f"{APP_BASE_PATH}/"):
                       request.scope["path"] = path[len(APP_BASE_PATH):] or "/"
-              return await call_next(request)
-          ''',
+              return await call_next(request)''',
           )
 
-          replace_once(
-              "api_app.py",
-              '''static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
-          if os.path.isdir(static_dir):
-              if APP_BASE_PATH:
-                  app.mount(f"{APP_BASE_PATH}/static", StaticFiles(directory=static_dir), name="static_prefixed")
-              app.mount("/static", StaticFiles(directory=static_dir), name="static")
-          ''',
+          api = replace_section(
+              api,
+              'static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")',
+              '\n\nregister_fridge_routes',
               '''static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
           if os.path.isdir(static_dir):
               admin_static_dir = os.path.join(static_dir, "admin")
               if os.path.isdir(admin_static_dir):
                   app.mount(f"{ADMIN_BASE_PATH}/static", StaticFiles(directory=admin_static_dir), name="admin_static")
-              app.mount("/static", StaticFiles(directory=static_dir), name="static")
-          ''',
+              app.mount("/static", StaticFiles(directory=static_dir), name="static")''',
           )
 
-          replace_once(
-              "api_app.py",
-              '''@app.get("/", response_class=HTMLResponse)
-          def index():
-              path = os.path.join(static_dir, "index.html")
-              if os.path.exists(path):
-                  with open(path, "r", encoding="utf-8") as handle:
-                      html = handle.read()
-                      html = html.replace("__APP_BASE_PATH__", APP_BASE_PATH)
-                      html = html.replace("__BASE_PATH__", APP_BASE_PATH)
-                      return HTMLResponse(
-                          html,
-                          headers={"Cache-Control": "no-store, max-age=0"},
-                      )
-              return HTMLResponse(
-                  "<h1>海外爆款内容引擎 API</h1>",
-                  headers={"Cache-Control": "no-store, max-age=0"},
-              )
-          ''',
-              '''def _render_static_html(path: str, base_path: str = ""):
+          static_index_replacement = '''def _render_static_html(path: str, base_path: str = ""):
               if os.path.exists(path):
                   with open(path, "r", encoding="utf-8") as handle:
                       html = handle.read()
@@ -188,40 +152,21 @@ jobs:
           @app.get(ADMIN_BASE_PATH, response_class=HTMLResponse)
           @app.get(f"{ADMIN_BASE_PATH}/", response_class=HTMLResponse)
           def admin_index():
-              return _render_static_html(os.path.join(static_dir, "admin", "index.html"), ADMIN_BASE_PATH)
-          ''',
-          )
+              return _render_static_html(os.path.join(static_dir, "admin", "index.html"), ADMIN_BASE_PATH)'''
+          index_start = 'def _render_static_html(' if 'def _render_static_html(' in api else '@app.get("/", response_class=HTMLResponse)\ndef index():'
+          api = replace_section(api, index_start, '\n\n@app.get("/healthz")', static_index_replacement)
+          api_path.write_text(api, encoding="utf-8")
 
-          replace_once(
-              ".github/workflows/deploy-ecs.yml",
-              "APP_BASE_PATH: ${{ vars.APP_BASE_PATH || '/admin' }}",
-              "APP_BASE_PATH: ''",
-          )
+          deploy_path = Path(".github/workflows/deploy-ecs.yml")
+          deploy = deploy_path.read_text(encoding="utf-8")
+          deploy = re.sub(r"(?m)^      APP_BASE_PATH: .*$", "      APP_BASE_PATH: ''", deploy, count=1)
+          deploy_path.write_text(deploy, encoding="utf-8")
 
-          app_js = Path("web_frontend/app.js")
-          text = app_js.read_text(encoding="utf-8")
-          if "function storyboardCategoryHint" not in text:
-              replace_once(
-                  "web_frontend/app.js",
-                  '''function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
-            return [
-              "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
-              "Follow the storyboard exactly; do not invent another product category, room, or action.",
-              category ? `Product category from brief: ${category}.` : "",
-              model ? `Product model from brief: Hisense ${model}.` : "",
-              `Shot: ${segment}.`,
-              feature ? `Product benefit: ${feature}.` : "",
-              method ? `Visual action: ${method}.` : "",
-              angle ? `Camera angle: ${angle}.` : "",
-              movement ? `Camera movement: ${movement}.` : "",
-              subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
-              "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
-            ]
-              .filter(Boolean)
-              .join(" ");
-          }
-          ''',
-                  '''function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
+          app_path = Path("web_frontend/app.js")
+          app = app_path.read_text(encoding="utf-8")
+          prompt_start = 'function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {'
+          prompt_end = '\n\nfunction extractVideoPrompt(content) {'
+          prompt_replacement = '''function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
             const categoryHint = storyboardCategoryHint(category, feature, method, subtitle);
             return [
               "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
@@ -287,9 +232,9 @@ jobs:
               };
             }
             return null;
-          }
-          ''',
-              )
+          }'''
+          app = replace_section(app, prompt_start, prompt_end, prompt_replacement)
+          app_path.write_text(app, encoding="utf-8")
           PY
 
           python -m py_compile api_app.py app.py
@@ -319,10 +264,14 @@ jobs:
           assert "storyboardCategoryHint" in root_js.text
           PY
 
-          git rm --quiet .github/workflows/apply-front-admin-split.yml
+          git rm --quiet --ignore-unmatch .github/workflows/apply-front-admin-split.yml
           git add .github/workflows/deploy-ecs.yml api_app.py web_frontend/index.html web_frontend/styles.css web_frontend/app.js web_frontend/admin
-          git commit -m "Fix frontend root and admin subpath"
-          git push
+          if git diff --cached --quiet; then
+            echo "No repository changes needed; deploying current main."
+          else
+            git commit -m "Fix frontend root and admin subpath"
+            git push
+          fi
 
       - name: Skip until AWS role is configured
         if: ${{ env.AWS_ROLE_TO_ASSUME == '' }}
@@ -341,7 +290,9 @@ jobs:
 
       - name: Deploy ECS service
         if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
-        run: bash scripts/deploy_ecs_fargate.sh
+        run: |
+          sed -i 's/\r$//' scripts/deploy_ecs_fargate.sh scripts/ecs_status.sh
+          bash scripts/deploy_ecs_fargate.sh
 
       - name: Ensure production HTTPS redirect
         if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
@@ -358,4 +309,6 @@ jobs:
 
       - name: Show ECS status
         if: ${{ always() && env.AWS_ROLE_TO_ASSUME != '' }}
-        run: bash scripts/ecs_status.sh || true
+        run: |
+          sed -i 's/\r$//' scripts/ecs_status.sh
+          bash scripts/ecs_status.sh || true
