@@ -1,0 +1,361 @@
+name: Apply frontend and admin split
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-front-admin-split.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: video-script-creator-front-admin-hotfix
+  cancel-in-progress: false
+
+jobs:
+  hotfix:
+    name: Split frontend root from admin and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      APP_NAME: video-script-creator
+      APP_RUNTIME: ${{ vars.APP_RUNTIME || 'api' }}
+      APP_BASE_PATH: ''
+      PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL || 'https://videoscript.hisense.com' }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
+      BEDROCK_AWS_REGION: ${{ vars.BEDROCK_AWS_REGION || 'eu-central-1' }}
+      BEDROCK_MODEL_ID: eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+      BEDROCK_MODEL_FALLBACK_IDS: eu.amazon.nova-pro-v1:0
+      BEDROCK_MAX_TOKENS: '8192'
+      BEDROCK_FALLBACK_MAX_TOKENS: '4096'
+      STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 's3' }}
+      S3_BUCKET: ${{ vars.S3_BUCKET || 'video-script-creator-prod-assets-625093290485' }}
+      S3_PREFIX: ${{ vars.S3_PREFIX || 'runtime' }}
+      NOVA_REEL_AWS_REGION: ${{ vars.NOVA_REEL_AWS_REGION || 'us-east-1' }}
+      NOVA_REEL_MODEL_ID: ${{ vars.NOVA_REEL_MODEL_ID || 'amazon.nova-reel-v1:1' }}
+      NOVA_REEL_OUTPUT_S3_URI: ${{ vars.NOVA_REEL_OUTPUT_S3_URI || 's3://video-script-creator-prod-assets-625093290485/runtime/nova-reel-poc' }}
+      NOVA_REEL_ESTIMATED_USD_PER_SECOND: ${{ vars.NOVA_REEL_ESTIMATED_USD_PER_SECOND || '0.08' }}
+      NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK: ${{ vars.NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK || '2' }}
+      NOVA_CANVAS_AWS_REGION: ${{ vars.NOVA_CANVAS_AWS_REGION || 'us-west-2' }}
+      NOVA_CANVAS_MODEL_ID: ${{ vars.NOVA_CANVAS_MODEL_ID || 'stability.sd3-5-large-v1:0' }}
+      NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE: ${{ vars.NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE || '0.08' }}
+      RAINFOREST_API_KEY_SECRET_ARN: ${{ secrets.RAINFOREST_API_KEY_SECRET_ARN }}
+      RAINFOREST_DEFAULT_AMAZON_DOMAIN: ${{ vars.RAINFOREST_DEFAULT_AMAZON_DOMAIN || 'amazon.com' }}
+      RAINFOREST_SEARCH_TOP_N: ${{ vars.RAINFOREST_SEARCH_TOP_N || '8' }}
+      RAINFOREST_DISCOVERY_REQUEST_LIMIT: ${{ vars.RAINFOREST_DISCOVERY_REQUEST_LIMIT || '6' }}
+      RAINFOREST_MAX_PRODUCTS_PER_REFRESH: ${{ vars.RAINFOREST_MAX_PRODUCTS_PER_REFRESH || '30' }}
+      YOUTUBE_API_KEY_SECRET_ARN: ${{ secrets.YOUTUBE_API_KEY_SECRET_ARN }}
+      YOUTUBE_DISCOVERY_TOP_N: ${{ vars.YOUTUBE_DISCOVERY_TOP_N || '8' }}
+      YOUTUBE_DISCOVERY_REQUEST_LIMIT: ${{ vars.YOUTUBE_DISCOVERY_REQUEST_LIMIT || '4' }}
+      SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN: ${{ secrets.SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN }}
+      SOCIAL_REQUEST_TIMEOUT: ${{ vars.SOCIAL_REQUEST_TIMEOUT || '15' }}
+      AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+      APP_ACCESS_PASSWORD_SECRET_ARN: ${{ secrets.APP_ACCESS_PASSWORD_SECRET_ARN }}
+      DATABASE_URL_SECRET_ARN: ${{ secrets.DATABASE_URL_SECRET_ARN }}
+      APP_ACCESS_PASSWORD_CACHE_TTL: ${{ vars.APP_ACCESS_PASSWORD_CACHE_TTL || '300' }}
+      ALLOWED_HTTP_CIDRS: ${{ vars.ALLOWED_HTTP_CIDRS || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply code hotfix
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p web_frontend/admin
+          cp web_frontend/index.html web_frontend/admin/index.html
+          cp web_frontend/styles.css web_frontend/admin/styles.css
+          cp web_frontend/app.js web_frontend/admin/app.js
+
+          git checkout f8dc2e9d481dd328429cad268046169cb1705ecf -- web_frontend/index.html web_frontend/styles.css web_frontend/app.js
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              text = Path(path).read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected block not found in {path}")
+              Path(path).write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "api_app.py",
+              '''APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip().strip("/")
+          if APP_BASE_PATH == "/":
+              APP_BASE_PATH = ""
+          ''',
+              '''APP_BASE_PATH = "/" + os.getenv("APP_BASE_PATH", "").strip().strip("/")
+          if APP_BASE_PATH == "/":
+              APP_BASE_PATH = ""
+          ADMIN_BASE_PATH = "/admin"
+          ''',
+          )
+
+          replace_once(
+              "api_app.py",
+              '''@app.middleware("http")
+          async def _app_base_path_middleware(request: Request, call_next):
+              if APP_BASE_PATH:
+                  path = request.scope.get("path") or ""
+                  if path == APP_BASE_PATH:
+                      request.scope["path"] = "/"
+                  elif path.startswith(f"{APP_BASE_PATH}/"):
+                      request.scope["path"] = path[len(APP_BASE_PATH):] or "/"
+              return await call_next(request)
+          ''',
+              '''@app.middleware("http")
+          async def _app_base_path_middleware(request: Request, call_next):
+              path = request.scope.get("path") or ""
+              if path == f"{ADMIN_BASE_PATH}/healthz" or path == f"{ADMIN_BASE_PATH}/api" or path.startswith(f"{ADMIN_BASE_PATH}/api/"):
+                  request.scope["path"] = path[len(ADMIN_BASE_PATH):] or "/"
+              elif APP_BASE_PATH and APP_BASE_PATH != ADMIN_BASE_PATH:
+                  if path == APP_BASE_PATH:
+                      request.scope["path"] = "/"
+                  elif path.startswith(f"{APP_BASE_PATH}/"):
+                      request.scope["path"] = path[len(APP_BASE_PATH):] or "/"
+              return await call_next(request)
+          ''',
+          )
+
+          replace_once(
+              "api_app.py",
+              '''static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
+          if os.path.isdir(static_dir):
+              if APP_BASE_PATH:
+                  app.mount(f"{APP_BASE_PATH}/static", StaticFiles(directory=static_dir), name="static_prefixed")
+              app.mount("/static", StaticFiles(directory=static_dir), name="static")
+          ''',
+              '''static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
+          if os.path.isdir(static_dir):
+              admin_static_dir = os.path.join(static_dir, "admin")
+              if os.path.isdir(admin_static_dir):
+                  app.mount(f"{ADMIN_BASE_PATH}/static", StaticFiles(directory=admin_static_dir), name="admin_static")
+              app.mount("/static", StaticFiles(directory=static_dir), name="static")
+          ''',
+          )
+
+          replace_once(
+              "api_app.py",
+              '''@app.get("/", response_class=HTMLResponse)
+          def index():
+              path = os.path.join(static_dir, "index.html")
+              if os.path.exists(path):
+                  with open(path, "r", encoding="utf-8") as handle:
+                      html = handle.read()
+                      html = html.replace("__APP_BASE_PATH__", APP_BASE_PATH)
+                      html = html.replace("__BASE_PATH__", APP_BASE_PATH)
+                      return HTMLResponse(
+                          html,
+                          headers={"Cache-Control": "no-store, max-age=0"},
+                      )
+              return HTMLResponse(
+                  "<h1>海外爆款内容引擎 API</h1>",
+                  headers={"Cache-Control": "no-store, max-age=0"},
+              )
+          ''',
+              '''def _render_static_html(path: str, base_path: str = ""):
+              if os.path.exists(path):
+                  with open(path, "r", encoding="utf-8") as handle:
+                      html = handle.read()
+                      html = html.replace("__APP_BASE_PATH__", base_path)
+                      html = html.replace("__BASE_PATH__", base_path)
+                      return HTMLResponse(
+                          html,
+                          headers={"Cache-Control": "no-store, max-age=0"},
+                      )
+              return HTMLResponse(
+                  "<h1>海外爆款内容引擎 API</h1>",
+                  headers={"Cache-Control": "no-store, max-age=0"},
+              )
+
+
+          @app.get("/", response_class=HTMLResponse)
+          def index():
+              return _render_static_html(os.path.join(static_dir, "index.html"), "")
+
+
+          @app.get(ADMIN_BASE_PATH, response_class=HTMLResponse)
+          @app.get(f"{ADMIN_BASE_PATH}/", response_class=HTMLResponse)
+          def admin_index():
+              return _render_static_html(os.path.join(static_dir, "admin", "index.html"), ADMIN_BASE_PATH)
+          ''',
+          )
+
+          replace_once(
+              ".github/workflows/deploy-ecs.yml",
+              "APP_BASE_PATH: ${{ vars.APP_BASE_PATH || '/admin' }}",
+              "APP_BASE_PATH: ''",
+          )
+
+          app_js = Path("web_frontend/app.js")
+          text = app_js.read_text(encoding="utf-8")
+          if "function storyboardCategoryHint" not in text:
+              replace_once(
+                  "web_frontend/app.js",
+                  '''function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
+            return [
+              "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
+              "Follow the storyboard exactly; do not invent another product category, room, or action.",
+              category ? `Product category from brief: ${category}.` : "",
+              model ? `Product model from brief: Hisense ${model}.` : "",
+              `Shot: ${segment}.`,
+              feature ? `Product benefit: ${feature}.` : "",
+              method ? `Visual action: ${method}.` : "",
+              angle ? `Camera angle: ${angle}.` : "",
+              movement ? `Camera movement: ${movement}.` : "",
+              subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
+              "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
+            ]
+              .filter(Boolean)
+              .join(" ");
+          }
+          ''',
+                  '''function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
+            const categoryHint = storyboardCategoryHint(category, feature, method, subtitle);
+            return [
+              "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
+              "Follow the storyboard exactly; do not invent another product category, room, or action.",
+              category ? `Product category from brief: ${category}.` : "",
+              categoryHint ? `Product category in English: ${categoryHint.subject}.` : "",
+              categoryHint ? `Required setting: ${categoryHint.setting}.` : "",
+              categoryHint ? `Must include: ${categoryHint.must}.` : "",
+              categoryHint ? `Avoid: ${categoryHint.negative}.` : "",
+              model ? `Product model from brief: Hisense ${model}.` : "",
+              `Shot: ${segment}.`,
+              feature ? `Product benefit: ${feature}.` : "",
+              method ? `Visual action: ${method}.` : "",
+              angle ? `Camera angle: ${angle}.` : "",
+              movement ? `Camera movement: ${movement}.` : "",
+              subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
+              "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
+            ]
+              .filter(Boolean)
+              .join(" ");
+          }
+
+          function storyboardCategoryHint(category, feature, method, subtitle) {
+            const raw = [category, feature, method, subtitle].filter(Boolean).join(" ").toLowerCase();
+            if (/(空气炸锅|air\s*fry|air\s*fryer|fryer|frying|little oil|frozen food|6\.3\s*l?)/i.test(raw)) {
+              return {
+                subject: "a countertop air fryer with visible basket or drawer and control buttons",
+                setting: "modern kitchen countertop or breakfast prep counter, never a living room",
+                must: "the air fryer as the main foreground subject, food placed into or removed from the basket, and button/control interaction when mentioned",
+                negative: "television, TV screen, living room, entertainment console, sofa, media wall, unrelated appliance",
+              };
+            }
+            if (/(微波|microwave|reheat|defrost|popcorn)/i.test(raw)) {
+              return {
+                subject: "a countertop microwave oven with visible door, cavity, plate, and control panel",
+                setting: "modern kitchen countertop, never a living room",
+                must: "the microwave as the main subject, with food container, steam, plate, door, or control panel visible according to the shot",
+                negative: "television, TV screen, living room, sofa, unrelated appliance",
+              };
+            }
+            if (/(烤箱|oven|bake|roast|pizza)/i.test(raw)) {
+              return {
+                subject: "a kitchen oven with visible door, tray, cavity, and control area",
+                setting: "modern kitchen or kitchen countertop, never a living room",
+                must: "the oven as the main subject, with tray, food, oven door, interior light, or baked result visible according to the shot",
+                negative: "television, TV screen, living room, sofa, unrelated appliance",
+              };
+            }
+            if (/(冰箱|refrigerator|fridge|freezer|freshness|fresh food)/i.test(raw)) {
+              return {
+                subject: "a refrigerator with visible doors, shelves, drawers, and stored food",
+                setting: "modern kitchen, never a living room TV wall",
+                must: "the refrigerator as the main subject, with shelves, drawers, food containers, produce, or storage result cues visible",
+                negative: "television, TV screen, entertainment console, sofa, unrelated appliance",
+              };
+            }
+            if (/(洗碗|dishwasher|dishes|tableware|餐具)/i.test(raw)) {
+              return {
+                subject: "a dishwasher with visible racks, dishes, door, and control panel",
+                setting: "modern kitchen beside cabinets or a sink, never a living room",
+                must: "the dishwasher as the main subject, with open racks, dishes, cutlery, clean results, or control panel visible",
+                negative: "television, TV screen, living room, sofa, laundry appliances as main subject, unrelated appliance",
+              };
+            }
+            return null;
+          }
+          ''',
+              )
+          PY
+
+          python -m py_compile api_app.py app.py
+          node --check web_frontend/app.js
+          node --check web_frontend/admin/app.js
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          import api_app
+
+          client = TestClient(api_app.app)
+          root = client.get("/")
+          admin = client.get("/admin/")
+          root_js = client.get("/static/app.js")
+          admin_js = client.get("/admin/static/app.js")
+          admin_health = client.get("/admin/healthz")
+          assert root.status_code == 200
+          assert admin.status_code == 200
+          assert root_js.status_code == 200
+          assert admin_js.status_code == 200
+          assert admin_health.status_code == 200
+          assert "generateForm" in root.text
+          assert "admin-shell" not in root.text
+          assert "admin-shell" in admin.text
+          assert "/admin/static/app.js" in admin.text
+          assert "admin-nav" not in root_js.text
+          assert "admin-nav" in admin_js.text
+          assert "storyboardCategoryHint" in root_js.text
+          PY
+
+          git rm --quiet .github/workflows/apply-front-admin-split.yml
+          git add .github/workflows/deploy-ecs.yml api_app.py web_frontend/index.html web_frontend/styles.css web_frontend/app.js web_frontend/admin
+          git commit -m "Fix frontend root and admin subpath"
+          git push
+
+      - name: Skip until AWS role is configured
+        if: ${{ env.AWS_ROLE_TO_ASSUME == '' }}
+        run: echo "AWS_ROLE_TO_ASSUME is not configured. Skipping deployment."
+
+      - name: Configure AWS credentials
+        if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
+        run: aws sts get-caller-identity
+
+      - name: Deploy ECS service
+        if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
+        run: bash scripts/deploy_ecs_fargate.sh
+
+      - name: Ensure production HTTPS redirect
+        if: ${{ env.AWS_ROLE_TO_ASSUME != '' }}
+        run: |
+          alb_arn="$(aws elbv2 describe-load-balancers --region "$AWS_REGION" --names "${APP_NAME}-alb" --query "LoadBalancers[0].LoadBalancerArn" --output text)"
+          listener_80="$(aws elbv2 describe-listeners --region "$AWS_REGION" --load-balancer-arn "$alb_arn" --query "Listeners[?Port==\`80\`].ListenerArn | [0]" --output text)"
+          listener_443="$(aws elbv2 describe-listeners --region "$AWS_REGION" --load-balancer-arn "$alb_arn" --query "Listeners[?Port==\`443\`].ListenerArn | [0]" --output text)"
+          if [ "$listener_80" != "None" ] && [ -n "$listener_80" ] && [ "$listener_443" != "None" ] && [ -n "$listener_443" ]; then
+            aws elbv2 modify-listener \
+              --region "$AWS_REGION" \
+              --listener-arn "$listener_80" \
+              --default-actions 'Type=redirect,RedirectConfig={Protocol=HTTPS,Port=443,StatusCode=HTTP_301}'
+          fi
+
+      - name: Show ECS status
+        if: ${{ always() && env.AWS_ROLE_TO_ASSUME != '' }}
+        run: bash scripts/ecs_status.sh || true
