@@ -674,6 +674,27 @@ def _clean_list(values, limit=50):
     return result
 
 
+GENERIC_COMPETITOR_CATEGORIES = {
+    "未选择",
+    "全部",
+    "全部品类",
+    "通用",
+    "其他小家电",
+    "小家电",
+    "all",
+    "all categories",
+    "other small appliances",
+    "small appliances",
+}
+
+
+def _competitor_category_filter_value(category: str) -> str:
+    text = str(category or "").strip()
+    if not text:
+        return ""
+    return "" if text.lower() in {item.lower() for item in GENERIC_COMPETITOR_CATEGORIES} else text.lower()
+
+
 def _amazon_product_from_url(url: str) -> dict:
     text = str(url or "").strip()
     if not text:
@@ -1123,7 +1144,7 @@ def _search_competitor_assets(
     limit: int = 20,
 ):
     q_lower = str(q or "").strip().lower()
-    category_lower = str(category or "").strip().lower()
+    category_lower = _competitor_category_filter_value(category)
     brand_lower = str(brand or "").strip().lower()
     platform_lower = str(platform or "").strip().lower()
     source_lower = str(source or "").strip().lower()
