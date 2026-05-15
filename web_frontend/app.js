@@ -15,9 +15,12 @@ const state = {
   activeVariantIndex: 0,
   currentResultJob: null,
   videoJobs: [],
+  storyboardVideoJobs: [],
   canvasJobs: [],
   storyboardShots: [],
   canvasGenerating: new Set(),
+  bulkCanvasGenerating: false,
+  productImageAsset: null,
   jobsExpanded: false,
   jobFilter: "all",
   jobSearch: "",
@@ -834,10 +837,14 @@ function revealCompletedResult(jobs) {
 
 function hideResults() {
   $("resultSection").classList.add("hidden");
+  $("mediaPanel").classList.add("hidden");
   $("resultTabs").innerHTML = "";
   $("resultBody").innerHTML = "";
   if ($("videoJobs")) $("videoJobs").innerHTML = "";
   if ($("videoMessage")) $("videoMessage").textContent = "";
+  if ($("storyboardVideoJobs")) $("storyboardVideoJobs").innerHTML = "";
+  if ($("storyboardVideoMessage")) $("storyboardVideoMessage").textContent = "";
+  state.productImageAsset = null;
   state.currentResultJob = null;
 }
 
@@ -861,10 +868,18 @@ function renderResult(job, variantIndex = 0) {
   state.currentResultJob = job;
   state.canvasJobs = [];
   state.storyboardShots = [];
+  state.storyboardVideoJobs = [];
   rerenderStoryboardCards();
   loadCanvasJobs(job.id).catch((error) => {
     console.warn("Failed to load Nova Canvas jobs", error);
   });
+  loadProductImages(job.id).catch((error) => {
+    console.warn("Failed to load product images", error);
+  });
+  loadStoryboardVideoJobs(job.id).catch((error) => {
+    console.warn("Failed to load storyboard video jobs", error);
+  });
+  renderMediaPanel();
   renderVideoPanel(job);
   $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -880,6 +895,71 @@ function rerenderStoryboardCards() {
 function renderVariantContent(variant) {
   const label = variant.label ? `<div class="result-label">方案定位：${escapeHtml(variant.label)}</div>` : "";
   return `${label}<div class="script-markdown">${markdownToHtml(variant.content || "")}</div>`;
+}
+
+function currentProductImageId() {
+  return state.productImageAsset?.id || "";
+}
+
+function renderMediaPanel() {
+  const asset = state.productImageAsset;
+  if ($("productImageStatus")) {
+    $("productImageStatus").textContent = asset ? `${asset.filename || "产品图"} · ${asset.width || "-"}×${asset.height || "-"}` : "未绑定";
+  }
+  if ($("productImagePreviewWrap")) {
+    $("productImagePreviewWrap").innerHTML = asset?.preview_url
+      ? `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(asset.preview_url)}">图片正在加载。</div>`
+      : "<span>暂无产品图</span>";
+    $("productImagePreviewWrap").classList.toggle("empty", !asset?.preview_url);
+  }
+  if ($("storyboardVideoCost")) {
+    const seconds = estimateStoryboardVideoDuration();
+    $("storyboardVideoCost").textContent = seconds
+      ? `${seconds} 秒 · 约 $${(seconds * 0.08).toFixed(2)}`
+      : "等待分镜";
+  }
+  renderStoryboardVideoJobs(state.storyboardVideoJobs || []);
+  hydrateProtectedImages();
+}
+
+function estimateStoryboardVideoDuration() {
+  const total = (state.storyboardShots || []).reduce((sum, shot) => sum + durationToSeconds(shot.duration), 0);
+  if (!total) return 0;
+  return Math.max(12, Math.ceil(total / 6) * 6);
+}
+
+function durationToSeconds(value) {
+  const match = String(value || "").match(/\d{1,3}/);
+  return match ? Number(match[0]) : 0;
+}
+
+async function loadProductImages(scriptJobId) {
+  if (!scriptJobId) return;
+  const data = await api(
+    `/api/product-images?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
+  );
+  state.productImageAsset = (data.assets || [])[0] || null;
+  renderMediaPanel();
+}
+
+async function uploadProductImage(event) {
+  const file = event.target.files[0];
+  if (!file || !state.currentResultJob) return;
+  setMessage("productImageMessage", "正在上传产品图...");
+  const body = new FormData();
+  body.append("script_job_id", state.currentResultJob.id);
+  body.append("variant_index", String(state.activeVariantIndex));
+  body.append("file", file);
+  try {
+    const data = await api("/api/product-images", { method: "POST", body });
+    state.productImageAsset = data.asset || null;
+    setMessage("productImageMessage", "产品图已绑定当前方案。", "ok");
+    renderMediaPanel();
+  } catch (error) {
+    setMessage("productImageMessage", error.message, "error");
+  } finally {
+    event.target.value = "";
+  }
 }
 
 function renderStoryboardCards(content) {
@@ -917,7 +997,7 @@ function renderStoryboardCards(content) {
         movement,
         subtitle,
       });
-      state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, prompt });
+      state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, duration, prompt });
       const isGenerating = state.canvasGenerating.has(index);
       return `
         <article class="storyboard-card">
@@ -934,7 +1014,7 @@ function renderStoryboardCards(content) {
           </dl>
           <div class="storyboard-actions">
             <button class="storyboard-generate" type="button" data-shot-index="${index}" ${isGenerating ? "disabled" : ""}>
-              ${isGenerating ? "正在生成参考图..." : "生成静态分镜参考图"}
+              ${isGenerating ? "正在生成参考图..." : currentProductImageId() ? "结合产品图生成分镜图" : "生成静态分镜参考图"}
             </button>
           </div>
           ${renderCanvasJobForShot(index)}
@@ -1072,6 +1152,7 @@ async function submitCanvasImage(shotIndex) {
         variant_index: state.activeVariantIndex,
         shot_index: shotIndex,
         prompt: shot.prompt,
+        product_image_id: currentProductImageId(),
       }),
     });
     await loadCanvasJobs(job.id);
@@ -1091,6 +1172,34 @@ async function submitCanvasImage(shotIndex) {
   } finally {
     state.canvasGenerating.delete(shotIndex);
     rerenderStoryboardCards();
+  }
+}
+
+async function generateAllStoryboards() {
+  const job = state.currentResultJob;
+  if (!job || state.bulkCanvasGenerating) return;
+  const missing = (state.storyboardShots || [])
+    .map((_, index) => index)
+    .filter((index) => {
+      return !(state.canvasJobs || []).some((item) => {
+        return Number(item.shot_index) === index && Number(item.variant_index || 0) === Number(state.activeVariantIndex) && item.status === "succeeded";
+      });
+    });
+  if (!missing.length) {
+    setMessage("storyboardVideoMessage", "当前方案的分镜图已经生成。", "ok");
+    return;
+  }
+  state.bulkCanvasGenerating = true;
+  setMessage("storyboardVideoMessage", `正在生成 ${missing.length} 张分镜图...`);
+  try {
+    for (const index of missing) {
+      await submitCanvasImage(index);
+    }
+    setMessage("storyboardVideoMessage", "分镜图已生成。", "ok");
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  } finally {
+    state.bulkCanvasGenerating = false;
   }
 }
 
@@ -1297,6 +1406,87 @@ async function refreshVideoGeneration() {
   }
 }
 
+async function loadStoryboardVideoJobs(scriptJobId) {
+  if (!scriptJobId) return;
+  try {
+    const data = await api(
+      `/api/storyboard-video/jobs?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
+    );
+    state.storyboardVideoJobs = data.jobs || [];
+    if (typeof data.estimated_usd_per_second === "number" && $("storyboardVideoCost")) {
+      const seconds = estimateStoryboardVideoDuration();
+      $("storyboardVideoCost").textContent = seconds
+        ? `${seconds} 秒 · 约 $${(seconds * data.estimated_usd_per_second).toFixed(2)}`
+        : "等待分镜";
+    }
+    renderStoryboardVideoJobs(state.storyboardVideoJobs);
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  }
+}
+
+function renderStoryboardVideoJobs(jobs) {
+  const target = $("storyboardVideoJobs");
+  if (!target) return;
+  target.innerHTML =
+    (jobs || []).map((job) => {
+      const preview = job.preview_url
+        ? `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
+        : "";
+      const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
+      const summary = `${escapeHtml(job.model_id || "Nova Reel")} · ${escapeHtml(job.duration_seconds || "-")} 秒 · ${escapeHtml(job.shot_count || "-")} 镜头`;
+      return `
+        <article class="video-job">
+          <div class="job-head">
+            <span>${escapeHtml(job.variant_name || "整段视频")}</span>
+            <span>${escapeHtml(job.status || "")}</span>
+          </div>
+          <div class="message">${summary}</div>
+          ${failure}
+          ${preview}
+        </article>
+      `;
+    }).join("") || '<div class="empty-state"><strong>暂无整段视频任务</strong><span>上传产品图并确认分镜后，可提交 Nova Reel 多镜头视频。</span></div>';
+}
+
+async function submitStoryboardVideoGeneration() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  setMessage("storyboardVideoMessage", "正在提交整段视频任务...");
+  try {
+    await api("/api/storyboard-video/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        script_job_id: job.id,
+        variant_index: state.activeVariantIndex,
+        product_image_id: currentProductImageId(),
+      }),
+    });
+    setMessage("storyboardVideoMessage", "整段视频任务已提交，稍后点击刷新查看状态。", "ok");
+    await loadStoryboardVideoJobs(job.id);
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  }
+}
+
+async function refreshStoryboardVideoGeneration() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  setMessage("storyboardVideoMessage", "正在刷新整段视频状态...");
+  try {
+    const data = await api(
+      `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}`,
+      { method: "POST" }
+    );
+    state.storyboardVideoJobs = data.jobs || [];
+    renderStoryboardVideoJobs(state.storyboardVideoJobs);
+    setMessage("storyboardVideoMessage", "视频状态已刷新。", "ok");
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  }
+}
+
 function markdownToHtml(markdown) {
   const lines = String(markdown || "").split(/\r?\n/);
   const html = [];
@@ -1446,6 +1636,14 @@ $("downloadResult").addEventListener("click", async (event) => {
     setMessage("formMessage", error.message, "error");
   }
 });
+$("toggleMediaPanel").addEventListener("click", () => {
+  $("mediaPanel").classList.toggle("hidden");
+  renderMediaPanel();
+});
+$("productImageInput").addEventListener("change", uploadProductImage);
+$("generateAllStoryboards").addEventListener("click", generateAllStoryboards);
+$("submitStoryboardVideo").addEventListener("click", submitStoryboardVideoGeneration);
+$("refreshStoryboardVideo").addEventListener("click", refreshStoryboardVideoGeneration);
 $("resultTabs").addEventListener("click", async (event) => {
   const tab = event.target.closest(".result-tab");
   if (!tab || !state.renderedJobId) return;

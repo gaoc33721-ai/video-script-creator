@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 import boto3
 import pandas as pd
-from fastapi import FastAPI, Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi import FastAPI, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -62,6 +62,8 @@ CACHE_META_KEY = "cache_meta.json"
 HTTP_JOBS_KEY = "http_script_jobs.json"
 NOVA_REEL_JOBS_KEY = "nova_reel_poc_jobs.json"
 NOVA_CANVAS_JOBS_KEY = "nova_canvas_storyboard_jobs.json"
+PRODUCT_IMAGE_ASSETS_KEY = "product_image_assets.json"
+STORYBOARD_VIDEO_JOBS_KEY = "storyboard_video_jobs.json"
 COMPETITOR_ASSETS_KEY = "competitor_assets.json"
 SEED_COMPETITOR_ASSETS_KEY = "seed_competitor_assets.json"
 COMPETITOR_RESEARCH_JOBS_KEY = "competitor_research_jobs.json"
@@ -367,6 +369,7 @@ async def _verify_access(request: Request, authorization: str = Header(default="
         raise HTTPException(status_code=401, detail="访问密码不正确或已过期。")
 # --- Security: upload size limit ---
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_PRODUCT_IMAGE_BYTES = 12 * 1024 * 1024  # 12 MB
 
 job_lock = threading.Lock()
 competitor_lock = threading.Lock()
@@ -415,6 +418,13 @@ class NovaCanvasSubmitRequest(BaseModel):
     variant_index: int = Field(default=0, ge=0)
     shot_index: int = Field(default=0, ge=0)
     prompt: str = Field(min_length=10, max_length=2000)
+    product_image_id: str = ""
+
+
+class StoryboardVideoSubmitRequest(BaseModel):
+    script_job_id: str
+    variant_index: int = Field(default=0, ge=0)
+    product_image_id: str = ""
 
 
 class RainforestDiscoverRequest(BaseModel):
@@ -2158,6 +2168,24 @@ def _save_nova_canvas_jobs(jobs):
     return _write_json(NOVA_CANVAS_JOBS_KEY, jobs[:500])
 
 
+def _load_product_image_assets():
+    data = _read_json(PRODUCT_IMAGE_ASSETS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_product_image_assets(assets):
+    return _write_json(PRODUCT_IMAGE_ASSETS_KEY, assets[:300])
+
+
+def _load_storyboard_video_jobs():
+    data = _read_json(STORYBOARD_VIDEO_JOBS_KEY, [])
+    return data if isinstance(data, list) else []
+
+
+def _save_storyboard_video_jobs(jobs):
+    return _write_json(STORYBOARD_VIDEO_JOBS_KEY, jobs[:200])
+
+
 def _nova_canvas_image_key(script_job_id, variant_index, shot_index):
     stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     return (
@@ -2165,6 +2193,74 @@ def _nova_canvas_image_key(script_job_id, variant_index, shot_index):
         f"{_safe_ascii_slug(script_job_id)}/"
         f"variant_{int(variant_index) + 1}_shot_{int(shot_index) + 1}_{stamp}_{uuid.uuid4().hex[:8]}.png"
     )
+
+
+def _product_image_keys(script_job_id, variant_index, image_id, original_format):
+    ext = "jpg" if str(original_format or "").upper() in {"JPG", "JPEG"} else "png"
+    base = (
+        "product-image-assets/"
+        f"{_safe_ascii_slug(script_job_id)}/"
+        f"variant_{int(variant_index) + 1}_{_safe_ascii_slug(image_id)}"
+    )
+    return f"{base}_original.{ext}", f"{base}_normalized.png"
+
+
+def _product_image_by_id(image_id: str, script_job_id: str = ""):
+    wanted = str(image_id or "").strip()
+    if not wanted:
+        return None
+    for item in _load_product_image_assets():
+        if str(item.get("id") or "") != wanted:
+            continue
+        if script_job_id and str(item.get("script_job_id") or "") != str(script_job_id):
+            continue
+        return item
+    return None
+
+
+def _public_product_image_asset(asset):
+    public = dict(asset or {})
+    if public.get("id"):
+        public["preview_url"] = f"/api/product-images/{public['id']}"
+    return public
+
+
+def _normalize_product_image_bytes(data: bytes):
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Pillow 未安装，无法处理产品图。") from exc
+
+    try:
+        image = Image.open(io.BytesIO(data))
+        image.load()
+    except UnidentifiedImageError as exc:
+        raise ValueError("请上传 PNG 或 JPEG 产品图。") from exc
+
+    image_format = str(image.format or "").upper()
+    if image_format == "JPG":
+        image_format = "JPEG"
+    if image_format not in {"PNG", "JPEG"}:
+        raise ValueError("请上传 PNG 或 JPEG 产品图。")
+
+    width, height = image.size
+    if image.mode in {"RGBA", "LA"} or ("transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (246, 248, 249, 255))
+        background.alpha_composite(rgba)
+        image = background.convert("RGB")
+    else:
+        image = image.convert("RGB")
+
+    canvas = Image.new("RGB", (1280, 720), (246, 248, 249))
+    contained = ImageOps.contain(image, (1280, 720), method=Image.Resampling.LANCZOS)
+    x = (1280 - contained.width) // 2
+    y = (720 - contained.height) // 2
+    canvas.paste(contained, (x, y))
+
+    output = io.BytesIO()
+    canvas.save(output, format="PNG", optimize=True)
+    return image_format, width, height, output.getvalue()
 
 
 def _is_laundry_storyboard(text):
@@ -2411,10 +2507,36 @@ def _image_negative_prompt(prompt, category="", model=""):
     return ", ".join(item for item in terms if item)
 
 
-def _bedrock_image_request_body(prompt, seed, category="", model=""):
+def _nova_canvas_supports_reference_image(model_id: str) -> bool:
+    return str(model_id or "").startswith("amazon.nova-canvas")
+
+
+def _bedrock_image_request_body(prompt, seed, category="", model="", reference_image_bytes: bytes | None = None):
     model_id = str(NOVA_CANVAS_MODEL_ID or "")
     prompt_text = str(prompt or "premium e-commerce storyboard reference image")[:3000]
     negative_prompt = _image_negative_prompt(prompt_text, category=category, model=model)
+    if reference_image_bytes:
+        if not _nova_canvas_supports_reference_image(model_id):
+            raise RuntimeError(
+                "产品图参考分镜图需要配置支持 IMAGE_VARIATION 的 Nova Canvas 模型，"
+                f"例如 amazon.nova-canvas-v1:0；当前 NOVA_CANVAS_MODEL_ID={model_id or '未配置'}。"
+            )
+        return {
+            "taskType": "IMAGE_VARIATION",
+            "imageVariationParams": {
+                "text": prompt_text[:512],
+                "negativeText": negative_prompt[:512],
+                "images": [base64.b64encode(reference_image_bytes).decode("utf-8")],
+                "similarityStrength": 0.65,
+            },
+            "imageGenerationConfig": {
+                "numberOfImages": 1,
+                "height": 720,
+                "width": 1280,
+                "cfgScale": 7.0,
+                "seed": seed,
+            },
+        }
     if model_id.startswith("stability."):
         return {
             "prompt": prompt_text,
@@ -2460,7 +2582,15 @@ def _decode_bedrock_image_payload(payload):
     return None
 
 
-def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index, category="", model=""):
+def _start_nova_canvas_image(
+    prompt,
+    script_job_id,
+    variant_index,
+    shot_index,
+    category="",
+    model="",
+    reference_image_bytes: bytes | None = None,
+):
     """Generate a storyboard reference image.
 
     Strategy:
@@ -2479,7 +2609,13 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index, c
         try:
             from botocore.config import Config
 
-            body = _bedrock_image_request_body(prompt, seed, category=category, model=model)
+            body = _bedrock_image_request_body(
+                prompt,
+                seed,
+                category=category,
+                model=model,
+                reference_image_bytes=reference_image_bytes,
+            )
             client = boto3.client(
                 "bedrock-runtime",
                 region_name=NOVA_CANVAS_AWS_REGION,
@@ -2499,6 +2635,10 @@ def _start_nova_canvas_image(prompt, script_job_id, variant_index, shot_index, c
             failures.append(f"Bedrock {NOVA_CANVAS_MODEL_ID} in {NOVA_CANVAS_AWS_REGION}: {exc}")
 
     # --- Attempt 2: Pollinations.ai (free, always available from public internet) ---
+    if image_bytes is None and reference_image_bytes:
+        detail = " | ".join(failures[-3:]) if failures else "no image provider configured"
+        raise RuntimeError(f"产品图参考分镜图生成失败：{detail}")
+
     if image_bytes is None:
         encoded_prompt = urllib.parse.quote(str(prompt or "product photo")[:500])
         pollinations_url = (
@@ -2647,6 +2787,197 @@ def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
             "textToVideoParams": {"text": prompt},
             "videoGenerationConfig": {
                 "durationSeconds": int(duration_seconds),
+                "fps": 24,
+                "dimension": "1280x720",
+                "seed": random.randint(0, 2147483646),
+            },
+        },
+        outputDataConfig={"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
+        clientRequestToken=str(uuid.uuid4()),
+    )
+    return response["invocationArn"], output_s3_uri
+
+
+def _storyboard_rows_from_variant(content: str) -> list[dict]:
+    table_lines, _ = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty:
+        return []
+    body = _script_body_rows(df)
+    rows = []
+    for index, row in body.reset_index(drop=True).iterrows():
+        segment = str(row.get("结构分段", "") or "").strip()
+        if "总时长" in segment or "total" in segment.lower():
+            continue
+        if not any(str(row.get(column, "") or "").strip() for column in TABLE_COLUMNS[1:-1]):
+            continue
+        duration = _duration_seconds(row.get("时长", ""))
+        rows.append(
+            {
+                "row_index": int(index),
+                "segment": segment,
+                "feature": str(row.get("功能点", "") or "").strip(),
+                "method": str(row.get("表现手法", "") or "").strip(),
+                "subtitle": str(row.get("字幕-显示卖点名及描述（英文）", "") or "").strip(),
+                "angle": str(row.get("拍摄角度", "") or "").strip(),
+                "movement": str(row.get("运镜方式", "") or "").strip(),
+                "duration": duration,
+            }
+        )
+    return rows
+
+
+def _compose_manual_shot_prompt(group_rows: list[dict], category: str, model: str, shot_index: int, shot_count: int) -> str:
+    detail_parts = []
+    for row in group_rows:
+        detail_parts.append(
+            " / ".join(
+                item
+                for item in (
+                    row.get("segment"),
+                    row.get("feature"),
+                    row.get("method"),
+                    row.get("angle"),
+                    row.get("movement"),
+                    row.get("subtitle"),
+                )
+                if item
+            )
+        )
+    details = " | ".join(part for part in detail_parts if part)
+    prompt = (
+        f"Six-second shot {shot_index + 1} of {shot_count} for a premium Hisense {_category_en(category)} product video, "
+        f"model {model}. Keep the same product appearance, realistic proportions, cinematic soft lighting, smooth camera movement, "
+        f"no text overlays, no competitor brands. Storyboard details: {details or 'product-focused lifestyle proof shot'}."
+    )
+    return re.sub(r"\s+", " ", prompt).strip()[:512]
+
+
+def _image_format_from_key(key: str) -> str:
+    return "jpeg" if str(key or "").lower().endswith((".jpg", ".jpeg")) else "png"
+
+
+def _image_format_from_bytes(data: bytes, key: str) -> str:
+    try:
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(data))
+        image_format = str(image.format or "").upper()
+        if image_format in {"JPEG", "JPG"}:
+            return "jpeg"
+        if image_format == "PNG":
+            return "png"
+    except Exception:
+        pass
+    return _image_format_from_key(key)
+
+
+def _image_payload_from_storage_key(key: str) -> dict | None:
+    if not key:
+        return None
+    data = STORAGE.read_file_bytes(key)
+    if not data:
+        return None
+    return {
+        "format": _image_format_from_bytes(data, key),
+        "source": {"bytes": base64.b64encode(data).decode("utf-8")},
+    }
+
+
+def _latest_canvas_image_key_by_shot(script_job_id: str, variant_index: int) -> dict[int, str]:
+    by_shot = {}
+    for item in _load_nova_canvas_jobs():
+        if item.get("status") != "succeeded" or not item.get("image_key"):
+            continue
+        if str(item.get("script_job_id") or "") != str(script_job_id):
+            continue
+        if int(item.get("variant_index", -1)) != int(variant_index):
+            continue
+        shot_index = int(item.get("shot_index", -1))
+        if shot_index >= 0 and shot_index not in by_shot:
+            by_shot[shot_index] = item.get("image_key")
+    return by_shot
+
+
+def _build_storyboard_manual_shots(script_job: dict, variant_index: int, product_image_id: str = "") -> tuple[list[dict], int, dict | None]:
+    variants = script_job.get("variants") or []
+    if variant_index >= len(variants):
+        raise HTTPException(status_code=400, detail="Script variant not found.")
+    request_payload = script_job.get("request") or {}
+    variant = variants[variant_index]
+    rows = _storyboard_rows_from_variant(variant.get("content", ""))
+    if not rows:
+        raise HTTPException(status_code=400, detail="当前方案未解析到分镜表格，无法生成整段视频。")
+
+    total_duration = sum(row.get("duration") or 0 for row in rows)
+    if total_duration <= 0:
+        total_duration = int(request_payload.get("expected_duration") or 30)
+    rounded_duration = max(12, ((int(total_duration) + 5) // 6) * 6)
+    if rounded_duration > 120:
+        raise HTTPException(status_code=400, detail="Nova Reel 手动多镜头视频最长支持 120 秒，请缩短脚本时长。")
+    shot_count = max(2, min(20, rounded_duration // 6))
+
+    groups = [[] for _ in range(shot_count)]
+    elapsed = 0
+    for row in rows:
+        target = min(shot_count - 1, max(0, int(elapsed // 6)))
+        groups[target].append(row)
+        elapsed += max(1, int(row.get("duration") or 0))
+    for index, group in enumerate(groups):
+        if not group:
+            groups[index] = [rows[min(index, len(rows) - 1)]]
+
+    product_asset = _product_image_by_id(product_image_id, script_job_id=script_job.get("id", ""))
+    fallback_image_key = (product_asset or {}).get("normalized_key", "")
+    canvas_keys = _latest_canvas_image_key_by_shot(script_job.get("id", ""), variant_index)
+    shots = []
+    for index, group in enumerate(groups):
+        image_key = ""
+        for row in group:
+            image_key = canvas_keys.get(int(row.get("row_index", -1))) or ""
+            if image_key:
+                break
+        if not image_key:
+            image_key = fallback_image_key
+        shot = {
+            "text": _compose_manual_shot_prompt(
+                group,
+                request_payload.get("category", ""),
+                request_payload.get("model", ""),
+                index,
+                shot_count,
+            )
+        }
+        if image_key:
+            shot["image"] = _image_payload_from_storage_key(image_key)
+            shot["source_image_key"] = image_key
+        shots.append(shot)
+    return shots, rounded_duration, product_asset
+
+
+def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
+    output_s3_uri = _nova_reel_job_output_uri(category, model)
+    if not output_s3_uri:
+        raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 STORAGE_BACKEND=s3/S3_BUCKET，或设置 NOVA_REEL_OUTPUT_S3_URI。")
+    from botocore.config import Config
+
+    payload_shots = []
+    for shot in manual_shots:
+        payload = {"text": str(shot.get("text") or "")[:512]}
+        if shot.get("image"):
+            payload["image"] = shot["image"]
+        payload_shots.append(payload)
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=NOVA_REEL_AWS_REGION,
+        config=Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2}),
+    )
+    response = client.start_async_invoke(
+        modelId=NOVA_REEL_MODEL_ID,
+        modelInput={
+            "taskType": "MULTI_SHOT_MANUAL",
+            "multiShotManualParams": {"shots": payload_shots},
+            "videoGenerationConfig": {
                 "fps": 24,
                 "dimension": "1280x720",
                 "seed": random.randint(0, 2147483646),
@@ -3470,6 +3801,76 @@ async def upload_product_features(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"解析文件失败：{exc}") from exc
 
 
+@app.post("/api/product-images", dependencies=[Depends(_verify_access)])
+async def upload_product_image(
+    file: UploadFile = File(...),
+    script_job_id: str = Form(...),
+    variant_index: int = Form(0),
+):
+    script_job = next((item for item in _load_jobs() if item.get("id") == script_job_id), None)
+    if not script_job:
+        raise HTTPException(status_code=404, detail="Script job not found.")
+    variants = script_job.get("variants") or []
+    if variant_index < 0 or variant_index >= len(variants):
+        raise HTTPException(status_code=400, detail="Script variant not found.")
+    data = await file.read()
+    if len(data) > MAX_PRODUCT_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail=f"产品图过大，最大允许 {MAX_PRODUCT_IMAGE_BYTES // (1024 * 1024)}MB。")
+    try:
+        image_format, width, height, normalized_bytes = _normalize_product_image_bytes(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    image_id = uuid.uuid4().hex[:12]
+    original_key, normalized_key = _product_image_keys(script_job_id, variant_index, image_id, image_format)
+    content_type = "image/jpeg" if image_format == "JPEG" else "image/png"
+    image_uri = STORAGE.write_file_bytes(original_key, data, content_type=content_type)
+    normalized_uri = STORAGE.write_file_bytes(normalized_key, normalized_bytes, content_type="image/png")
+    now = _utc_now()
+    asset = {
+        "id": image_id,
+        "script_job_id": script_job_id,
+        "variant_index": int(variant_index),
+        "filename": file.filename or "product-image",
+        "image_key": original_key,
+        "normalized_key": normalized_key,
+        "image_uri": image_uri,
+        "normalized_uri": normalized_uri,
+        "format": image_format,
+        "width": int(width),
+        "height": int(height),
+        "created_at": now,
+        "updated_at": now,
+    }
+    with job_lock:
+        assets = _load_product_image_assets()
+        assets.insert(0, asset)
+        _save_product_image_assets(assets)
+    return {"asset": _public_product_image_asset(asset)}
+
+
+@app.get("/api/product-images", dependencies=[Depends(_verify_access)])
+def product_images(script_job_id: str = "", variant_index: int = -1):
+    assets = _load_product_image_assets()
+    if script_job_id:
+        assets = [item for item in assets if str(item.get("script_job_id") or "") == str(script_job_id)]
+    if variant_index >= 0:
+        assets = [item for item in assets if int(item.get("variant_index", -1)) == int(variant_index)]
+    return {"assets": [_public_product_image_asset(item) for item in assets[:30]]}
+
+
+@app.get("/api/product-images/{image_id}", dependencies=[Depends(_verify_access)])
+def product_image_preview(image_id: str):
+    asset = _product_image_by_id(image_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Product image not found.")
+    try:
+        data = STORAGE.read_file_bytes(asset.get("normalized_key") or asset.get("image_key"))
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Product image not found.") from exc
+    return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
+
+
 @app.get("/api/options", dependencies=[Depends(_verify_access)])
 def options():
     df = _load_products()
@@ -4282,6 +4683,21 @@ def nova_reel_jobs(script_job_id: str = ""):
     }
 
 
+@app.get("/api/storyboard-video/jobs", dependencies=[Depends(_verify_access)])
+def storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1):
+    jobs = _load_storyboard_video_jobs()
+    if script_job_id:
+        jobs = [item for item in jobs if item.get("script_job_id") == script_job_id]
+    if variant_index >= 0:
+        jobs = [item for item in jobs if int(item.get("variant_index", -1)) == int(variant_index)]
+    return {
+        "jobs": [_public_nova_reel_job(item) for item in jobs[:30]],
+        "model_id": NOVA_REEL_MODEL_ID,
+        "region": NOVA_REEL_AWS_REGION,
+        "estimated_usd_per_second": NOVA_REEL_ESTIMATED_USD_PER_SECOND,
+    }
+
+
 @app.get("/api/nova-canvas/jobs", dependencies=[Depends(_verify_access)])
 def nova_canvas_jobs(script_job_id: str = "", variant_index: int = -1):
     jobs = _load_nova_canvas_jobs()
@@ -4312,6 +4728,12 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     variant = variants[req.variant_index]
     now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
     raw_prompt = str(req.prompt or "")[:2000]
+    product_asset = _product_image_by_id(req.product_image_id, script_job_id=req.script_job_id) if req.product_image_id else None
+    if req.product_image_id and not product_asset:
+        raise HTTPException(status_code=404, detail="Product image not found.")
+    reference_image_bytes = None
+    if product_asset:
+        reference_image_bytes = STORAGE.read_file_bytes(product_asset.get("normalized_key", ""))
     generation_prompt = _enhance_storyboard_image_prompt(
         raw_prompt,
         category=request_payload.get("category", ""),
@@ -4329,6 +4751,8 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "variant_name": variant.get("name", f"Variant {req.variant_index + 1}"),
         "variant_label": variant.get("label", ""),
         "shot_index": req.shot_index,
+        "product_image_id": (product_asset or {}).get("id", ""),
+        "product_image_key": (product_asset or {}).get("normalized_key", ""),
         "prompt": raw_prompt,
         "generation_prompt": generation_prompt,
         "status": "succeeded",
@@ -4347,6 +4771,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
             req.shot_index,
             category=image_job["category"],
             model=image_job["model"],
+            reference_image_bytes=reference_image_bytes,
         )
         image_job["image_key"] = image_key
         image_job["image_uri"] = image_uri
@@ -4467,6 +4892,115 @@ def refresh_nova_reel_jobs(script_job_id: str = ""):
     if changed:
         _save_nova_reel_jobs(jobs)
     filtered = [item for item in jobs if not script_job_id or item.get("script_job_id") == script_job_id]
+    return {"jobs": [_public_nova_reel_job(item) for item in filtered[:30]]}
+
+
+@app.post("/api/storyboard-video/submit", dependencies=[Depends(_verify_access)])
+def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
+    script_job = next((item for item in _load_jobs() if item.get("id") == req.script_job_id), None)
+    if not script_job:
+        raise HTTPException(status_code=404, detail="Script job not found.")
+    if script_job.get("status") != "succeeded":
+        raise HTTPException(status_code=400, detail="Script job is not completed yet.")
+    variants = script_job.get("variants") or []
+    if req.variant_index >= len(variants):
+        raise HTTPException(status_code=400, detail="Script variant not found.")
+    if req.product_image_id and not _product_image_by_id(req.product_image_id, script_job_id=req.script_job_id):
+        raise HTTPException(status_code=404, detail="Product image not found.")
+
+    request_payload = script_job.get("request") or {}
+    variant = variants[req.variant_index]
+    manual_shots, duration_seconds, product_asset = _build_storyboard_manual_shots(
+        script_job,
+        req.variant_index,
+        product_image_id=req.product_image_id,
+    )
+    try:
+        invocation_arn, output_s3_uri = _start_storyboard_video_job(
+            request_payload.get("category", ""),
+            request_payload.get("model", ""),
+            manual_shots,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    now = _utc_now()
+    video_job = {
+        "id": uuid.uuid4().hex[:12],
+        "script_job_id": script_job.get("id"),
+        "created_at": now,
+        "updated_at": now,
+        "source": "storyboard_manual",
+        "category": request_payload.get("category", ""),
+        "model": request_payload.get("model", ""),
+        "variant_index": req.variant_index,
+        "variant_name": variant.get("name", f"方案{req.variant_index + 1}"),
+        "variant_label": variant.get("label", ""),
+        "product_image_id": (product_asset or {}).get("id", ""),
+        "duration_seconds": duration_seconds,
+        "shot_count": len(manual_shots),
+        "shots": [
+            {
+                "text": item.get("text", ""),
+                "source_image_key": item.get("source_image_key", ""),
+                "has_image": bool(item.get("image")),
+            }
+            for item in manual_shots
+        ],
+        "status": "InProgress",
+        "failure_message": "",
+        "invocation_arn": invocation_arn,
+        "output_s3_uri": output_s3_uri,
+        "video_s3_uri": "",
+        "model_id": NOVA_REEL_MODEL_ID,
+        "region": NOVA_REEL_AWS_REGION,
+    }
+    jobs = _load_storyboard_video_jobs()
+    jobs.insert(0, video_job)
+    _save_storyboard_video_jobs(jobs)
+    return {"job": _public_nova_reel_job(video_job)}
+
+
+@app.post("/api/storyboard-video/refresh", dependencies=[Depends(_verify_access)])
+def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1):
+    jobs = _load_storyboard_video_jobs()
+    changed = False
+    for item in jobs:
+        if script_job_id and item.get("script_job_id") != script_job_id:
+            continue
+        if variant_index >= 0 and int(item.get("variant_index", -1)) != int(variant_index):
+            continue
+        if item.get("status") in {"Completed", "Failed"}:
+            continue
+        invocation_arn = item.get("invocation_arn", "")
+        if not invocation_arn:
+            continue
+        try:
+            result = _query_nova_reel_job(invocation_arn)
+            status = result.get("status") or item.get("status", "")
+            item["status"] = status
+            item["updated_at"] = _utc_now()
+            item["failure_message"] = result.get("failureMessage") or result.get("failure_message") or ""
+            output_s3_uri = (
+                ((result.get("outputDataConfig") or {}).get("s3OutputDataConfig") or {}).get("s3Uri")
+                or item.get("output_s3_uri", "")
+            )
+            item["output_s3_uri"] = output_s3_uri
+            if status == "Completed":
+                item["video_s3_uri"] = _video_uri_from_bedrock_job(result)
+            changed = True
+        except Exception as exc:
+            item["failure_message"] = str(exc)
+            item["updated_at"] = _utc_now()
+            changed = True
+    if changed:
+        _save_storyboard_video_jobs(jobs)
+    filtered = [
+        item
+        for item in jobs
+        if (not script_job_id or item.get("script_job_id") == script_job_id)
+        and (variant_index < 0 or int(item.get("variant_index", -1)) == int(variant_index))
+    ]
     return {"jobs": [_public_nova_reel_job(item) for item in filtered[:30]]}
 
 

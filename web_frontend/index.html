@@ -175,9 +175,43 @@
             <h2>生成结果</h2>
             <p>生成完成后会自动显示在这里，样式与旧版脚本预览保持一致。</p>
           </div>
-          <a id="downloadResult" class="download-link" href="#">下载 Excel（含多套方案）</a>
+          <div class="result-actions">
+            <button id="toggleMediaPanel" type="button" class="secondary">生成分镜图/整段视频</button>
+            <a id="downloadResult" class="download-link" href="#">下载 Excel（含多套方案）</a>
+          </div>
         </div>
         <div id="resultTabs" class="result-tabs"></div>
+        <section id="mediaPanel" class="media-panel hidden">
+          <div class="media-grid">
+            <div class="product-image-tool">
+              <div class="tool-head">
+                <h3>产品图</h3>
+                <span id="productImageStatus">未绑定</span>
+              </div>
+              <label class="product-image-upload">
+                <input id="productImageInput" type="file" accept="image/png,image/jpeg" />
+                上传产品图
+              </label>
+              <div id="productImagePreviewWrap" class="product-image-preview empty">
+                <span>暂无产品图</span>
+              </div>
+              <div id="productImageMessage" class="message"></div>
+            </div>
+            <div class="media-actions-tool">
+              <div class="tool-head">
+                <h3>分镜与视频</h3>
+                <span id="storyboardVideoCost"></span>
+              </div>
+              <div class="media-actions-row">
+                <button id="generateAllStoryboards" type="button">生成全部分镜图</button>
+                <button id="submitStoryboardVideo" type="button">生成整段视频</button>
+                <button id="refreshStoryboardVideo" type="button" class="secondary">刷新视频状态</button>
+              </div>
+              <div id="storyboardVideoMessage" class="message"></div>
+              <div id="storyboardVideoJobs" class="video-jobs"></div>
+            </div>
+          </div>
+        </section>
         <div id="resultBody" class="result-body"></div>
         <section id="storyboardSection" class="storyboard-section">
           <div class="storyboard-head">
@@ -188,26 +222,6 @@
           </div>
           <div id="storyboardCards" class="storyboard-cards"></div>
         </section>
-        <!-- Nova Reel video section hidden until quality improves -->
-        <!--
-        <section id="videoSection" class="video-section">
-          <div class="video-head">
-            <div>
-              <h3>生成 Nova Reel 视频参考片段</h3>
-              <p>确认上方脚本方案无误后，可选择一个方案生成 6 秒视频片段供业务参考。</p>
-            </div>
-          </div>
-          <label>选择要生成视频片段的脚本方案<select id="videoVariantSelect"></select></label>
-          <label>将提交给 Nova Reel 的视频 Prompt<textarea id="videoPrompt" rows="5" readonly></textarea></label>
-          <p id="videoCost" class="video-cost"></p>
-          <div class="video-actions">
-            <button id="submitVideo" type="button">生成此方案的视频参考片段</button>
-            <button id="refreshVideo" type="button" class="secondary">刷新视频生成状态</button>
-          </div>
-          <div id="videoMessage" class="message"></div>
-          <div id="videoJobs" class="video-jobs"></div>
-        </section>
-        -->
       </section>
     </main>
     <div id="imagePreviewModal" class="image-preview-modal hidden" aria-hidden="true" role="dialog" aria-modal="true">
@@ -217,6 +231,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260514-front-context"></script>
+    <script src="/static/app.js?v=20260515-storyboard-media"></script>
   </body>
 </html>

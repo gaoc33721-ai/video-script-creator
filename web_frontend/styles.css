@@ -685,6 +685,90 @@ button,
   background: #fff;
 }
 
+.result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.media-panel {
+  margin: 16px 0 20px;
+  padding: 16px;
+  border: 1px solid rgba(0, 170, 166, 0.18);
+  border-radius: 18px;
+  background: #fbfbfd;
+}
+
+.media-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(320px, 1.2fr);
+  gap: 16px;
+}
+
+.tool-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tool-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.tool-head span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.product-image-upload {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.product-image-upload input {
+  display: none;
+}
+
+.product-image-preview {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.product-image-preview.empty {
+  display: grid;
+  place-items: center;
+  min-height: 150px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.product-image-preview .storyboard-image-placeholder {
+  min-height: 150px;
+}
+
+.media-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
 .storyboard-section {
   margin-top: 28px;
   padding-top: 24px;
@@ -1153,6 +1237,7 @@ button.secondary {
   .selection-summary,
   .guide-steps,
   .job-tools,
+  .media-grid,
   .storyboard-cards,
   .competitor-assets,
   .competitor-asset {
