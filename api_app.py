@@ -156,8 +156,8 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
-NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-east-1")
-NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "amazon.nova-canvas-v1:0")
+NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-west-2")
+NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.sd3-5-large-v1:0")
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
 RAINFOREST_DEFAULT_AMAZON_DOMAIN = os.getenv("RAINFOREST_DEFAULT_AMAZON_DOMAIN", "amazon.com")
 RAINFOREST_SEARCH_TOP_N = int(os.getenv("RAINFOREST_SEARCH_TOP_N", "8"))
@@ -2755,8 +2755,9 @@ def _image_negative_prompt(prompt, category="", model=""):
     return ", ".join(item for item in terms if item)
 
 
-def _nova_canvas_supports_reference_image(model_id: str) -> bool:
-    return str(model_id or "").startswith("amazon.nova-canvas")
+def _image_model_supports_reference_image(model_id: str) -> bool:
+    normalized = str(model_id or "")
+    return normalized.startswith("amazon.nova-canvas") or normalized.startswith("stability.sd3-5")
 
 
 def _bedrock_image_request_body(prompt, seed, category="", model="", reference_image_bytes: bytes | None = None):
@@ -2764,17 +2765,28 @@ def _bedrock_image_request_body(prompt, seed, category="", model="", reference_i
     prompt_text = str(prompt or "premium e-commerce storyboard reference image")[:3000]
     negative_prompt = _image_negative_prompt(prompt_text, category=category, model=model)
     if reference_image_bytes:
-        if not _nova_canvas_supports_reference_image(model_id):
+        encoded_reference = base64.b64encode(reference_image_bytes).decode("utf-8")
+        if model_id.startswith("stability.sd3-5"):
+            return {
+                "mode": "image-to-image",
+                "prompt": prompt_text,
+                "negative_prompt": negative_prompt,
+                "image": encoded_reference,
+                "strength": 0.62,
+                "output_format": "png",
+                "seed": seed,
+            }
+        if not _image_model_supports_reference_image(model_id):
             raise RuntimeError(
-                "产品图参考分镜图需要配置支持 IMAGE_VARIATION 的 Nova Canvas 模型，"
-                f"例如 amazon.nova-canvas-v1:0；当前 NOVA_CANVAS_MODEL_ID={model_id or '未配置'}。"
+                "产品图参考分镜图需要配置支持图片参考的 Bedrock 图像模型，"
+                f"例如 stability.sd3-5-large-v1:0；当前 NOVA_CANVAS_MODEL_ID={model_id or '未配置'}。"
             )
         return {
             "taskType": "IMAGE_VARIATION",
             "imageVariationParams": {
                 "text": prompt_text[:512],
                 "negativeText": negative_prompt[:512],
-                "images": [base64.b64encode(reference_image_bytes).decode("utf-8")],
+                "images": [encoded_reference],
                 "similarityStrength": 0.65,
             },
             "imageGenerationConfig": {
