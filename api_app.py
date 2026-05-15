@@ -159,6 +159,10 @@ NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PE
 NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-west-2")
 NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.sd3-5-large-v1:0")
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
+NOVA_CANVAS_REFERENCE_STRENGTH = max(
+    0.0,
+    min(1.0, float(os.getenv("NOVA_CANVAS_REFERENCE_STRENGTH", "0.9"))),
+)
 RAINFOREST_DEFAULT_AMAZON_DOMAIN = os.getenv("RAINFOREST_DEFAULT_AMAZON_DOMAIN", "amazon.com")
 RAINFOREST_SEARCH_TOP_N = int(os.getenv("RAINFOREST_SEARCH_TOP_N", "8"))
 RAINFOREST_DISCOVERY_REQUEST_LIMIT = int(os.getenv("RAINFOREST_DISCOVERY_REQUEST_LIMIT", "6"))
@@ -2710,12 +2714,22 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         f"Shot number: {int(shot_index) + 1}.",
         f"Mandatory primary scene: {context['must']}",
         f"Camera and action constraints: {action_constraints}" if action_constraints else "",
-        "The selected product must occupy the foreground or visual center and remain recognizable.",
+        (
+            "If a product reference image is supplied, use it only as a loose reference for product identity, "
+            "silhouette, color, logo placement, and control-panel layout. Do not copy the reference image's "
+            "white background, catalog packshot angle, sticker/badge, lighting, crop, or composition."
+        ),
+        (
+            "Scene priority: the storyboard action, environment, props, food/container, hands, door/cavity/control "
+            "interaction, and camera angle from the row must override the reference image composition."
+        ),
+        "The selected product must remain recognizable inside a new real-life scene, not as an isolated product cutout.",
         f"Storyboard details to preserve: {raw_prompt}",
         f"Do not show: {context['negative']}.",
         (
             "Visual style: clean commercial lighting, realistic product proportions, product-focused composition, "
-            "natural colors, no UI mockups, no text overlay, no watermarks, no competitor brands, no wrong product category."
+            "natural colors, no UI mockups, no text overlay, no watermarks, no discount badges, no round stickers, "
+            "no competitor brands, no wrong product category."
         ),
     ]
     return "\n".join(line for line in lines if line).strip()[:3000]
@@ -2729,6 +2743,12 @@ def _image_negative_prompt(prompt, category="", model=""):
         "unreadable text",
         "text overlay",
         "watermark",
+        "discount badge",
+        "round sticker",
+        "promo sticker",
+        "catalog packshot",
+        "isolated product on white background",
+        "plain white seamless background",
         "low quality",
         "blurry",
         "cartoon",
@@ -2767,12 +2787,18 @@ def _bedrock_image_request_body(prompt, seed, category="", model="", reference_i
     if reference_image_bytes:
         encoded_reference = base64.b64encode(reference_image_bytes).decode("utf-8")
         if model_id.startswith("stability.sd3-5"):
+            reference_prompt = (
+                "Use the uploaded product image only as a weak identity reference. Generate a new storyboard scene "
+                "from the prompt, with realistic environment, props, hands/action, and camera angle. Do not recreate "
+                "the uploaded catalog image or its white background/sticker/composition.\n\n"
+                f"{prompt_text}"
+            )
             return {
                 "mode": "image-to-image",
-                "prompt": prompt_text,
+                "prompt": reference_prompt[:3000],
                 "negative_prompt": negative_prompt,
                 "image": encoded_reference,
-                "strength": 0.62,
+                "strength": NOVA_CANVAS_REFERENCE_STRENGTH,
                 "output_format": "png",
                 "seed": seed,
             }
