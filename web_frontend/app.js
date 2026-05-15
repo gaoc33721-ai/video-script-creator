@@ -837,7 +837,6 @@ function revealCompletedResult(jobs) {
 
 function hideResults() {
   $("resultSection").classList.add("hidden");
-  $("mediaPanel").classList.add("hidden");
   $("resultTabs").innerHTML = "";
   $("resultBody").innerHTML = "";
   if ($("videoJobs")) $("videoJobs").innerHTML = "";
@@ -854,6 +853,7 @@ function renderResult(job, variantIndex = 0) {
   state.renderedJobId = job.id;
   state.activeVariantIndex = Math.max(0, Math.min(variantIndex, variants.length - 1));
   $("resultSection").classList.remove("hidden");
+  $("mediaPanel").classList.remove("hidden");
   $("downloadResult").href = "#";
   $("downloadResult").dataset.jobId = job.id;
   $("resultTabs").innerHTML = variants
@@ -1637,8 +1637,9 @@ $("downloadResult").addEventListener("click", async (event) => {
   }
 });
 $("toggleMediaPanel").addEventListener("click", () => {
-  $("mediaPanel").classList.toggle("hidden");
+  $("mediaPanel").classList.remove("hidden");
   renderMediaPanel();
+  $("mediaPanel").scrollIntoView({ behavior: "smooth", block: "center" });
 });
 $("productImageInput").addEventListener("change", uploadProductImage);
 $("generateAllStoryboards").addEventListener("click", generateAllStoryboards);
