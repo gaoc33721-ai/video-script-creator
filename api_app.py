@@ -3940,8 +3940,6 @@ def _render_static_html(path: str, base_path: str = ""):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as handle:
             html = handle.read()
-            if os.path.normpath(path).endswith(os.path.normpath(os.path.join("admin", "index.html"))):
-                html = _strip_admin_script_generation(html)
             html = html.replace("__APP_BASE_PATH__", base_path)
             html = html.replace("__BASE_PATH__", base_path)
             return HTMLResponse(
