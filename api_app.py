@@ -1839,6 +1839,144 @@ def _feature_rows(df: pd.DataFrame, model: str, selected_features: list[str]) ->
     return payload
 
 
+def _clean_prompt_value(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _feature_catalog_lines(features: list[dict]) -> str:
+    lines = []
+    for index, item in enumerate(features[:10], start=1):
+        name = _clean_prompt_value(item.get("name"))
+        tagline = _clean_prompt_value(item.get("tagline"))
+        description = _clean_prompt_value(item.get("description"))
+        lines.append(
+            "\n".join(
+                [
+                    f"{index}. Feature Name（功能点列必须逐字使用）：{name}",
+                    f"   Tagline（字幕列优先逐字引用）：{tagline or '无'}",
+                    f"   Feature Description（旁白/表现手法必须吸收其专业表述）：{description or '无'}",
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
+def _request_text_blob(req: GenerateRequest, features: list[dict]) -> str:
+    parts = [
+        req.category,
+        req.model,
+        req.custom_requirements,
+        req.pain_points,
+        req.video_usage,
+        req.project_type,
+    ]
+    for item in features or []:
+        parts.extend([item.get("name"), item.get("tagline"), item.get("description")])
+    return " ".join(str(part or "") for part in parts)
+
+
+def _is_microwave_request(req: GenerateRequest, features: list[dict]) -> bool:
+    raw = _request_text_blob(req, features).lower()
+    return any(token in raw for token in ("microwave", "微波", "flatbed", "wave stirrer", "preset menus"))
+
+
+def _segment_examples_for_request(req: GenerateRequest | None, features: list[dict] | None = None) -> tuple[str, str]:
+    raw = _request_text_blob(req, features or []).lower() if req else ""
+    if any(token in raw for token in ("microwave", "微波", "flatbed", "wave stirrer", "preset menus")):
+        return (
+            "“冰箱取出冷饭盒｜复热痛点开场”“整盘餐食直接放上平板腔体｜Flatbed 空间证据”“长方形餐盒不用转盘也能放平｜Flatbed 尺寸证据”“取出冒热气意面/汤碗｜均匀加热结果验证”",
+            "冷饭盒、汤碗、咖啡杯、爆米花袋、早餐燕麦杯、长方形便当盒、整盘晚餐、微波炉门体/腔体/控制面板/蒸汽/热气",
+        )
+    if any(token in raw for token in ("dishwasher", "洗碗", "dish washer")):
+        return (
+            "“晚餐后水槽堆满｜痛点开场”“半篮餐具入仓｜Half Load 证据”“开门取出干燥杯碗｜结果验证”",
+            "晚餐盘、咖啡杯、玻璃杯、餐具篮、锅具、水渍、干燥杯碗、洗碗机门体/内腔/喷淋臂",
+        )
+    if any(token in raw for token in ("laundry", "washer", "washing", "洗衣", "洗烘")):
+        return (
+            "“运动衣物堆在篮中｜换洗痛点开场”“把衬衫和毛巾放入滚筒｜容量/程序证据”“取出蓬松衣物｜洁净结果验证”",
+            "运动衣、毛巾、衬衫、洗衣篮、滚筒内筒、控制面板、衣物纹理、洗后蓬松状态",
+        )
+    if any(token in raw for token in ("refrigerator", "fridge", "freezer", "冰箱", "冷藏", "冷冻")):
+        return (
+            "“周末采购袋放上台面｜囤货痛点开场”“不同食材分区入仓｜空间/保鲜证据”“开门看到整齐食材｜结果验证”",
+            "蔬果盒、牛奶、饮料瓶、保鲜盒、冷冻抽屉、门架、层板、冰箱内灯、食材新鲜状态",
+        )
+    return (
+        "“生活任务出现｜痛点开场”“产品介入处理物品｜核心卖点证据”“前后状态对比｜结果验证”",
+        "台面道具、被处理物品、产品局部、操作面板、使用前后状态、成品质感特写",
+    )
+
+
+def _percentage_range_from_text(text: str) -> tuple[float, float] | None:
+    match = re.search(r"(\d{1,3})\s*(?:-|~|～|—|–|至|到)\s*(\d{1,3})\s*%", str(text or ""))
+    if not match:
+        return None
+    low = max(0, min(100, int(match.group(1)))) / 100
+    high = max(0, min(100, int(match.group(2)))) / 100
+    if low > high:
+        low, high = high, low
+    return low, high
+
+
+def _feature_focus_targets(req: GenerateRequest, features: list[dict]) -> list[dict]:
+    custom = str(req.custom_requirements or "")
+    custom_lower = custom.lower()
+    percent = _percentage_range_from_text(custom)
+    targets = []
+    for item in features or []:
+        name = _clean_prompt_value(item.get("name"))
+        tagline = _clean_prompt_value(item.get("tagline"))
+        description = _clean_prompt_value(item.get("description"))
+        haystack = f"{name} {tagline} {description}".lower()
+        is_flatbed = "flatbed" in haystack or "平板" in haystack
+        mentioned = bool(name and name.lower() in custom_lower) or (is_flatbed and ("flatbed" in custom_lower or "平板" in custom_lower))
+        if not mentioned:
+            continue
+        low, high = percent or (0.35, 0.50)
+        aliases = [name, tagline]
+        if is_flatbed:
+            aliases.extend(["Flatbed", "平板", "无转盘", "turntable-free", "extra-large cooking space"])
+        targets.append(
+            {
+                "name": name,
+                "tagline": tagline,
+                "description": description,
+                "low": low,
+                "high": high,
+                "aliases": [alias for alias in aliases if alias],
+            }
+        )
+    return targets
+
+
+def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
+    lines = [
+        "产品与卖点质量硬要求：",
+        "- 功能点列必须优先逐字使用下方 Feature Name，不要改写成泛泛的“痛点开场/功能展示”。痛点行如无功能点可留空，但卖点证明行必须写准确 Feature Name。",
+        "- 字幕-显示卖点名及描述（英文）列必须使用“Feature Name: Tagline”或从 Feature Description 摘取原文专业短句；不得写成 generic benefit。",
+        "- 旁白（英文）可以更口语，但必须围绕卖点库里的专业词：Feature Name、Tagline、Feature Description 至少命中其一。",
+        "- 表现手法必须把 Feature Description 转成可拍动作，不允许只写“展示平板设计/展示均匀加热效果”这种抽象描述。",
+    ]
+    if _is_microwave_request(req, features):
+        lines.extend(
+            [
+                "- 当前产品按微波炉处理：开头必须是微波炉使用任务，例如冷饭/汤碗/便当盒/爆米花/早餐燕麦/咖啡加热；严禁使用洗碗机式的“水槽堆满餐具、洗碗、dirty dishes、dishwasher”开场。",
+                "- 微波炉镜头必须围绕微波炉门体、腔体、平板底部、控制面板、食物/餐盒入炉、蒸汽和加热后状态；餐具只能作为承载食物的盘碗，不能变成待清洗对象。",
+            ]
+        )
+    for target in _feature_focus_targets(req, features):
+        lines.append(
+            f"- 用户点名强调 {target['name']}：必须用总时长的 {round(target['low'] * 100)}%-{round(target['high'] * 100)}% 展开该卖点；"
+            f"至少 3 个正文镜头或至少 {round(int(req.expected_duration) * target['low'])} 秒直接围绕它，且结构分段/功能点/字幕中反复出现其专业表达。"
+        )
+        if "flatbed" in " ".join(target.get("aliases", [])).lower() or "平板" in " ".join(target.get("aliases", [])):
+            lines.append(
+                "- Flatbed 证明镜头必须具体：整盘晚餐/长方形餐盒/宽碗直接放在平板腔体上、无需转盘避让、腔体空间俯拍、门体打开后取出热气食物。"
+            )
+    return "\n".join(lines)
+
+
 def _strip_code_fences(text: str) -> str:
     cleaned = str(text or "").strip()
     cleaned = re.sub(r"^\s*```(?:markdown|md)?\s*", "", cleaned, flags=re.IGNORECASE)
@@ -1873,15 +2011,16 @@ def _duration_structure_profile(expected_duration) -> tuple[int, int, int]:
     return expected, min_segments, max_segment_seconds
 
 
-def _duration_structure_guidance(expected_duration) -> str:
+def _duration_structure_guidance(expected_duration, req: GenerateRequest | None = None, features: list[dict] | None = None) -> str:
     expected, min_segments, max_segment_seconds = _duration_structure_profile(expected_duration)
     min_lifestyle_details = max(3, min_segments - 3)
+    segment_examples, detail_examples = _segment_examples_for_request(req, features or [])
     return f"""分段密度硬要求：
 - 正文镜头行（不含表头、分隔行和“总时长”行）至少 {min_segments} 行，所有行时长相加必须精确等于 {expected} 秒，“总时长”行也必须写 {expected}秒。
 - 单行时长以 2-6 秒为主，最长不超过 {max_segment_seconds} 秒；不要把多个生活动作或多个卖点塞进一个长段。
-- “结构分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“生活场景任务 + 卖点证据”的具体名称，例如“晚餐后水槽堆满｜痛点开场”“半篮餐具入仓｜Half Load 证据”“开门取出干燥杯碗｜结果验证”。
+- “结构分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“生活场景任务 + 卖点证据”的具体名称。适合当前产品的示例：{segment_examples}。
 - 结构顺序至少覆盖：生活化痛点开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；30 秒以上额外加入等待切换、前后对比或二次使用镜头。
-- 每套至少出现 {min_lifestyle_details} 个生活化物品/场景细节（如晚餐盘、咖啡杯、便当盒、锅具、早餐台面、电影夜零食、运动衣物、食材保鲜盒等，按品类选择），人物只允许手部、手臂、背影、越肩视角或生活痕迹。"""
+- 每套至少出现 {min_lifestyle_details} 个生活化物品/场景细节（优先从这些当前品类细节中选择：{detail_examples}），人物只允许手部、手臂、背影、越肩视角或生活痕迹。"""
 
 
 def _duration_seconds(cell) -> int:
@@ -1916,6 +2055,96 @@ def _has_rich_duration_structure(content: str, expected_duration) -> bool:
     if not total_rows.empty and "时长" in total_rows.columns:
         total_seconds = _duration_seconds(total_rows.iloc[-1].get("时长", ""))
     return body_total == expected and (total_seconds == expected or total_seconds == 0)
+
+
+def _content_contains_any(text: str, terms: list[str]) -> bool:
+    lower = str(text or "").lower()
+    return any(str(term or "").lower() in lower for term in terms if str(term or "").strip())
+
+
+def _row_text(row) -> str:
+    if hasattr(row, "to_dict"):
+        values = row.to_dict().values()
+    else:
+        values = row
+    return " ".join(str(value or "") for value in values)
+
+
+def _script_quality_issues(content: str, req: GenerateRequest, features: list[dict]) -> list[str]:
+    issues = []
+    table_lines, _ = _extract_first_md_table(content)
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty:
+        return ["缺少可解析的 Markdown 表格，无法检查品类与卖点质量。"]
+    body = _script_body_rows(df)
+    full_text = "\n".join(table_lines)
+
+    for item in (features or [])[:5]:
+        name = _clean_prompt_value(item.get("name"))
+        tagline = _clean_prompt_value(item.get("tagline"))
+        description = _clean_prompt_value(item.get("description"))
+        if name and name.lower() not in full_text.lower():
+            issues.append(f"未逐字使用卖点库 Feature Name：{name}")
+        if tagline and tagline.lower() not in full_text.lower():
+            issues.append(f"未复用卖点库 Tagline：{name}: {tagline}")
+        elif not tagline and description:
+            words = [word for word in re.split(r"[^A-Za-z0-9-]+", description) if len(word) >= 5][:4]
+            if words and not any(word.lower() in full_text.lower() for word in words):
+                issues.append(f"未吸收卖点库 Feature Description 的专业表达：{name}")
+
+    if _is_microwave_request(req, features) and not body.empty:
+        first_rows_text = " ".join(_row_text(row) for _, row in body.head(2).iterrows())
+        bad_opening = re.search(
+            r"水槽|洗碗|碗碟堆|餐具堆|dirty\s+dish|dirty\s+dishes|sink|dishwasher|dish\s+rack|detergent",
+            first_rows_text,
+            flags=re.IGNORECASE,
+        )
+        if bad_opening:
+            issues.append("微波炉脚本开头误用了洗碗机/水槽/脏餐具场景。")
+        microwave_opening_terms = [
+            "微波",
+            "加热",
+            "复热",
+            "冷饭",
+            "剩饭",
+            "食材",
+            "食物",
+            "餐盒",
+            "便当",
+            "汤",
+            "咖啡",
+            "爆米花",
+            "燕麦",
+            "flatbed",
+            "microwave",
+            "leftover",
+            "reheat",
+            "frozen",
+            "oatmeal",
+            "popcorn",
+            "mug",
+        ]
+        if not _content_contains_any(first_rows_text, microwave_opening_terms):
+            issues.append("微波炉前两镜没有建立微波炉使用任务或食物加热场景。")
+
+    expected, _, _ = _duration_structure_profile(req.expected_duration)
+    for target in _feature_focus_targets(req, features):
+        aliases = target.get("aliases") or [target.get("name", "")]
+        focus_seconds = 0
+        focus_rows = 0
+        for _, row in body.iterrows():
+            text = _row_text(row)
+            if _content_contains_any(text, aliases):
+                focus_rows += 1
+                focus_seconds += _duration_seconds(row.get("时长", ""))
+        min_seconds = max(1, round(expected * float(target.get("low") or 0)))
+        min_rows = 3 if expected >= 24 else 2
+        if focus_seconds < min_seconds or focus_rows < min_rows:
+            issues.append(
+                f"{target.get('name')} 篇幅不足：当前约 {focus_seconds} 秒/{focus_rows} 行，需至少 {min_seconds} 秒且 {min_rows} 行。"
+            )
+
+    return issues[:8]
 
 
 def _extract_first_md_table(text: str):
@@ -2075,15 +2304,14 @@ def _hotspot_context_prompt(hotspots: list[dict]) -> str:
 
 
 def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int, context_snapshot: dict | None = None) -> str:
-    feature_lines = "\n".join(
-        f"- {item['name']}: {item['tagline']}。{item['description']}" for item in features
-    )
+    feature_lines = _feature_catalog_lines(features)
     direction = req.video_type[variant_index % len(req.video_type)] if req.video_type else "场景化/生活方式型"
     variant_no = variant_index + 1
     context_snapshot = context_snapshot or {"competitor_assets": [], "hotspots": []}
     competitor_context = _competitor_context_prompt(context_snapshot.get("competitor_assets") or [])
     hotspot_context = _hotspot_context_prompt(context_snapshot.get("hotspots") or [])
-    duration_guidance = _duration_structure_guidance(req.expected_duration)
+    duration_guidance = _duration_structure_guidance(req.expected_duration, req, features)
+    quality_guidance = _script_quality_guidance(req, features)
     return f"""
 请生成【方案{variant_no}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
 - 必须先输出一张符合系统要求的 Markdown 表格（10列，行内时长为秒，最后一行为总时长）。
@@ -2102,6 +2330,8 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
 
 {duration_guidance}
+
+{quality_guidance}
 
 输入参数：
 - 发布渠道：{req.platform}
@@ -3045,11 +3275,13 @@ def _public_nova_canvas_job(job):
     return public
 
 
-def _repair_to_expected_table(original_content: str, req: GenerateRequest, features: list[dict]) -> str:
-    feature_lines = "\n".join(
-        f"- {item['name']}: {item['tagline']}。{item['description']}" for item in features
-    )
-    duration_guidance = _duration_structure_guidance(req.expected_duration)
+def _repair_to_expected_table(original_content: str, req: GenerateRequest, features: list[dict], quality_issues: list[str] | None = None) -> str:
+    feature_lines = _feature_catalog_lines(features)
+    duration_guidance = _duration_structure_guidance(req.expected_duration, req, features)
+    quality_guidance = _script_quality_guidance(req, features)
+    issue_block = ""
+    if quality_issues:
+        issue_block = "本次必须修复的质量问题：\n" + "\n".join(f"- {item}" for item in quality_issues)
     repair_prompt = f"""
 请把下面这段视频脚本内容改写成固定字段的 Markdown 表格。
 
@@ -3067,6 +3299,10 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 9. 少人露出：只允许手部、手臂、背影、越肩视角或生活痕迹，产品和被处理物品必须是主视觉。
 
 {duration_guidance}
+
+{quality_guidance}
+
+{issue_block}
 
 产品信息：
 - 产品品类：{req.category}
@@ -3167,6 +3403,13 @@ def _run_generation(job_id: str):
                 repaired = _repair_to_expected_table(content, req, features)
                 if _has_expected_table(repaired):
                     content = repaired
+            if _has_expected_table(content):
+                quality_issues = _script_quality_issues(content, req, features)
+                if quality_issues:
+                    _update_job(job_id, progress=int((i / total) * 80) + 22, current_step=f"优化方案 {i + 1} 的品类场景和卖点表达")
+                    repaired = _repair_to_expected_table(content, req, features, quality_issues=quality_issues)
+                    if _has_expected_table(repaired):
+                        content = repaired
             variants.append({"name": f"方案{i + 1}", "label": _infer_variant_label(content), "content": content.strip()})
         _update_job(
             job_id,
