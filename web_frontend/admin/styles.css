@@ -596,6 +596,60 @@ button,
   background: var(--brand);
 }
 
+.task-progress {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.task-progress .progress {
+  margin: 0;
+}
+
+.task-progress-head,
+.task-run-head,
+.task-run-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.task-progress-head strong,
+.task-run-head strong,
+.task-run-title strong {
+  color: var(--text);
+}
+
+.task-progress-head span,
+.task-progress-meta,
+.task-run-head span,
+.task-run-title span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-run-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(0, 170, 166, 0.22);
+  border-radius: 14px;
+  background: #f7fffe;
+}
+
+.task-run-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
 .jobs-toggle {
   display: block;
   width: 100%;

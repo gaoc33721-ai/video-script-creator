@@ -23,6 +23,9 @@ const state = {
   jobSearch: "",
   competitorResearchTimer: null,
   competitorAnalysisTimer: null,
+  competitorTaskTimer: null,
+  competitorResearchJobs: [],
+  competitorAnalysisRuns: [],
   lastDiscoveredAsins: [],
   lastDiscoveredVideoIds: [],
   currentPage: "dashboard",
@@ -95,6 +98,59 @@ function reviewStatusLabel(status) {
 function reviewStatusBadge(status) {
   const meta = reviewStatusMeta(status);
   return `<span class="status-pill ${escapeAttr(meta.className)}" title="${escapeAttr(meta.hint)}">${escapeHtml(meta.label)}</span>`;
+}
+
+function clampProgress(value, fallback = 0) {
+  const parsed = Number(value);
+  const next = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.max(0, Math.min(100, Math.round(next)));
+}
+
+function taskStatusLabel(status) {
+  const value = String(status || "").toLowerCase();
+  const labels = {
+    pending: "排队中",
+    queued: "排队中",
+    running: "执行中",
+    inprogress: "执行中",
+    submitted: "已提交",
+    succeeded: "已完成",
+    completed: "已完成",
+    partial: "部分完成",
+    failed: "失败",
+    recorded: "历史记录",
+  };
+  return labels[value] || status || "-";
+}
+
+function isActiveTaskStatus(status) {
+  return ["pending", "queued", "running", "inprogress", "submitted"].includes(String(status || "").toLowerCase());
+}
+
+function taskProgressValue(task) {
+  const status = String(task?.status || "").toLowerCase();
+  if (Number.isFinite(Number(task?.progress))) return clampProgress(task.progress);
+  if (["succeeded", "completed", "partial", "failed"].includes(status)) return 100;
+  if (status === "running" || status === "inprogress") return 50;
+  if (status === "pending" || status === "queued" || status === "submitted") return 5;
+  return 0;
+}
+
+function renderTaskProgress(task, { title = "任务进度", detail = "", activeOnly = true } = {}) {
+  if (!task) return "";
+  if (activeOnly && !isActiveTaskStatus(task.status)) return "";
+  const progress = taskProgressValue(task);
+  const step = task.current_step || detail || "";
+  return `
+    <div class="task-progress">
+      <div class="task-progress-head">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(taskStatusLabel(task.status))} · ${progress}%</span>
+      </div>
+      <div class="progress"><div style="width:${progress}%"></div></div>
+      ${step ? `<div class="task-progress-meta">${escapeHtml(step)}</div>` : ""}
+    </div>
+  `;
 }
 
 function authHeaders(headers = {}) {
@@ -314,6 +370,10 @@ function showPage(page) {
     clearTimeout(state.collectionTimer);
     state.collectionTimer = null;
   }
+  if (state.currentPage !== "assets" && state.competitorTaskTimer) {
+    clearTimeout(state.competitorTaskTimer);
+    state.competitorTaskTimer = null;
+  }
   document.querySelectorAll(".workspace-page").forEach((node) => {
     node.classList.toggle("active", node.id === `page${capitalizePage(state.currentPage)}`);
   });
@@ -338,7 +398,7 @@ function capitalizePage(page) {
 
 async function loadPageData(page) {
   if (page === "dashboard") await loadAdminOverview();
-  if (page === "assets") await loadCompetitorAssets();
+  if (page === "assets") await Promise.all([loadCompetitorAssets(), loadCompetitorTaskRuns()]);
   if (page === "hotspots") await Promise.all([loadHotspots(), loadHotspotSources()]);
   if (page === "collection") await loadCollectionRuns();
   if (page === "config") await Promise.all([loadCompetitorConfigs(), loadHotspotSources()]);
@@ -725,6 +785,7 @@ async function runDeepAnalysisAssets() {
       }),
     });
     setMessage("competitorMessage", `深度分析任务 ${data.run_id} 已提交，并发 ${data.job?.concurrency || 4} 路处理中...`, "ok");
+    await loadCompetitorTaskRuns().catch(() => {});
     await pollDeepAnalysisRun(data.run_id, 0);
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
@@ -735,13 +796,17 @@ async function pollDeepAnalysisRun(runId, attempt) {
   const job = await api(`/api/competitor-assets/deep-analysis-runs/${encodeURIComponent(runId)}`);
   const done = Number(job.completed_count || 0);
   const total = Number(job.target_count || 0);
+  state.competitorAnalysisRuns = [job, ...(state.competitorAnalysisRuns || []).filter((item) => item.id !== job.id)];
+  renderCompetitorTaskRuns();
   if (job.status === "succeeded" || job.status === "partial") {
     await loadCompetitorAssets();
+    await loadCompetitorTaskRuns().catch(() => {});
     const errors = job.errors?.length ? `，失败 ${job.errors.length} 条` : "";
     setMessage("competitorMessage", `深度分析完成：已更新 ${job.updated_asset_ids?.length || 0} / ${total} 条素材${errors}。`, job.status === "succeeded" ? "ok" : "error");
     return;
   }
   if (job.status === "failed") {
+    await loadCompetitorTaskRuns().catch(() => {});
     setMessage("competitorMessage", job.error_message || "深度分析任务失败。", "error");
     return;
   }
@@ -1047,6 +1112,7 @@ async function submitCompetitorResearch(event) {
       }),
     });
     setMessage("competitorMessage", `调研任务 ${data.job_id} 已提交，正在生成报告...`, "ok");
+    await loadCompetitorTaskRuns().catch(() => {});
     await pollCompetitorResearchJob(data.job_id, 0);
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
@@ -1055,12 +1121,16 @@ async function submitCompetitorResearch(event) {
 
 async function pollCompetitorResearchJob(jobId, attempt) {
   const job = await api(`/api/competitor-research/jobs/${encodeURIComponent(jobId)}`);
+  state.competitorResearchJobs = [job, ...(state.competitorResearchJobs || []).filter((item) => item.id !== job.id)];
+  renderCompetitorTaskRuns();
   if (job.status === "succeeded") {
     renderCompetitorReport(job);
+    await loadCompetitorTaskRuns().catch(() => {});
     setMessage("competitorMessage", "调研报告已生成。", "ok");
     return;
   }
   if (job.status === "failed") {
+    await loadCompetitorTaskRuns().catch(() => {});
     setMessage("competitorMessage", job.error_message || "调研报告生成失败。", "error");
     return;
   }
@@ -1068,6 +1138,77 @@ async function pollCompetitorResearchJob(jobId, attempt) {
   if (attempt < 90) {
     state.competitorResearchTimer = setTimeout(() => pollCompetitorResearchJob(jobId, attempt + 1), 2000);
   }
+}
+
+async function loadCompetitorTaskRuns() {
+  if (state.competitorTaskTimer) {
+    clearTimeout(state.competitorTaskTimer);
+    state.competitorTaskTimer = null;
+  }
+  const [researchData, analysisData] = await Promise.all([
+    api("/api/competitor-research/jobs").catch(() => ({ jobs: [] })),
+    api("/api/competitor-assets/deep-analysis-runs?limit=30").catch(() => ({ jobs: [] })),
+  ]);
+  state.competitorResearchJobs = researchData.jobs || [];
+  state.competitorAnalysisRuns = analysisData.jobs || [];
+  renderCompetitorTaskRuns();
+  const hasActiveTask = [...state.competitorResearchJobs, ...state.competitorAnalysisRuns].some((job) => isActiveTaskStatus(job.status));
+  if (state.currentPage === "assets" && hasActiveTask) {
+    state.competitorTaskTimer = setTimeout(() => {
+      loadCompetitorTaskRuns().catch((error) => console.warn("Failed to refresh competitor task progress", error));
+    }, 3000);
+  }
+}
+
+function renderCompetitorTaskRuns() {
+  const target = $("competitorTaskRuns");
+  if (!target) return;
+  const researchTasks = (state.competitorResearchJobs || [])
+    .filter((job) => isActiveTaskStatus(job.status))
+    .map((job) => ({ ...job, task_type: "research", task_title: "调研报告生成" }));
+  const analysisTasks = (state.competitorAnalysisRuns || [])
+    .filter((job) => isActiveTaskStatus(job.status))
+    .map((job) => ({ ...job, task_type: "analysis", task_title: "素材深度分析" }));
+  const tasks = [...researchTasks, ...analysisTasks].sort((a, b) =>
+    String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || ""))
+  );
+  if (!tasks.length) {
+    target.innerHTML = "";
+    return;
+  }
+  target.innerHTML = `
+    <section class="task-run-list">
+      <div class="task-run-head">
+        <strong>正在执行的任务</strong>
+        <span>${tasks.length} 个任务处理中，会自动刷新进度。</span>
+      </div>
+      ${tasks.map(renderCompetitorTaskRun).join("")}
+    </section>
+  `;
+}
+
+function renderCompetitorTaskRun(job) {
+  const request = job.request || {};
+  const total = Number(job.target_count || 0);
+  const done = Number(job.completed_count || 0);
+  const detail = job.task_type === "analysis" && total
+    ? `${job.current_step || "正在分析素材"}（${done}/${total}）`
+    : job.current_step || "正在处理";
+  const subtitle = [
+    request.category || "",
+    request.source || request.platform || "",
+    job.id ? `任务 ${job.id}` : "",
+    formatDateTime(job.created_at),
+  ].filter(Boolean).join(" · ");
+  return `
+    <article class="task-run-card">
+      <div class="task-run-title">
+        <strong>${escapeHtml(job.task_title || "后台任务")}</strong>
+        <span>${escapeHtml(subtitle)}</span>
+      </div>
+      ${renderTaskProgress({ ...job, current_step: detail }, { title: "执行进度", activeOnly: false })}
+    </article>
+  `;
 }
 
 function renderCompetitorReport(job) {
@@ -1256,10 +1397,14 @@ function renderCollectionRuns() {
       const resultLine = summary.fetched_count || upsert.total
         ? `发现 ${summary.discovered_count || 0} 条，抓取 ${summary.fetched_count || 0} 条，入库/更新 ${upsert.total || 0} 条`
         : "";
+      const progressDetail = summary.requested_count
+        ? `${run.current_step || "正在执行"}，目标 ${summary.requested_count} 条`
+        : run.current_step || "";
       return `
         <article class="compact-item static">
           <strong>${escapeHtml(request.category || "通用品类")} · ${escapeHtml(request.platform || request.source || "平台")}</strong>
           <span>${escapeHtml(statusLine)}</span>
+          ${renderTaskProgress({ ...run, current_step: progressDetail }, { title: "采集进度" })}
           ${run.config_applied ? '<span>已套用品类配置中的品牌/关键词。</span>' : ""}
           ${resultLine ? `<span>${escapeHtml(resultLine)}</span>` : ""}
           ${run.error_message ? `<span class="error-text">${escapeHtml(run.error_message)}</span>` : ""}
@@ -1451,6 +1596,7 @@ function updateJobFilterButtons() {
 }
 
 function renderJob(job) {
+  const progress = taskProgressValue(job);
   const variants =
     job.status === "succeeded"
       ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><button class="download-job download-link" type="button" data-job-id="${escapeAttr(job.id)}">下载 Excel</button>`
@@ -1464,9 +1610,9 @@ function renderJob(job) {
     <article class="job">
       <div class="job-head">
         <span>${escapeHtml((job.request || {}).model || "未命名产品")}</span>
-        <span>${escapeHtml(job.status)} ${Number(job.progress || 0)}%</span>
+        <span>${escapeHtml(taskStatusLabel(job.status))} ${progress}%</span>
       </div>
-      <div class="progress"><div style="width:${Number(job.progress || 0)}%"></div></div>
+      <div class="progress"><div style="width:${progress}%"></div></div>
       <div class="message">${escapeHtml(job.current_step || "")}</div>
       ${finishedAt}
       ${error}
@@ -1674,7 +1820,14 @@ function closeStoryboardImagePreview() {
 
 function renderCanvasJobForShot(shotIndex) {
   if (state.canvasGenerating.has(shotIndex)) {
-    return '<div class="storyboard-image-slot loading">Nova Canvas 正在生成中，通常需要几十秒。</div>';
+    return `
+      <div class="storyboard-image-slot loading">
+        ${renderTaskProgress(
+          { status: "running", progress: 45, current_step: "Nova Canvas 正在生成静态分镜参考图，通常需要几十秒。" },
+          { title: "参考图生成进度", activeOnly: false }
+        )}
+      </div>
+    `;
   }
   const job = (state.canvasJobs || []).find((item) => {
     return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
@@ -1902,13 +2055,18 @@ function renderVideoJobs(jobs) {
         ? `<video class="video-preview" controls src="${escapeAttr(appPath(job.preview_url))}"></video><a class="download-link" href="${escapeAttr(appPath(job.preview_url))}" target="_blank" rel="noreferrer">打开视频</a>`
         : "";
       const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
+      const progress = renderTaskProgress(
+        { ...job, current_step: "Nova Reel 视频任务正在生成或等待 AWS 返回结果。" },
+        { title: "视频生成进度" }
+      );
       return `
         <article class="video-job">
           <div class="job-head">
             <span>${escapeHtml(job.variant_name || "视频任务")}</span>
-            <span>${escapeHtml(job.status || "")}</span>
+            <span>${escapeHtml(taskStatusLabel(job.status))}</span>
           </div>
           <div class="message">${escapeHtml(job.model || "")} · ${escapeHtml(job.model_id || "")} · ${escapeHtml(job.created_at || "")}</div>
+          ${progress}
           ${failure}
           ${preview}
         </article>
