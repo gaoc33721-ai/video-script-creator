@@ -20,6 +20,8 @@ const state = {
   storyboardShots: [],
   canvasGenerating: new Set(),
   bulkCanvasGenerating: false,
+  productImageAssets: [],
+  selectedProductImageId: "",
   productImageAsset: null,
   jobsExpanded: false,
   jobFilter: "all",
@@ -850,6 +852,8 @@ function hideResults() {
   if ($("videoMessage")) $("videoMessage").textContent = "";
   if ($("storyboardVideoJobs")) $("storyboardVideoJobs").innerHTML = "";
   if ($("storyboardVideoMessage")) $("storyboardVideoMessage").textContent = "";
+  state.productImageAssets = [];
+  state.selectedProductImageId = "";
   state.productImageAsset = null;
   state.currentResultJob = null;
 }
@@ -905,19 +909,30 @@ function renderVariantContent(variant) {
 }
 
 function currentProductImageId() {
-  return state.productImageAsset?.id || "";
+  return currentProductImageAsset()?.id || "";
+}
+
+function currentProductImageAsset() {
+  const assets = state.productImageAssets || [];
+  const selected = assets.find((item) => item.id === state.selectedProductImageId);
+  return selected || assets[0] || null;
 }
 
 function renderMediaPanel() {
-  const asset = state.productImageAsset;
+  const assets = state.productImageAssets || [];
+  const asset = currentProductImageAsset();
+  state.productImageAsset = asset;
+  if (asset && state.selectedProductImageId !== asset.id) {
+    state.selectedProductImageId = asset.id;
+  }
   if ($("productImageStatus")) {
-    $("productImageStatus").textContent = asset ? `${asset.filename || "产品图"} · ${asset.width || "-"}×${asset.height || "-"}` : "未绑定";
+    $("productImageStatus").textContent = asset
+      ? `${assets.length} 张 · 当前 ${asset.width || "-"}×${asset.height || "-"}`
+      : "未绑定";
   }
   if ($("productImagePreviewWrap")) {
-    $("productImagePreviewWrap").innerHTML = asset?.preview_url
-      ? `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(asset.preview_url)}">图片正在加载。</div>`
-      : "<span>暂无产品图</span>";
-    $("productImagePreviewWrap").classList.toggle("empty", !asset?.preview_url);
+    $("productImagePreviewWrap").innerHTML = renderProductImageGallery(assets, asset);
+    $("productImagePreviewWrap").classList.toggle("empty", !assets.length);
   }
   if ($("storyboardVideoCost")) {
     const seconds = estimateStoryboardVideoDuration();
@@ -927,6 +942,25 @@ function renderMediaPanel() {
   }
   renderStoryboardVideoJobs(state.storyboardVideoJobs || []);
   hydrateProtectedImages();
+}
+
+function renderProductImageGallery(assets, selectedAsset) {
+  if (!assets.length) return "<span>暂无产品图</span>";
+  return `
+    <div class="product-image-gallery">
+      ${assets
+        .map((asset) => {
+          const active = selectedAsset?.id === asset.id;
+          return `
+            <button class="product-image-thumb ${active ? "active" : ""}" type="button" data-product-image-id="${escapeAttr(asset.id)}" title="${escapeAttr(asset.filename || "产品图")}">
+              ${asset.preview_url ? `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(asset.preview_url)}">图片正在加载。</div>` : "<span>无预览</span>"}
+              <span>${escapeHtml(asset.filename || "产品图")}</span>
+            </button>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
 }
 
 function estimateStoryboardVideoDuration() {
@@ -945,23 +979,34 @@ async function loadProductImages(scriptJobId) {
   const data = await api(
     `/api/product-images?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
   );
-  state.productImageAsset = (data.assets || [])[0] || null;
+  state.productImageAssets = data.assets || [];
+  if (!state.productImageAssets.some((asset) => asset.id === state.selectedProductImageId)) {
+    state.selectedProductImageId = state.productImageAssets[0]?.id || "";
+  }
+  state.productImageAsset = currentProductImageAsset();
   renderMediaPanel();
 }
 
 async function uploadProductImage(event) {
-  const file = event.target.files[0];
-  if (!file || !state.currentResultJob) return;
-  setMessage("productImageMessage", "正在上传产品图...");
-  const body = new FormData();
-  body.append("script_job_id", state.currentResultJob.id);
-  body.append("variant_index", String(state.activeVariantIndex));
-  body.append("file", file);
+  const files = Array.from(event.target.files || []);
+  if (!files.length || !state.currentResultJob) return;
+  setMessage("productImageMessage", `正在上传 ${files.length} 张产品图...`);
+  const uploaded = [];
   try {
-    const data = await api("/api/product-images", { method: "POST", body });
-    state.productImageAsset = data.asset || null;
-    setMessage("productImageMessage", "产品图已绑定当前方案。", "ok");
-    renderMediaPanel();
+    for (const [index, file] of files.entries()) {
+      const body = new FormData();
+      body.append("script_job_id", state.currentResultJob.id);
+      body.append("variant_index", String(state.activeVariantIndex));
+      body.append("file", file);
+      const data = await api("/api/product-images", { method: "POST", body });
+      if (data.asset) uploaded.push(data.asset);
+      setMessage("productImageMessage", `正在上传产品图 ${index + 1}/${files.length}...`);
+    }
+    if (uploaded.length) {
+      state.selectedProductImageId = uploaded[0].id;
+      await loadProductImages(state.currentResultJob.id);
+    }
+    setMessage("productImageMessage", `已上传 ${uploaded.length} 张产品图，当前方案已绑定。`, "ok");
   } catch (error) {
     setMessage("productImageMessage", error.message, "error");
   } finally {
@@ -1649,6 +1694,19 @@ $("toggleMediaPanel").addEventListener("click", () => {
   $("mediaPanel").scrollIntoView({ behavior: "smooth", block: "center" });
 });
 $("productImageInput").addEventListener("change", uploadProductImage);
+$("productImagePreviewWrap").addEventListener("click", (event) => {
+  const button = event.target.closest(".product-image-thumb");
+  if (!button) return;
+  state.selectedProductImageId = button.dataset.productImageId || "";
+  state.productImageAsset = currentProductImageAsset();
+  renderMediaPanel();
+  rerenderStoryboardCards();
+});
+$("productImagePreviewWrap").addEventListener("dblclick", (event) => {
+  const image = event.target.closest("[data-storyboard-preview]");
+  if (!image) return;
+  openStoryboardImagePreview(image);
+});
 $("generateAllStoryboards").addEventListener("click", generateAllStoryboards);
 $("submitStoryboardVideo").addEventListener("click", submitStoryboardVideoGeneration);
 $("refreshStoryboardVideo").addEventListener("click", refreshStoryboardVideoGeneration);
