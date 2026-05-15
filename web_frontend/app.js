@@ -15,9 +15,14 @@ const state = {
   activeVariantIndex: 0,
   currentResultJob: null,
   videoJobs: [],
+  storyboardVideoJobs: [],
   canvasJobs: [],
   storyboardShots: [],
   canvasGenerating: new Set(),
+  bulkCanvasGenerating: false,
+  productImageAssets: [],
+  selectedProductImageId: "",
+  productImageAsset: null,
   jobsExpanded: false,
   jobFilter: "all",
   jobSearch: "",
@@ -312,6 +317,8 @@ function formPayload(form) {
     video_type: state.selectedVideoTypes,
     expected_duration: Number(data.get("expected_duration") || 30),
     project_type: data.get("project_type"),
+    use_competitor_context: data.get("use_competitor_context") === "on",
+    use_hotspot_context: data.get("use_hotspot_context") === "on",
     target_audience: data.get("target_audience") || "",
     pain_points: data.get("pain_points") || "",
     custom_requirements: data.get("custom_requirements") || "",
@@ -746,29 +753,33 @@ async function uploadFile(event) {
 }
 
 async function loadJobs() {
-  const data = await api("/api/jobs");
-  const jobs = filterJobs(data.jobs || []);
-  updateJobFilterButtons();
-  if (!jobs.length) {
-    $("jobs").innerHTML = '<div class="empty-state"><strong>暂无匹配任务</strong><span>可调整筛选条件，或提交新的脚本生成任务。</span></div>';
-    return;
+  try {
+    const data = await api("/api/jobs");
+    const jobs = filterJobs(data.jobs || []);
+    updateJobFilterButtons();
+    if (!jobs.length) {
+      $("jobs").innerHTML = '<div class="empty-state"><strong>暂无匹配任务</strong><span>可调整筛选条件，或提交新的脚本生成任务。</span></div>';
+      return;
+    }
+    const defaultVisible = 3;
+    const expanded = state.jobsExpanded || false;
+    const visible = expanded ? jobs : jobs.slice(0, defaultVisible);
+    let html = visible.map(renderJob).join("");
+    if (jobs.length > defaultVisible) {
+      const label = expanded ? "收起历史任务" : `展开全部（共 ${jobs.length} 条）`;
+      html += `<button class="jobs-toggle" type="button" id="toggleJobs">${escapeHtml(label)}</button>`;
+    }
+    $("jobs").innerHTML = html;
+    if (jobs.length > defaultVisible) {
+      $("toggleJobs").addEventListener("click", () => {
+        state.jobsExpanded = !state.jobsExpanded;
+        loadJobs();
+      });
+    }
+    await revealCompletedResult(jobs);
+  } catch (error) {
+    $("jobs").innerHTML = `<div class="empty-state"><strong>任务加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
   }
-  const defaultVisible = 3;
-  const expanded = state.jobsExpanded || false;
-  const visible = expanded ? jobs : jobs.slice(0, defaultVisible);
-  let html = visible.map(renderJob).join("");
-  if (jobs.length > defaultVisible) {
-    const label = expanded ? "收起历史任务" : `展开全部（共 ${jobs.length} 条）`;
-    html += `<button class="jobs-toggle" type="button" id="toggleJobs">${escapeHtml(label)}</button>`;
-  }
-  $("jobs").innerHTML = html;
-  if (jobs.length > defaultVisible) {
-    $("toggleJobs").addEventListener("click", () => {
-      state.jobsExpanded = !state.jobsExpanded;
-      loadJobs();
-    });
-  }
-  revealCompletedResult(jobs);
 }
 
 function filterJobs(jobs) {
@@ -821,12 +832,15 @@ function renderJob(job) {
   `;
 }
 
-function revealCompletedResult(jobs) {
-  const completed = (jobs || []).find((job) => {
-    if (job.status !== "succeeded" || !(job.variants || []).length) return false;
+async function revealCompletedResult(jobs) {
+  const completedSummary = (jobs || []).find((job) => {
+    if (job.status !== "succeeded" || !(job.has_variants || job.variant_count || (job.variants || []).length)) return false;
     return state.activeJobId ? job.id === state.activeJobId : true;
   });
-  if (!completed || completed.id === state.renderedJobId) return;
+  if (!completedSummary || completedSummary.id === state.renderedJobId) return;
+  const completed = (completedSummary.variants || []).length
+    ? completedSummary
+    : await api(`/api/jobs/${encodeURIComponent(completedSummary.id)}`);
   renderResult(completed);
 }
 
@@ -836,6 +850,11 @@ function hideResults() {
   $("resultBody").innerHTML = "";
   if ($("videoJobs")) $("videoJobs").innerHTML = "";
   if ($("videoMessage")) $("videoMessage").textContent = "";
+  if ($("storyboardVideoJobs")) $("storyboardVideoJobs").innerHTML = "";
+  if ($("storyboardVideoMessage")) $("storyboardVideoMessage").textContent = "";
+  state.productImageAssets = [];
+  state.selectedProductImageId = "";
+  state.productImageAsset = null;
   state.currentResultJob = null;
 }
 
@@ -845,6 +864,7 @@ function renderResult(job, variantIndex = 0) {
   state.renderedJobId = job.id;
   state.activeVariantIndex = Math.max(0, Math.min(variantIndex, variants.length - 1));
   $("resultSection").classList.remove("hidden");
+  $("mediaPanel").classList.remove("hidden");
   $("downloadResult").href = "#";
   $("downloadResult").dataset.jobId = job.id;
   $("resultTabs").innerHTML = variants
@@ -859,10 +879,18 @@ function renderResult(job, variantIndex = 0) {
   state.currentResultJob = job;
   state.canvasJobs = [];
   state.storyboardShots = [];
+  state.storyboardVideoJobs = [];
   rerenderStoryboardCards();
   loadCanvasJobs(job.id).catch((error) => {
     console.warn("Failed to load Nova Canvas jobs", error);
   });
+  loadProductImages(job.id).catch((error) => {
+    console.warn("Failed to load product images", error);
+  });
+  loadStoryboardVideoJobs(job.id).catch((error) => {
+    console.warn("Failed to load storyboard video jobs", error);
+  });
+  renderMediaPanel();
   renderVideoPanel(job);
   $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -878,6 +906,112 @@ function rerenderStoryboardCards() {
 function renderVariantContent(variant) {
   const label = variant.label ? `<div class="result-label">方案定位：${escapeHtml(variant.label)}</div>` : "";
   return `${label}<div class="script-markdown">${markdownToHtml(variant.content || "")}</div>`;
+}
+
+function currentProductImageId() {
+  return currentProductImageAsset()?.id || "";
+}
+
+function currentProductImageAsset() {
+  const assets = state.productImageAssets || [];
+  const selected = assets.find((item) => item.id === state.selectedProductImageId);
+  return selected || assets[0] || null;
+}
+
+function renderMediaPanel() {
+  const assets = state.productImageAssets || [];
+  const asset = currentProductImageAsset();
+  state.productImageAsset = asset;
+  if (asset && state.selectedProductImageId !== asset.id) {
+    state.selectedProductImageId = asset.id;
+  }
+  if ($("productImageStatus")) {
+    $("productImageStatus").textContent = asset
+      ? `${assets.length} 张 · 当前 ${asset.width || "-"}×${asset.height || "-"}`
+      : "未绑定";
+  }
+  if ($("productImagePreviewWrap")) {
+    $("productImagePreviewWrap").innerHTML = renderProductImageGallery(assets, asset);
+    $("productImagePreviewWrap").classList.toggle("empty", !assets.length);
+  }
+  if ($("storyboardVideoCost")) {
+    const seconds = estimateStoryboardVideoDuration();
+    $("storyboardVideoCost").textContent = seconds
+      ? `${seconds} 秒 · 约 $${(seconds * 0.08).toFixed(2)}`
+      : "等待分镜";
+  }
+  renderStoryboardVideoJobs(state.storyboardVideoJobs || []);
+  hydrateProtectedImages();
+}
+
+function renderProductImageGallery(assets, selectedAsset) {
+  if (!assets.length) return "<span>暂无产品图</span>";
+  return `
+    <div class="product-image-gallery">
+      ${assets
+        .map((asset) => {
+          const active = selectedAsset?.id === asset.id;
+          return `
+            <button class="product-image-thumb ${active ? "active" : ""}" type="button" data-product-image-id="${escapeAttr(asset.id)}" title="${escapeAttr(asset.filename || "产品图")}">
+              ${asset.preview_url ? `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(asset.preview_url)}">图片正在加载。</div>` : "<span>无预览</span>"}
+              <span>${escapeHtml(asset.filename || "产品图")}</span>
+            </button>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function estimateStoryboardVideoDuration() {
+  const total = (state.storyboardShots || []).reduce((sum, shot) => sum + durationToSeconds(shot.duration), 0);
+  if (!total) return 0;
+  return Math.max(12, Math.ceil(total / 6) * 6);
+}
+
+function durationToSeconds(value) {
+  const match = String(value || "").match(/\d{1,3}/);
+  return match ? Number(match[0]) : 0;
+}
+
+async function loadProductImages(scriptJobId) {
+  if (!scriptJobId) return;
+  const data = await api(
+    `/api/product-images?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
+  );
+  state.productImageAssets = data.assets || [];
+  if (!state.productImageAssets.some((asset) => asset.id === state.selectedProductImageId)) {
+    state.selectedProductImageId = state.productImageAssets[0]?.id || "";
+  }
+  state.productImageAsset = currentProductImageAsset();
+  renderMediaPanel();
+}
+
+async function uploadProductImage(event) {
+  const files = Array.from(event.target.files || []);
+  if (!files.length || !state.currentResultJob) return;
+  setMessage("productImageMessage", `正在上传 ${files.length} 张产品图...`);
+  const uploaded = [];
+  try {
+    for (const [index, file] of files.entries()) {
+      const body = new FormData();
+      body.append("script_job_id", state.currentResultJob.id);
+      body.append("variant_index", String(state.activeVariantIndex));
+      body.append("file", file);
+      const data = await api("/api/product-images", { method: "POST", body });
+      if (data.asset) uploaded.push(data.asset);
+      setMessage("productImageMessage", `正在上传产品图 ${index + 1}/${files.length}...`);
+    }
+    if (uploaded.length) {
+      state.selectedProductImageId = uploaded[0].id;
+      await loadProductImages(state.currentResultJob.id);
+    }
+    setMessage("productImageMessage", `已上传 ${uploaded.length} 张产品图，当前方案已绑定。`, "ok");
+  } catch (error) {
+    setMessage("productImageMessage", error.message, "error");
+  } finally {
+    event.target.value = "";
+  }
 }
 
 function renderStoryboardCards(content) {
@@ -915,7 +1049,7 @@ function renderStoryboardCards(content) {
         movement,
         subtitle,
       });
-      state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, prompt });
+      state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, duration, prompt });
       const isGenerating = state.canvasGenerating.has(index);
       return `
         <article class="storyboard-card">
@@ -932,7 +1066,7 @@ function renderStoryboardCards(content) {
           </dl>
           <div class="storyboard-actions">
             <button class="storyboard-generate" type="button" data-shot-index="${index}" ${isGenerating ? "disabled" : ""}>
-              ${isGenerating ? "正在生成参考图..." : "生成静态分镜参考图"}
+              ${isGenerating ? "正在生成参考图..." : currentProductImageId() ? "结合产品图生成分镜图" : "生成静态分镜参考图"}
             </button>
           </div>
           ${renderCanvasJobForShot(index)}
@@ -1070,6 +1204,7 @@ async function submitCanvasImage(shotIndex) {
         variant_index: state.activeVariantIndex,
         shot_index: shotIndex,
         prompt: shot.prompt,
+        product_image_id: currentProductImageId(),
       }),
     });
     await loadCanvasJobs(job.id);
@@ -1089,6 +1224,34 @@ async function submitCanvasImage(shotIndex) {
   } finally {
     state.canvasGenerating.delete(shotIndex);
     rerenderStoryboardCards();
+  }
+}
+
+async function generateAllStoryboards() {
+  const job = state.currentResultJob;
+  if (!job || state.bulkCanvasGenerating) return;
+  const missing = (state.storyboardShots || [])
+    .map((_, index) => index)
+    .filter((index) => {
+      return !(state.canvasJobs || []).some((item) => {
+        return Number(item.shot_index) === index && Number(item.variant_index || 0) === Number(state.activeVariantIndex) && item.status === "succeeded";
+      });
+    });
+  if (!missing.length) {
+    setMessage("storyboardVideoMessage", "当前方案的分镜图已经生成。", "ok");
+    return;
+  }
+  state.bulkCanvasGenerating = true;
+  setMessage("storyboardVideoMessage", `正在生成 ${missing.length} 张分镜图...`);
+  try {
+    for (const index of missing) {
+      await submitCanvasImage(index);
+    }
+    setMessage("storyboardVideoMessage", "分镜图已生成。", "ok");
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  } finally {
+    state.bulkCanvasGenerating = false;
   }
 }
 
@@ -1295,6 +1458,87 @@ async function refreshVideoGeneration() {
   }
 }
 
+async function loadStoryboardVideoJobs(scriptJobId) {
+  if (!scriptJobId) return;
+  try {
+    const data = await api(
+      `/api/storyboard-video/jobs?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
+    );
+    state.storyboardVideoJobs = data.jobs || [];
+    if (typeof data.estimated_usd_per_second === "number" && $("storyboardVideoCost")) {
+      const seconds = estimateStoryboardVideoDuration();
+      $("storyboardVideoCost").textContent = seconds
+        ? `${seconds} 秒 · 约 $${(seconds * data.estimated_usd_per_second).toFixed(2)}`
+        : "等待分镜";
+    }
+    renderStoryboardVideoJobs(state.storyboardVideoJobs);
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  }
+}
+
+function renderStoryboardVideoJobs(jobs) {
+  const target = $("storyboardVideoJobs");
+  if (!target) return;
+  target.innerHTML =
+    (jobs || []).map((job) => {
+      const preview = job.preview_url
+        ? `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
+        : "";
+      const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
+      const summary = `${escapeHtml(job.model_id || "Nova Reel")} · ${escapeHtml(job.duration_seconds || "-")} 秒 · ${escapeHtml(job.shot_count || "-")} 镜头`;
+      return `
+        <article class="video-job">
+          <div class="job-head">
+            <span>${escapeHtml(job.variant_name || "整段视频")}</span>
+            <span>${escapeHtml(job.status || "")}</span>
+          </div>
+          <div class="message">${summary}</div>
+          ${failure}
+          ${preview}
+        </article>
+      `;
+    }).join("") || '<div class="empty-state"><strong>暂无整段视频任务</strong><span>上传产品图并确认分镜后，可提交 Nova Reel 多镜头视频。</span></div>';
+}
+
+async function submitStoryboardVideoGeneration() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  setMessage("storyboardVideoMessage", "正在提交整段视频任务...");
+  try {
+    await api("/api/storyboard-video/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        script_job_id: job.id,
+        variant_index: state.activeVariantIndex,
+        product_image_id: currentProductImageId(),
+      }),
+    });
+    setMessage("storyboardVideoMessage", "整段视频任务已提交，稍后点击刷新查看状态。", "ok");
+    await loadStoryboardVideoJobs(job.id);
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  }
+}
+
+async function refreshStoryboardVideoGeneration() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  setMessage("storyboardVideoMessage", "正在刷新整段视频状态...");
+  try {
+    const data = await api(
+      `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}`,
+      { method: "POST" }
+    );
+    state.storyboardVideoJobs = data.jobs || [];
+    renderStoryboardVideoJobs(state.storyboardVideoJobs);
+    setMessage("storyboardVideoMessage", "视频状态已刷新。", "ok");
+  } catch (error) {
+    setMessage("storyboardVideoMessage", error.message, "error");
+  }
+}
+
 function markdownToHtml(markdown) {
   const lines = String(markdown || "").split(/\r?\n/);
   const html = [];
@@ -1444,6 +1688,28 @@ $("downloadResult").addEventListener("click", async (event) => {
     setMessage("formMessage", error.message, "error");
   }
 });
+$("toggleMediaPanel").addEventListener("click", () => {
+  $("mediaPanel").classList.remove("hidden");
+  renderMediaPanel();
+  $("mediaPanel").scrollIntoView({ behavior: "smooth", block: "center" });
+});
+$("productImageInput").addEventListener("change", uploadProductImage);
+$("productImagePreviewWrap").addEventListener("click", (event) => {
+  const button = event.target.closest(".product-image-thumb");
+  if (!button) return;
+  state.selectedProductImageId = button.dataset.productImageId || "";
+  state.productImageAsset = currentProductImageAsset();
+  renderMediaPanel();
+  rerenderStoryboardCards();
+});
+$("productImagePreviewWrap").addEventListener("dblclick", (event) => {
+  const image = event.target.closest("[data-storyboard-preview]");
+  if (!image) return;
+  openStoryboardImagePreview(image);
+});
+$("generateAllStoryboards").addEventListener("click", generateAllStoryboards);
+$("submitStoryboardVideo").addEventListener("click", submitStoryboardVideoGeneration);
+$("refreshStoryboardVideo").addEventListener("click", refreshStoryboardVideoGeneration);
 $("resultTabs").addEventListener("click", async (event) => {
   const tab = event.target.closest(".result-tab");
   if (!tab || !state.renderedJobId) return;
