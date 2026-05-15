@@ -751,29 +751,33 @@ async function uploadFile(event) {
 }
 
 async function loadJobs() {
-  const data = await api("/api/jobs");
-  const jobs = filterJobs(data.jobs || []);
-  updateJobFilterButtons();
-  if (!jobs.length) {
-    $("jobs").innerHTML = '<div class="empty-state"><strong>暂无匹配任务</strong><span>可调整筛选条件，或提交新的脚本生成任务。</span></div>';
-    return;
+  try {
+    const data = await api("/api/jobs");
+    const jobs = filterJobs(data.jobs || []);
+    updateJobFilterButtons();
+    if (!jobs.length) {
+      $("jobs").innerHTML = '<div class="empty-state"><strong>暂无匹配任务</strong><span>可调整筛选条件，或提交新的脚本生成任务。</span></div>';
+      return;
+    }
+    const defaultVisible = 3;
+    const expanded = state.jobsExpanded || false;
+    const visible = expanded ? jobs : jobs.slice(0, defaultVisible);
+    let html = visible.map(renderJob).join("");
+    if (jobs.length > defaultVisible) {
+      const label = expanded ? "收起历史任务" : `展开全部（共 ${jobs.length} 条）`;
+      html += `<button class="jobs-toggle" type="button" id="toggleJobs">${escapeHtml(label)}</button>`;
+    }
+    $("jobs").innerHTML = html;
+    if (jobs.length > defaultVisible) {
+      $("toggleJobs").addEventListener("click", () => {
+        state.jobsExpanded = !state.jobsExpanded;
+        loadJobs();
+      });
+    }
+    await revealCompletedResult(jobs);
+  } catch (error) {
+    $("jobs").innerHTML = `<div class="empty-state"><strong>任务加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
   }
-  const defaultVisible = 3;
-  const expanded = state.jobsExpanded || false;
-  const visible = expanded ? jobs : jobs.slice(0, defaultVisible);
-  let html = visible.map(renderJob).join("");
-  if (jobs.length > defaultVisible) {
-    const label = expanded ? "收起历史任务" : `展开全部（共 ${jobs.length} 条）`;
-    html += `<button class="jobs-toggle" type="button" id="toggleJobs">${escapeHtml(label)}</button>`;
-  }
-  $("jobs").innerHTML = html;
-  if (jobs.length > defaultVisible) {
-    $("toggleJobs").addEventListener("click", () => {
-      state.jobsExpanded = !state.jobsExpanded;
-      loadJobs();
-    });
-  }
-  revealCompletedResult(jobs);
 }
 
 function filterJobs(jobs) {
@@ -826,12 +830,15 @@ function renderJob(job) {
   `;
 }
 
-function revealCompletedResult(jobs) {
-  const completed = (jobs || []).find((job) => {
-    if (job.status !== "succeeded" || !(job.variants || []).length) return false;
+async function revealCompletedResult(jobs) {
+  const completedSummary = (jobs || []).find((job) => {
+    if (job.status !== "succeeded" || !(job.has_variants || job.variant_count || (job.variants || []).length)) return false;
     return state.activeJobId ? job.id === state.activeJobId : true;
   });
-  if (!completed || completed.id === state.renderedJobId) return;
+  if (!completedSummary || completedSummary.id === state.renderedJobId) return;
+  const completed = (completedSummary.variants || []).length
+    ? completedSummary
+    : await api(`/api/jobs/${encodeURIComponent(completedSummary.id)}`);
   renderResult(completed);
 }
 

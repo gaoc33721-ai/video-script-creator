@@ -663,6 +663,24 @@ def _save_jobs(jobs):
     return _write_json(HTTP_JOBS_KEY, jobs[:100])
 
 
+def _public_job_summary(job: dict) -> dict:
+    variants = job.get("variants") or []
+    request = dict(job.get("request") or {})
+    return {
+        "id": job.get("id", ""),
+        "created_at": job.get("created_at", ""),
+        "updated_at": job.get("updated_at", ""),
+        "completed_at": job.get("completed_at", ""),
+        "status": job.get("status", ""),
+        "progress": job.get("progress", 0),
+        "current_step": job.get("current_step", ""),
+        "request": request,
+        "error_message": job.get("error_message", ""),
+        "variant_count": len(variants),
+        "has_variants": bool(variants),
+    }
+
+
 def _utc_now() -> str:
     return dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
@@ -4167,7 +4185,7 @@ def generate(req: GenerateRequest):
 
 @app.get("/api/jobs", dependencies=[Depends(_verify_access)])
 def jobs():
-    return {"jobs": _load_jobs()[:30]}
+    return {"jobs": [_public_job_summary(item) for item in _load_jobs()[:30]]}
 
 
 @app.get("/api/jobs/{job_id}", dependencies=[Depends(_verify_access)])
