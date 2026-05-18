@@ -1757,11 +1757,11 @@ function renderStoryboardCards(content) {
 
 function renderProtectedImage(imageUrl) {
   if (isExternalImageUrl(imageUrl)) {
-    return `<img class="storyboard-image" src="${escapeAttr(imageUrl)}" alt="Storyboard reference" loading="lazy" referrerpolicy="no-referrer" data-storyboard-preview="true" title="双击放大查看" />`;
+    return `<img class="storyboard-image" src="${escapeAttr(imageUrl)}" alt="Storyboard reference" loading="lazy" referrerpolicy="no-referrer" data-storyboard-preview="true" title="单击放大查看" />`;
   }
   const objectUrl = state.protectedObjectUrls.get(imageUrl);
   if (objectUrl) {
-    return `<img class="storyboard-image" src="${escapeAttr(objectUrl)}" alt="Storyboard reference" loading="lazy" data-storyboard-preview="true" title="双击放大查看" />`;
+    return `<img class="storyboard-image" src="${escapeAttr(objectUrl)}" alt="Storyboard reference" loading="lazy" data-storyboard-preview="true" title="单击放大查看" />`;
   }
   return `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(imageUrl)}">图片正在加载。</div>`;
 }
@@ -1794,7 +1794,7 @@ async function hydrateProtectedImages() {
         image.alt = "Storyboard reference";
         image.loading = "lazy";
         image.dataset.storyboardPreview = "true";
-        image.title = "双击放大查看";
+        image.title = "单击放大查看";
         node.replaceWith(image);
       } catch (error) {
         node.textContent = error.message || "图片加载失败。";
@@ -2361,14 +2361,14 @@ on("resultTabs", "click", async (event) => {
   renderResult(job, Number(tab.dataset.index || 0));
 });
 on("storyboardCards", "click", (event) => {
+  const image = event.target.closest("[data-storyboard-preview]");
+  if (image) {
+    openStoryboardImagePreview(image);
+    return;
+  }
   const button = event.target.closest(".storyboard-generate");
   if (!button) return;
   submitCanvasImage(Number(button.dataset.shotIndex || 0));
-});
-on("storyboardCards", "dblclick", (event) => {
-  const image = event.target.closest("[data-storyboard-preview]");
-  if (!image) return;
-  openStoryboardImagePreview(image);
 });
 if ($("imagePreviewModal")) {
   $("imagePreviewModal").addEventListener("click", (event) => {
