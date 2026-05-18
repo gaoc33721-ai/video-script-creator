@@ -29,6 +29,7 @@ class LiblibAIConfig:
     request_timeout_seconds: int = 30
     poll_timeout_seconds: int = 240
     poll_interval_seconds: float = 3.0
+    max_prompt_length: int = 1800
 
 
 class LiblibAIClient:
@@ -56,10 +57,11 @@ class LiblibAIClient:
         }
 
     def submit_text_to_image(self, prompt: str) -> str:
+        prompt_text = " ".join(str(prompt or "").split())[: self.config.max_prompt_length]
         payload = {
             "templateUuid": self.config.template_uuid,
             "generateParams": {
-                "prompt": str(prompt or "")[:4000],
+                "prompt": prompt_text,
                 "aspectRatio": self.config.aspect_ratio,
                 "imgCount": int(self.config.image_count),
                 "steps": int(self.config.steps),

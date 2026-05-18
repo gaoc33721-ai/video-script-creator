@@ -177,6 +177,7 @@ LIBLIBAI_IMAGE_COUNT = int(os.getenv("LIBLIBAI_IMAGE_COUNT", "1"))
 LIBLIBAI_REQUEST_TIMEOUT = int(os.getenv("LIBLIBAI_REQUEST_TIMEOUT", "30"))
 LIBLIBAI_POLL_TIMEOUT = int(os.getenv("LIBLIBAI_POLL_TIMEOUT", "240"))
 LIBLIBAI_POLL_INTERVAL = float(os.getenv("LIBLIBAI_POLL_INTERVAL", "3"))
+LIBLIBAI_MAX_PROMPT_LENGTH = int(os.getenv("LIBLIBAI_MAX_PROMPT_LENGTH", "1800"))
 _LIBLIBAI_ACCESS_KEY = os.getenv("LIBLIBAI_ACCESS_KEY", "")
 _LIBLIBAI_ACCESS_KEY_SECRET_ID = (
     os.getenv("LIBLIBAI_ACCESS_KEY_SECRET_ID")
@@ -2950,7 +2951,29 @@ def _liblibai_image_config() -> LiblibAIConfig:
         request_timeout_seconds=LIBLIBAI_REQUEST_TIMEOUT,
         poll_timeout_seconds=LIBLIBAI_POLL_TIMEOUT,
         poll_interval_seconds=LIBLIBAI_POLL_INTERVAL,
+        max_prompt_length=LIBLIBAI_MAX_PROMPT_LENGTH,
     )
+
+
+def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_index=0) -> str:
+    context = _storyboard_category_context(category, model, detection_text=raw_prompt)
+    action_constraints = _storyboard_action_constraints(raw_prompt)
+    detail = re.sub(r"\s+", " ", str(raw_prompt or "")).strip()
+    detail = re.sub(r"\bThe selected product must be the main subject.*$", "", detail).strip()
+    detail = detail[:700].strip()
+    lines = [
+        "Premium photorealistic 16:9 e-commerce storyboard still.",
+        f"Subject: {context['subject']}.",
+        f"Setting: {context['setting']}.",
+        f"Shot {int(shot_index) + 1}: follow this storyboard exactly.",
+        f"Required scene: {context['must']}",
+        f"Camera constraints: {action_constraints}" if action_constraints else "",
+        f"Storyboard details: {detail}" if detail else "",
+        "Commercial soft daylight, realistic product proportions, clean kitchen styling, product-focused composition.",
+        f"Negative: {context['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
+    ]
+    prompt = " ".join(line for line in lines if line)
+    return prompt[:LIBLIBAI_MAX_PROMPT_LENGTH].strip()
 
 
 def _start_liblibai_image(prompt, script_job_id, variant_index, shot_index):
@@ -5152,12 +5175,20 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     reference_image_bytes = None
     if product_asset:
         reference_image_bytes = STORAGE.read_file_bytes(product_asset.get("normalized_key", ""))
-    generation_prompt = _enhance_storyboard_image_prompt(
-        raw_prompt,
-        category=request_payload.get("category", ""),
-        model=request_payload.get("model", ""),
-        shot_index=req.shot_index,
-    )
+    if _image_provider_name() == "liblibai":
+        generation_prompt = _compact_liblibai_storyboard_prompt(
+            raw_prompt,
+            category=request_payload.get("category", ""),
+            model=request_payload.get("model", ""),
+            shot_index=req.shot_index,
+        )
+    else:
+        generation_prompt = _enhance_storyboard_image_prompt(
+            raw_prompt,
+            category=request_payload.get("category", ""),
+            model=request_payload.get("model", ""),
+            shot_index=req.shot_index,
+        )
     image_job = {
         "id": uuid.uuid4().hex[:12],
         "script_job_id": script_job.get("id"),
