@@ -174,10 +174,11 @@ LIBLIBAI_IMAGE_HEIGHT = int(os.getenv("LIBLIBAI_IMAGE_HEIGHT", "720"))
 LIBLIBAI_IMAGE_SIZE_ENABLED = os.getenv("LIBLIBAI_IMAGE_SIZE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 LIBLIBAI_IMAGE_STEPS = int(os.getenv("LIBLIBAI_IMAGE_STEPS", "20"))
 LIBLIBAI_IMAGE_COUNT = int(os.getenv("LIBLIBAI_IMAGE_COUNT", "1"))
-LIBLIBAI_REQUEST_TIMEOUT = int(os.getenv("LIBLIBAI_REQUEST_TIMEOUT", "30"))
+LIBLIBAI_REQUEST_TIMEOUT = int(os.getenv("LIBLIBAI_REQUEST_TIMEOUT", "90"))
 LIBLIBAI_POLL_TIMEOUT = int(os.getenv("LIBLIBAI_POLL_TIMEOUT", "240"))
 LIBLIBAI_POLL_INTERVAL = float(os.getenv("LIBLIBAI_POLL_INTERVAL", "3"))
 LIBLIBAI_MAX_PROMPT_LENGTH = int(os.getenv("LIBLIBAI_MAX_PROMPT_LENGTH", "1800"))
+LIBLIBAI_REFERENCE_CONTROL_TYPE = os.getenv("LIBLIBAI_REFERENCE_CONTROL_TYPE", "depth")
 _LIBLIBAI_ACCESS_KEY = os.getenv("LIBLIBAI_ACCESS_KEY", "")
 _LIBLIBAI_ACCESS_KEY_SECRET_ID = (
     os.getenv("LIBLIBAI_ACCESS_KEY_SECRET_ID")
@@ -2952,6 +2953,7 @@ def _liblibai_image_config() -> LiblibAIConfig:
         poll_timeout_seconds=LIBLIBAI_POLL_TIMEOUT,
         poll_interval_seconds=LIBLIBAI_POLL_INTERVAL,
         max_prompt_length=LIBLIBAI_MAX_PROMPT_LENGTH,
+        reference_control_type=LIBLIBAI_REFERENCE_CONTROL_TYPE,
     )
 
 
@@ -2969,6 +2971,7 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
         f"Required scene: {context['must']}",
         f"Camera constraints: {action_constraints}" if action_constraints else "",
         f"Storyboard details: {detail}" if detail else "",
+        "When a product reference image is supplied, preserve the same appliance geometry, visible controls, door layout, color family, and proportions.",
         "Commercial soft daylight, realistic product proportions, clean kitchen styling, product-focused composition.",
         f"Negative: {context['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
     ]
@@ -2976,9 +2979,15 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
     return prompt[:LIBLIBAI_MAX_PROMPT_LENGTH].strip()
 
 
-def _start_liblibai_image(prompt, script_job_id, variant_index, shot_index):
+def _start_liblibai_image(
+    prompt,
+    script_job_id,
+    variant_index,
+    shot_index,
+    reference_image_bytes: bytes | None = None,
+):
     client = LiblibAIClient(_liblibai_image_config())
-    image_bytes, metadata = client.generate_image(prompt)
+    image_bytes, metadata = client.generate_image(prompt, reference_image_bytes=reference_image_bytes)
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
     return image_key, image_uri, metadata
@@ -3102,7 +3111,13 @@ def _start_storyboard_image(
 ):
     if _image_provider_name() == "liblibai":
         try:
-            image_key, image_uri, metadata = _start_liblibai_image(prompt, script_job_id, variant_index, shot_index)
+            image_key, image_uri, metadata = _start_liblibai_image(
+                prompt,
+                script_job_id,
+                variant_index,
+                shot_index,
+                reference_image_bytes=reference_image_bytes,
+            )
             return image_key, image_uri, metadata.get("seed"), metadata
         except LiblibAIError:
             raise
@@ -5213,6 +5228,9 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "region": NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
         "external_job_id": "",
         "remote_image_url": "",
+        "reference_image_url": "",
+        "image_generation_mode": "reference-controlnet" if reference_image_bytes else "text-to-image",
+        "reference_control_type": LIBLIBAI_REFERENCE_CONTROL_TYPE if _image_provider_name() == "liblibai" and reference_image_bytes else "",
         "seed": None,
     }
     try:
@@ -5230,6 +5248,9 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         image_job["seed"] = seed
         image_job["external_job_id"] = str((provider_meta or {}).get("generate_uuid") or "")
         image_job["remote_image_url"] = str((provider_meta or {}).get("image_url") or "")
+        image_job["reference_image_url"] = str((provider_meta or {}).get("reference_image_url") or "")
+        image_job["image_generation_mode"] = str((provider_meta or {}).get("mode") or image_job["image_generation_mode"])
+        image_job["reference_control_type"] = str((provider_meta or {}).get("control_type") or image_job["reference_control_type"])
     except Exception as exc:
         image_job["status"] = "failed"
         image_job["failure_message"] = str(exc)

@@ -16,6 +16,8 @@ const state = {
   currentResultJob: null,
   videoJobs: [],
   canvasJobs: [],
+  canvasProvider: "",
+  canvasModelId: "",
   storyboardShots: [],
   canvasGenerating: new Set(),
   jobsExpanded: false,
@@ -1658,10 +1660,12 @@ function renderResult(job, variantIndex = 0) {
   $("resultBody").innerHTML = renderVariantContent(current);
   state.currentResultJob = job;
   state.canvasJobs = [];
+  state.canvasProvider = "";
+  state.canvasModelId = "";
   state.storyboardShots = [];
   rerenderStoryboardCards();
   loadCanvasJobs(job.id).catch((error) => {
-    console.warn("Failed to load Nova Canvas jobs", error);
+    console.warn("Failed to load storyboard image jobs", error);
   });
   renderVideoPanel(job);
   $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1737,7 +1741,7 @@ function renderStoryboardCards(content) {
           </div>
           ${renderCanvasJobForShot(index)}
           <details>
-            <summary>参考图 Prompt</summary>
+            <summary>生成 Prompt</summary>
             <p>${escapeHtml(prompt)}</p>
           </details>
         </article>
@@ -1818,12 +1822,31 @@ function closeStoryboardImagePreview() {
   document.body.classList.remove("preview-open");
 }
 
+function storyboardImageProviderLabel(modelId = "") {
+  const provider = String(state.canvasProvider || "").toLowerCase();
+  const model = String(modelId || state.canvasModelId || "").toLowerCase();
+  if (provider.includes("liblib") || model.includes("liblib")) return "LibLibAI";
+  if (modelId) return modelId;
+  if (state.canvasModelId) return state.canvasModelId;
+  return "分镜图服务";
+}
+
+function storyboardImageGeneratingMessage() {
+  const provider = storyboardImageProviderLabel();
+  if (provider === "LibLibAI") return "LibLibAI 正在生成分镜图，通常需要几十秒。";
+  return `${provider} 正在生成分镜图，通常需要几十秒。`;
+}
+
+function storyboardImageModelLabel(job = {}) {
+  return job.model_id || state.canvasModelId || storyboardImageProviderLabel();
+}
+
 function renderCanvasJobForShot(shotIndex) {
   if (state.canvasGenerating.has(shotIndex)) {
     return `
       <div class="storyboard-image-slot loading">
         ${renderTaskProgress(
-          { status: "running", progress: 45, current_step: "Nova Canvas 正在生成静态分镜参考图，通常需要几十秒。" },
+          { status: "running", progress: 45, current_step: storyboardImageGeneratingMessage() },
           { title: "参考图生成进度", activeOnly: false }
         )}
       </div>
@@ -1846,7 +1869,7 @@ function renderCanvasJobForShot(shotIndex) {
     <div class="storyboard-image-slot ready">
       ${image}
       <div class="storyboard-image-meta">
-        <span>${escapeHtml(job.model_id || "Nova Canvas")}</span>
+        <span>${escapeHtml(storyboardImageModelLabel(job))}</span>
         <span>${escapeHtml(formatDateTime(job.updated_at || job.created_at))}</span>
       </div>
     </div>
@@ -1859,6 +1882,8 @@ async function loadCanvasJobs(scriptJobId) {
     `/api/nova-canvas/jobs?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
   );
   state.canvasJobs = data.jobs || [];
+  state.canvasProvider = data.provider || "";
+  state.canvasModelId = data.model_id || "";
   rerenderStoryboardCards();
 }
 
