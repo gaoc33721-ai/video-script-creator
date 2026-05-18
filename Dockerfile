@@ -23,7 +23,7 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-COPY app.py api_app.py start_server.py healthcheck.py storage_adapters.py product_feature_store.py ./
+COPY app.py api_app.py start_server.py healthcheck.py storage_adapters.py product_feature_store.py liblibai_provider.py ./
 COPY fridge_assistant.py rainforest_competitor.py social_competitor.py ./
 COPY seed_competitor_assets.json ./
 COPY web_frontend ./web_frontend

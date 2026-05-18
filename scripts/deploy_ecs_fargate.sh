@@ -23,6 +23,25 @@ NOVA_CANVAS_AWS_REGION="${NOVA_CANVAS_AWS_REGION:-us-west-2}"
 NOVA_CANVAS_MODEL_ID="${NOVA_CANVAS_MODEL_ID:-stability.sd3-5-large-v1:0}"
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE="${NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE:-0.08}"
 NOVA_CANVAS_REFERENCE_STRENGTH="${NOVA_CANVAS_REFERENCE_STRENGTH:-0.9}"
+MEDIA_IMAGE_PROVIDER="${MEDIA_IMAGE_PROVIDER:-nova_canvas}"
+LIBLIBAI_BASE_URL="${LIBLIBAI_BASE_URL:-https://openapi.liblibai.cloud}"
+LIBLIBAI_TEMPLATE_UUID="${LIBLIBAI_TEMPLATE_UUID:-5d7e67009b344550bc1aa6ccbfa1d7f4}"
+LIBLIBAI_IMAGE_MODEL_LABEL="${LIBLIBAI_IMAGE_MODEL_LABEL:-liblibai:star-3-alpha}"
+LIBLIBAI_IMAGE_ASPECT_RATIO="${LIBLIBAI_IMAGE_ASPECT_RATIO:-landscape}"
+LIBLIBAI_IMAGE_WIDTH="${LIBLIBAI_IMAGE_WIDTH:-1280}"
+LIBLIBAI_IMAGE_HEIGHT="${LIBLIBAI_IMAGE_HEIGHT:-720}"
+LIBLIBAI_IMAGE_SIZE_ENABLED="${LIBLIBAI_IMAGE_SIZE_ENABLED:-false}"
+LIBLIBAI_IMAGE_STEPS="${LIBLIBAI_IMAGE_STEPS:-20}"
+LIBLIBAI_IMAGE_COUNT="${LIBLIBAI_IMAGE_COUNT:-1}"
+LIBLIBAI_REQUEST_TIMEOUT="${LIBLIBAI_REQUEST_TIMEOUT:-30}"
+LIBLIBAI_POLL_TIMEOUT="${LIBLIBAI_POLL_TIMEOUT:-240}"
+LIBLIBAI_POLL_INTERVAL="${LIBLIBAI_POLL_INTERVAL:-3}"
+LIBLIBAI_ACCESS_KEY="${LIBLIBAI_ACCESS_KEY:-}"
+LIBLIBAI_ACCESS_KEY_SECRET_NAME="${LIBLIBAI_ACCESS_KEY_SECRET_NAME:-${APP_NAME}/liblibai-access-key}"
+LIBLIBAI_ACCESS_KEY_SECRET_ARN="${LIBLIBAI_ACCESS_KEY_SECRET_ARN:-}"
+LIBLIBAI_SECRET_KEY="${LIBLIBAI_SECRET_KEY:-}"
+LIBLIBAI_SECRET_KEY_SECRET_NAME="${LIBLIBAI_SECRET_KEY_SECRET_NAME:-${APP_NAME}/liblibai-secret-key}"
+LIBLIBAI_SECRET_KEY_SECRET_ARN="${LIBLIBAI_SECRET_KEY_SECRET_ARN:-}"
 RAINFOREST_API_KEY="${RAINFOREST_API_KEY:-}"
 RAINFOREST_API_KEY_SECRET_NAME="${RAINFOREST_API_KEY_SECRET_NAME:-${APP_NAME}/rainforest-api-key}"
 RAINFOREST_API_KEY_SECRET_ARN="${RAINFOREST_API_KEY_SECRET_ARN:-}"
@@ -417,6 +436,72 @@ if [[ -z "$SOCIAL_OEMBED_ACCESS_TOKEN" && -z "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET
   fi
 fi
 
+if [[ -n "$LIBLIBAI_ACCESS_KEY" && -z "$LIBLIBAI_ACCESS_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBLIBAI_ACCESS_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$LIBLIBAI_ACCESS_KEY_SECRET_NAME" \
+      --secret-string "$LIBLIBAI_ACCESS_KEY" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$LIBLIBAI_ACCESS_KEY_SECRET_NAME" \
+      --secret-string "$LIBLIBAI_ACCESS_KEY" >/dev/null
+  fi
+  LIBLIBAI_ACCESS_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBLIBAI_ACCESS_KEY_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
+if [[ -z "$LIBLIBAI_ACCESS_KEY" && -z "$LIBLIBAI_ACCESS_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBLIBAI_ACCESS_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    LIBLIBAI_ACCESS_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$LIBLIBAI_ACCESS_KEY_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
+if [[ -n "$LIBLIBAI_SECRET_KEY" && -z "$LIBLIBAI_SECRET_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBLIBAI_SECRET_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$LIBLIBAI_SECRET_KEY_SECRET_NAME" \
+      --secret-string "$LIBLIBAI_SECRET_KEY" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$LIBLIBAI_SECRET_KEY_SECRET_NAME" \
+      --secret-string "$LIBLIBAI_SECRET_KEY" >/dev/null
+  fi
+  LIBLIBAI_SECRET_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBLIBAI_SECRET_KEY_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
+if [[ -z "$LIBLIBAI_SECRET_KEY" && -z "$LIBLIBAI_SECRET_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBLIBAI_SECRET_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    LIBLIBAI_SECRET_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$LIBLIBAI_SECRET_KEY_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
 if ! aws iam get-role --role-name "$TASK_ROLE" >/dev/null 2>&1; then
   aws iam create-role \
     --role-name "$TASK_ROLE" \
@@ -513,6 +598,12 @@ fi
 if [[ -n "$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN" ]]; then
   SECRET_ARNS+=("$SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN")
 fi
+if [[ -n "$LIBLIBAI_ACCESS_KEY_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$LIBLIBAI_ACCESS_KEY_SECRET_ARN")
+fi
+if [[ -n "$LIBLIBAI_SECRET_KEY_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$LIBLIBAI_SECRET_KEY_SECRET_ARN")
+fi
 
 if [[ ${#SECRET_ARNS[@]} -gt 0 ]]; then
   SECRET_POLICY_DOC="$(mktemp)"
@@ -559,6 +650,19 @@ env = [
     {"name": "NOVA_CANVAS_MODEL_ID", "value": "${NOVA_CANVAS_MODEL_ID}"},
     {"name": "NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "value": "${NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE}"},
     {"name": "NOVA_CANVAS_REFERENCE_STRENGTH", "value": "${NOVA_CANVAS_REFERENCE_STRENGTH}"},
+    {"name": "MEDIA_IMAGE_PROVIDER", "value": "${MEDIA_IMAGE_PROVIDER}"},
+    {"name": "LIBLIBAI_BASE_URL", "value": "${LIBLIBAI_BASE_URL}"},
+    {"name": "LIBLIBAI_TEMPLATE_UUID", "value": "${LIBLIBAI_TEMPLATE_UUID}"},
+    {"name": "LIBLIBAI_IMAGE_MODEL_LABEL", "value": "${LIBLIBAI_IMAGE_MODEL_LABEL}"},
+    {"name": "LIBLIBAI_IMAGE_ASPECT_RATIO", "value": "${LIBLIBAI_IMAGE_ASPECT_RATIO}"},
+    {"name": "LIBLIBAI_IMAGE_WIDTH", "value": "${LIBLIBAI_IMAGE_WIDTH}"},
+    {"name": "LIBLIBAI_IMAGE_HEIGHT", "value": "${LIBLIBAI_IMAGE_HEIGHT}"},
+    {"name": "LIBLIBAI_IMAGE_SIZE_ENABLED", "value": "${LIBLIBAI_IMAGE_SIZE_ENABLED}"},
+    {"name": "LIBLIBAI_IMAGE_STEPS", "value": "${LIBLIBAI_IMAGE_STEPS}"},
+    {"name": "LIBLIBAI_IMAGE_COUNT", "value": "${LIBLIBAI_IMAGE_COUNT}"},
+    {"name": "LIBLIBAI_REQUEST_TIMEOUT", "value": "${LIBLIBAI_REQUEST_TIMEOUT}"},
+    {"name": "LIBLIBAI_POLL_TIMEOUT", "value": "${LIBLIBAI_POLL_TIMEOUT}"},
+    {"name": "LIBLIBAI_POLL_INTERVAL", "value": "${LIBLIBAI_POLL_INTERVAL}"},
     {"name": "RAINFOREST_DEFAULT_AMAZON_DOMAIN", "value": "${RAINFOREST_DEFAULT_AMAZON_DOMAIN}"},
     {"name": "RAINFOREST_SEARCH_TOP_N", "value": "${RAINFOREST_SEARCH_TOP_N}"},
     {"name": "RAINFOREST_DISCOVERY_REQUEST_LIMIT", "value": "${RAINFOREST_DISCOVERY_REQUEST_LIMIT}"},
@@ -585,6 +689,10 @@ if "${YOUTUBE_API_KEY_SECRET_ARN}":
     env.append({"name": "YOUTUBE_API_KEY_SECRET_ID", "value": "${YOUTUBE_API_KEY_SECRET_ARN}"})
 if "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}":
     env.append({"name": "SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ID", "value": "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}"})
+if "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}":
+    env.append({"name": "LIBLIBAI_ACCESS_KEY_SECRET_ID", "value": "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}"})
+if "${LIBLIBAI_SECRET_KEY_SECRET_ARN}":
+    env.append({"name": "LIBLIBAI_SECRET_KEY_SECRET_ID", "value": "${LIBLIBAI_SECRET_KEY_SECRET_ARN}"})
 secrets = []
 if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
     secrets.append({"name": "APP_ACCESS_PASSWORD", "valueFrom": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})
@@ -596,6 +704,10 @@ if "${YOUTUBE_API_KEY_SECRET_ARN}":
     secrets.append({"name": "YOUTUBE_API_KEY", "valueFrom": "${YOUTUBE_API_KEY_SECRET_ARN}"})
 if "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}":
     secrets.append({"name": "SOCIAL_OEMBED_ACCESS_TOKEN", "valueFrom": "${SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ARN}"})
+if "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}":
+    secrets.append({"name": "LIBLIBAI_ACCESS_KEY", "valueFrom": "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}"})
+if "${LIBLIBAI_SECRET_KEY_SECRET_ARN}":
+    secrets.append({"name": "LIBLIBAI_SECRET_KEY", "valueFrom": "${LIBLIBAI_SECRET_KEY_SECRET_ARN}"})
 
 doc = {
     "family": "${TASK_FAMILY}",

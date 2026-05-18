@@ -46,6 +46,7 @@ from social_competitor import (
     refresh_social_thumbnail,
 )
 from storage_adapters import RuntimeStorage
+from liblibai_provider import LiblibAIClient, LiblibAIConfig, LiblibAIError
 
 
 APP_DATA_DIR = os.getenv("APP_DATA_DIR", ".")
@@ -163,6 +164,33 @@ NOVA_CANVAS_REFERENCE_STRENGTH = max(
     0.0,
     min(1.0, float(os.getenv("NOVA_CANVAS_REFERENCE_STRENGTH", "0.9"))),
 )
+MEDIA_IMAGE_PROVIDER = os.getenv("MEDIA_IMAGE_PROVIDER", os.getenv("IMAGE_GENERATION_PROVIDER", "nova_canvas")).strip().lower()
+LIBLIBAI_BASE_URL = os.getenv("LIBLIBAI_BASE_URL", "https://openapi.liblibai.cloud")
+LIBLIBAI_TEMPLATE_UUID = os.getenv("LIBLIBAI_TEMPLATE_UUID", "5d7e67009b344550bc1aa6ccbfa1d7f4")
+LIBLIBAI_IMAGE_MODEL_LABEL = os.getenv("LIBLIBAI_IMAGE_MODEL_LABEL", "liblibai:star-3-alpha")
+LIBLIBAI_IMAGE_ASPECT_RATIO = os.getenv("LIBLIBAI_IMAGE_ASPECT_RATIO", "landscape")
+LIBLIBAI_IMAGE_WIDTH = int(os.getenv("LIBLIBAI_IMAGE_WIDTH", "1280"))
+LIBLIBAI_IMAGE_HEIGHT = int(os.getenv("LIBLIBAI_IMAGE_HEIGHT", "720"))
+LIBLIBAI_IMAGE_SIZE_ENABLED = os.getenv("LIBLIBAI_IMAGE_SIZE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+LIBLIBAI_IMAGE_STEPS = int(os.getenv("LIBLIBAI_IMAGE_STEPS", "20"))
+LIBLIBAI_IMAGE_COUNT = int(os.getenv("LIBLIBAI_IMAGE_COUNT", "1"))
+LIBLIBAI_REQUEST_TIMEOUT = int(os.getenv("LIBLIBAI_REQUEST_TIMEOUT", "30"))
+LIBLIBAI_POLL_TIMEOUT = int(os.getenv("LIBLIBAI_POLL_TIMEOUT", "240"))
+LIBLIBAI_POLL_INTERVAL = float(os.getenv("LIBLIBAI_POLL_INTERVAL", "3"))
+_LIBLIBAI_ACCESS_KEY = os.getenv("LIBLIBAI_ACCESS_KEY", "")
+_LIBLIBAI_ACCESS_KEY_SECRET_ID = (
+    os.getenv("LIBLIBAI_ACCESS_KEY_SECRET_ID")
+    or os.getenv("LIBLIBAI_ACCESS_KEY_SECRET_ARN")
+    or os.getenv("LIBLIBAI_ACCESS_KEY_SECRET_NAME")
+)
+_LIBLIBAI_SECRET_KEY = os.getenv("LIBLIBAI_SECRET_KEY", "")
+_LIBLIBAI_SECRET_KEY_SECRET_ID = (
+    os.getenv("LIBLIBAI_SECRET_KEY_SECRET_ID")
+    or os.getenv("LIBLIBAI_SECRET_KEY_SECRET_ARN")
+    or os.getenv("LIBLIBAI_SECRET_KEY_SECRET_NAME")
+)
+_liblibai_access_key_cache = {"value": _LIBLIBAI_ACCESS_KEY, "expires_at": 0.0}
+_liblibai_secret_key_cache = {"value": _LIBLIBAI_SECRET_KEY, "expires_at": 0.0}
 RAINFOREST_DEFAULT_AMAZON_DOMAIN = os.getenv("RAINFOREST_DEFAULT_AMAZON_DOMAIN", "amazon.com")
 RAINFOREST_SEARCH_TOP_N = int(os.getenv("RAINFOREST_SEARCH_TOP_N", "8"))
 RAINFOREST_DISCOVERY_REQUEST_LIMIT = int(os.getenv("RAINFOREST_DISCOVERY_REQUEST_LIMIT", "6"))
@@ -258,6 +286,12 @@ def _extract_secret_password(secret_value: str) -> str:
                 "SOCIAL_OEMBED_ACCESS_TOKEN",
                 "api_key",
                 "access_token",
+                "access_key",
+                "secret_key",
+                "AccessKey",
+                "SecretKey",
+                "LIBLIBAI_ACCESS_KEY",
+                "LIBLIBAI_SECRET_KEY",
                 "token",
                 "value",
             ):
@@ -337,6 +371,22 @@ def _current_social_oembed_token() -> str:
         _SOCIAL_OEMBED_ACCESS_TOKEN,
         _SOCIAL_OEMBED_ACCESS_TOKEN_SECRET_ID,
         _social_oembed_token_cache,
+    )
+
+
+def _current_liblibai_access_key() -> str:
+    return _current_external_secret(
+        _LIBLIBAI_ACCESS_KEY,
+        _LIBLIBAI_ACCESS_KEY_SECRET_ID,
+        _liblibai_access_key_cache,
+    )
+
+
+def _current_liblibai_secret_key() -> str:
+    return _current_external_secret(
+        _LIBLIBAI_SECRET_KEY,
+        _LIBLIBAI_SECRET_KEY_SECRET_ID,
+        _liblibai_secret_key_cache,
     )
 
 
@@ -2868,6 +2918,49 @@ def _decode_bedrock_image_payload(payload):
     return None
 
 
+def _image_provider_name() -> str:
+    provider = str(MEDIA_IMAGE_PROVIDER or "nova_canvas").strip().lower().replace("-", "_")
+    if provider in {"liblib", "liblibai", "liblibai_star3", "star3"}:
+        return "liblibai"
+    return "nova_canvas"
+
+
+def _image_provider_model_id() -> str:
+    if _image_provider_name() == "liblibai":
+        return LIBLIBAI_IMAGE_MODEL_LABEL
+    return NOVA_CANVAS_MODEL_ID
+
+
+def _liblibai_image_config() -> LiblibAIConfig:
+    access_key = _current_liblibai_access_key()
+    secret_key = _current_liblibai_secret_key()
+    if not access_key or not secret_key:
+        raise RuntimeError("LIBLIBAI_ACCESS_KEY / LIBLIBAI_SECRET_KEY is not configured.")
+    return LiblibAIConfig(
+        access_key=access_key,
+        secret_key=secret_key,
+        base_url=LIBLIBAI_BASE_URL,
+        template_uuid=LIBLIBAI_TEMPLATE_UUID,
+        aspect_ratio=LIBLIBAI_IMAGE_ASPECT_RATIO,
+        width=LIBLIBAI_IMAGE_WIDTH,
+        height=LIBLIBAI_IMAGE_HEIGHT,
+        include_image_size=LIBLIBAI_IMAGE_SIZE_ENABLED,
+        steps=LIBLIBAI_IMAGE_STEPS,
+        image_count=LIBLIBAI_IMAGE_COUNT,
+        request_timeout_seconds=LIBLIBAI_REQUEST_TIMEOUT,
+        poll_timeout_seconds=LIBLIBAI_POLL_TIMEOUT,
+        poll_interval_seconds=LIBLIBAI_POLL_INTERVAL,
+    )
+
+
+def _start_liblibai_image(prompt, script_job_id, variant_index, shot_index):
+    client = LiblibAIClient(_liblibai_image_config())
+    image_bytes, metadata = client.generate_image(prompt)
+    image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
+    image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
+    return image_key, image_uri, metadata
+
+
 def _start_nova_canvas_image(
     prompt,
     script_job_id,
@@ -2973,6 +3066,33 @@ def _start_nova_canvas_image(
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
     return image_key, image_uri, seed
+
+
+def _start_storyboard_image(
+    prompt,
+    script_job_id,
+    variant_index,
+    shot_index,
+    category="",
+    model="",
+    reference_image_bytes: bytes | None = None,
+):
+    if _image_provider_name() == "liblibai":
+        try:
+            image_key, image_uri, metadata = _start_liblibai_image(prompt, script_job_id, variant_index, shot_index)
+            return image_key, image_uri, metadata.get("seed"), metadata
+        except LiblibAIError:
+            raise
+    image_key, image_uri, seed = _start_nova_canvas_image(
+        prompt,
+        script_job_id,
+        variant_index,
+        shot_index,
+        category=category,
+        model=model,
+        reference_image_bytes=reference_image_bytes,
+    )
+    return image_key, image_uri, seed, {}
 
 
 def _safe_ascii_slug(text):
@@ -5004,8 +5124,9 @@ def nova_canvas_jobs(script_job_id: str = "", variant_index: int = -1):
         jobs = [item for item in jobs if int(item.get("variant_index", -1)) == int(variant_index)]
     return {
         "jobs": [_public_nova_canvas_job(item) for item in jobs[:80]],
-        "model_id": NOVA_CANVAS_MODEL_ID,
-        "region": NOVA_CANVAS_AWS_REGION,
+        "provider": _image_provider_name(),
+        "model_id": _image_provider_model_id(),
+        "region": NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
         "estimated_usd_per_image": NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE,
     }
 
@@ -5056,12 +5177,15 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "failure_message": "",
         "image_key": "",
         "image_uri": "",
-        "model_id": NOVA_CANVAS_MODEL_ID,
-        "region": NOVA_CANVAS_AWS_REGION,
+        "provider": _image_provider_name(),
+        "model_id": _image_provider_model_id(),
+        "region": NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
+        "external_job_id": "",
+        "remote_image_url": "",
         "seed": None,
     }
     try:
-        image_key, image_uri, seed = _start_nova_canvas_image(
+        image_key, image_uri, seed, provider_meta = _start_storyboard_image(
             generation_prompt,
             req.script_job_id,
             req.variant_index,
@@ -5073,6 +5197,8 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         image_job["image_key"] = image_key
         image_job["image_uri"] = image_uri
         image_job["seed"] = seed
+        image_job["external_job_id"] = str((provider_meta or {}).get("generate_uuid") or "")
+        image_job["remote_image_url"] = str((provider_meta or {}).get("image_url") or "")
     except Exception as exc:
         image_job["status"] = "failed"
         image_job["failure_message"] = str(exc)

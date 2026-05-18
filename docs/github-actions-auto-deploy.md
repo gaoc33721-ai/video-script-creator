@@ -57,6 +57,8 @@ https://videoscript.hisense.com/admin/
 | `NOVA_REEL_MODEL_ID` | `amazon.nova-reel-v1:1` |
 | `NOVA_REEL_OUTPUT_S3_URI` | `s3://video-script-creator-prod-assets-625093290485/runtime/nova-reel-poc` |
 | `NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK` | `2` |
+| `MEDIA_IMAGE_PROVIDER` | `liblibai` |
+| `LIBLIBAI_IMAGE_STEPS` | `20` |
 
 脚本生成模型配置已在 `.github/workflows/deploy-ecs.yml` 中固定为 Claude Sonnet 4.5 + Nova Pro fallback，避免旧仓库变量覆盖业务测试环境。其他项如果不配置 Variables，工作流会使用 workflow 中的默认值。
 
