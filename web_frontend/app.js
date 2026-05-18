@@ -19,6 +19,7 @@ const state = {
   canvasJobs: [],
   canvasProvider: "",
   canvasModelId: "",
+  canvasPollTimer: null,
   storyboardShots: [],
   canvasGenerating: new Set(),
   bulkCanvasGenerating: false,
@@ -854,6 +855,10 @@ function hideResults() {
   if ($("videoMessage")) $("videoMessage").textContent = "";
   if ($("storyboardVideoJobs")) $("storyboardVideoJobs").innerHTML = "";
   if ($("storyboardVideoMessage")) $("storyboardVideoMessage").textContent = "";
+  if (state.canvasPollTimer) {
+    clearTimeout(state.canvasPollTimer);
+    state.canvasPollTimer = null;
+  }
   state.productImageAssets = [];
   state.selectedProductImageId = "";
   state.productImageAsset = null;
@@ -1054,7 +1059,7 @@ function renderStoryboardCards(content) {
         subtitle,
       });
       state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, duration, prompt });
-      const isGenerating = state.canvasGenerating.has(index);
+      const isGenerating = state.canvasGenerating.has(index) || hasActiveCanvasJobForShot(index);
       return `
         <article class="storyboard-card">
           <div class="storyboard-meta">
@@ -1179,15 +1184,32 @@ function storyboardImageModelLabel(job = {}) {
   return job.model_id || state.canvasModelId || storyboardImageProviderLabel();
 }
 
+function isActiveCanvasJob(job = {}) {
+  return ["pending", "queued", "running", "inprogress", "submitted"].includes(String(job.status || "").toLowerCase());
+}
+
+function canvasJobForShot(shotIndex) {
+  return (state.canvasJobs || []).find((item) => {
+    return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
+  });
+}
+
+function hasActiveCanvasJobForShot(shotIndex) {
+  return isActiveCanvasJob(canvasJobForShot(shotIndex));
+}
+
 function renderCanvasJobForShot(shotIndex) {
   if (state.canvasGenerating.has(shotIndex)) {
     return `<div class="storyboard-image-slot loading">${escapeHtml(storyboardImageGeneratingMessage())}</div>`;
   }
-  const job = (state.canvasJobs || []).find((item) => {
-    return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
-  });
+  const job = canvasJobForShot(shotIndex);
   if (!job) {
     return '<div class="storyboard-image-slot empty">生成后会在这里显示 16:9 静态分镜图。</div>';
+  }
+  if (isActiveCanvasJob(job)) {
+    const attempt = Number(job.attempt || 0);
+    const suffix = attempt > 1 ? `（第 ${attempt} 次尝试）` : "";
+    return `<div class="storyboard-image-slot loading">${escapeHtml(`${storyboardImageGeneratingMessage()}${suffix}`)}</div>`;
   }
   if (job.status === "failed") {
     return `<div class="storyboard-image-slot error">${escapeHtml(job.failure_message || "参考图生成失败")}</div>`;
@@ -1216,11 +1238,46 @@ async function loadCanvasJobs(scriptJobId) {
   state.canvasProvider = data.provider || "";
   state.canvasModelId = data.model_id || "";
   rerenderStoryboardCards();
+  scheduleCanvasJobsPoll();
 }
 
-async function submitCanvasImage(shotIndex) {
+function scheduleCanvasJobsPoll() {
+  if (state.canvasPollTimer) {
+    clearTimeout(state.canvasPollTimer);
+    state.canvasPollTimer = null;
+  }
+  const job = state.currentResultJob;
+  const hasActiveJobs = (state.canvasJobs || []).some((item) => {
+    return Number(item.variant_index || 0) === Number(state.activeVariantIndex) && isActiveCanvasJob(item);
+  });
+  if (!job || !hasActiveJobs) return;
+  state.canvasPollTimer = setTimeout(() => {
+    loadCanvasJobs(job.id).catch((error) => {
+      console.warn("Failed to poll storyboard image jobs", error);
+    });
+  }, 3500);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCanvasJob(shotIndex, timeoutMs = 420000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await sleep(3500);
+    if (!state.currentResultJob) return null;
+    await loadCanvasJobs(state.currentResultJob.id);
+    const job = canvasJobForShot(shotIndex);
+    if (job && !isActiveCanvasJob(job)) return job;
+  }
+  throw new Error("参考图已提交后台生成，请稍后刷新状态。");
+}
+
+async function submitCanvasImage(shotIndex, options = {}) {
   const job = state.currentResultJob;
   const shot = state.storyboardShots[shotIndex];
+  const waitForCompletion = options.waitForCompletion !== false;
   if (!job || !shot) return;
   state.canvasGenerating.add(shotIndex);
   rerenderStoryboardCards();
@@ -1237,7 +1294,14 @@ async function submitCanvasImage(shotIndex) {
       }),
     });
     await loadCanvasJobs(job.id);
+    if (waitForCompletion) {
+      await waitForCanvasJob(shotIndex);
+    }
   } catch (error) {
+    if (String(error.message || "").includes("已提交后台")) {
+      await loadCanvasJobs(job.id).catch(() => {});
+      return;
+    }
     state.canvasJobs = [
       {
         id: `failed-${Date.now()}`,
@@ -1245,7 +1309,7 @@ async function submitCanvasImage(shotIndex) {
         variant_index: state.activeVariantIndex,
         shot_index: shotIndex,
         status: "failed",
-        failure_message: error.message,
+        failure_message: error.message || "参考图生成失败",
         created_at: new Date().toISOString(),
       },
       ...(state.canvasJobs || []),
@@ -1263,10 +1327,14 @@ async function generateAllStoryboards() {
     .map((_, index) => index)
     .filter((index) => {
       return !(state.canvasJobs || []).some((item) => {
-        return Number(item.shot_index) === index && Number(item.variant_index || 0) === Number(state.activeVariantIndex) && item.status === "succeeded";
+        return Number(item.shot_index) === index && Number(item.variant_index || 0) === Number(state.activeVariantIndex) && (item.status === "succeeded" || isActiveCanvasJob(item));
       });
     });
   if (!missing.length) {
+    if ((state.canvasJobs || []).some((item) => Number(item.variant_index || 0) === Number(state.activeVariantIndex) && isActiveCanvasJob(item))) {
+      setMessage("storyboardVideoMessage", "分镜图正在后台生成，请稍后刷新状态。", "ok");
+      return;
+    }
     setMessage("storyboardVideoMessage", "当前方案的分镜图已经生成。", "ok");
     return;
   }
@@ -1274,9 +1342,9 @@ async function generateAllStoryboards() {
   setMessage("storyboardVideoMessage", `正在生成 ${missing.length} 张分镜图...`);
   try {
     for (const index of missing) {
-      await submitCanvasImage(index);
+      await submitCanvasImage(index, { waitForCompletion: false });
     }
-    setMessage("storyboardVideoMessage", "分镜图已生成。", "ok");
+    setMessage("storyboardVideoMessage", `已提交 ${missing.length} 张分镜图到后台队列，将按顺序生成。`, "ok");
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
   } finally {

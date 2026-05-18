@@ -20,6 +20,7 @@ class LiblibAIConfig:
     secret_key: str
     base_url: str = "https://openapi.liblibai.cloud"
     template_uuid: str = "5d7e67009b344550bc1aa6ccbfa1d7f4"
+    img2img_template_uuid: str = "07e00af4fc464c7ab55ff906f8acf1b7"
     aspect_ratio: str = "landscape"
     width: int = 1280
     height: int = 720
@@ -31,6 +32,8 @@ class LiblibAIConfig:
     poll_interval_seconds: float = 3.0
     max_prompt_length: int = 1800
     reference_control_type: str = "depth"
+    reference_mode: str = "img2img"
+    fallback_to_controlnet: bool = True
 
 
 class LiblibAIClient:
@@ -44,10 +47,22 @@ class LiblibAIClient:
 
     def generate_image(self, prompt: str, reference_image_bytes: bytes | None = None) -> tuple[bytes, dict[str, Any]]:
         reference_image_url = ""
+        fallback_error = ""
         if reference_image_bytes:
             reference_image_url = self.upload_image(reference_image_bytes)
-            generate_uuid = self.submit_reference_to_image(prompt, reference_image_url)
-            mode = "reference-controlnet"
+            if self.config.reference_mode.lower() in {"img2img", "image_to_image", "image-to-image"}:
+                try:
+                    generate_uuid = self.submit_image_to_image(prompt, reference_image_url)
+                    mode = "image-to-image"
+                except LiblibAIError as exc:
+                    if not self.config.fallback_to_controlnet:
+                        raise
+                    fallback_error = str(exc)
+                    generate_uuid = self.submit_reference_to_image(prompt, reference_image_url)
+                    mode = "reference-controlnet"
+            else:
+                generate_uuid = self.submit_reference_to_image(prompt, reference_image_url)
+                mode = "reference-controlnet"
         else:
             generate_uuid = self.submit_text_to_image(prompt)
             mode = "text-to-image"
@@ -63,6 +78,7 @@ class LiblibAIClient:
             "reference_image_url": reference_image_url,
             "mode": mode,
             "control_type": self.config.reference_control_type if reference_image_url else "",
+            "fallback_error": fallback_error,
             "seed": image_info.get("seed") or status_payload.get("seed"),
             "raw_status": self._compact_status_payload(status_payload),
         }
@@ -83,6 +99,27 @@ class LiblibAIClient:
             "controlImage": control_image_url,
         }
         body = self._post("/api/generate/webui/text2img/ultra", payload)
+        data = body.get("data") if isinstance(body.get("data"), dict) else {}
+        generate_uuid = data.get("generateUuid") or data.get("generate_uuid") or body.get("generateUuid")
+        if not generate_uuid:
+            raise LiblibAIError(f"LibLibAI did not return generateUuid: {body}")
+        return str(generate_uuid)
+
+    def submit_image_to_image(self, prompt: str, source_image_url: str) -> str:
+        prompt_text = " ".join(str(prompt or "").split())[: self.config.max_prompt_length]
+        payload = {
+            "templateUuid": self.config.img2img_template_uuid,
+            "generateParams": {
+                "prompt": prompt_text,
+                "imgCount": int(self.config.image_count),
+                "sourceImage": source_image_url,
+                "controlnet": {
+                    "controlType": self.config.reference_control_type,
+                    "controlImage": source_image_url,
+                },
+            },
+        }
+        body = self._post("/api/generate/webui/img2img/ultra", payload)
         data = body.get("data") if isinstance(body.get("data"), dict) else {}
         generate_uuid = data.get("generateUuid") or data.get("generate_uuid") or body.get("generateUuid")
         if not generate_uuid:

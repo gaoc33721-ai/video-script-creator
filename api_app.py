@@ -167,6 +167,7 @@ NOVA_CANVAS_REFERENCE_STRENGTH = max(
 MEDIA_IMAGE_PROVIDER = os.getenv("MEDIA_IMAGE_PROVIDER", os.getenv("IMAGE_GENERATION_PROVIDER", "nova_canvas")).strip().lower()
 LIBLIBAI_BASE_URL = os.getenv("LIBLIBAI_BASE_URL", "https://openapi.liblibai.cloud")
 LIBLIBAI_TEMPLATE_UUID = os.getenv("LIBLIBAI_TEMPLATE_UUID", "5d7e67009b344550bc1aa6ccbfa1d7f4")
+LIBLIBAI_IMG2IMG_TEMPLATE_UUID = os.getenv("LIBLIBAI_IMG2IMG_TEMPLATE_UUID", "07e00af4fc464c7ab55ff906f8acf1b7")
 LIBLIBAI_IMAGE_MODEL_LABEL = os.getenv("LIBLIBAI_IMAGE_MODEL_LABEL", "liblibai:star-3-alpha")
 LIBLIBAI_IMAGE_ASPECT_RATIO = os.getenv("LIBLIBAI_IMAGE_ASPECT_RATIO", "landscape")
 LIBLIBAI_IMAGE_WIDTH = int(os.getenv("LIBLIBAI_IMAGE_WIDTH", "1280"))
@@ -179,6 +180,11 @@ LIBLIBAI_POLL_TIMEOUT = int(os.getenv("LIBLIBAI_POLL_TIMEOUT", "240"))
 LIBLIBAI_POLL_INTERVAL = float(os.getenv("LIBLIBAI_POLL_INTERVAL", "3"))
 LIBLIBAI_MAX_PROMPT_LENGTH = int(os.getenv("LIBLIBAI_MAX_PROMPT_LENGTH", "1800"))
 LIBLIBAI_REFERENCE_CONTROL_TYPE = os.getenv("LIBLIBAI_REFERENCE_CONTROL_TYPE", "depth")
+LIBLIBAI_REFERENCE_MODE = os.getenv("LIBLIBAI_REFERENCE_MODE", "img2img")
+LIBLIBAI_FALLBACK_TO_CONTROLNET = os.getenv("LIBLIBAI_FALLBACK_TO_CONTROLNET", "true").strip().lower() in {"1", "true", "yes", "on"}
+STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")))
+STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
+STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
 _LIBLIBAI_ACCESS_KEY = os.getenv("LIBLIBAI_ACCESS_KEY", "")
 _LIBLIBAI_ACCESS_KEY_SECRET_ID = (
     os.getenv("LIBLIBAI_ACCESS_KEY_SECRET_ID")
@@ -429,6 +435,10 @@ MAX_PRODUCT_IMAGE_BYTES = 12 * 1024 * 1024  # 12 MB
 
 job_lock = threading.Lock()
 competitor_lock = threading.Lock()
+storyboard_image_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=STORYBOARD_IMAGE_WORKERS,
+    thread_name_prefix="storyboard-image",
+)
 
 static_dir = os.path.join(os.path.dirname(__file__), "web_frontend")
 if os.path.isdir(static_dir):
@@ -2472,6 +2482,61 @@ def _save_nova_canvas_jobs(jobs):
     return _write_json(NOVA_CANVAS_JOBS_KEY, jobs[:500])
 
 
+def _utc_now_iso() -> str:
+    return dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _update_nova_canvas_job(job_id: str, **changes):
+    with job_lock:
+        jobs = _load_nova_canvas_jobs()
+        updated = None
+        for index, item in enumerate(jobs):
+            if item.get("id") == job_id:
+                next_item = dict(item)
+                next_item.update(changes)
+                next_item["updated_at"] = changes.get("updated_at") or _utc_now_iso()
+                jobs[index] = next_item
+                updated = next_item
+                break
+        if updated:
+            _save_nova_canvas_jobs(jobs)
+        return updated
+
+
+def _is_transient_storyboard_image_error(message: str) -> bool:
+    raw = str(message or "").lower()
+    return any(
+        token in raw
+        for token in (
+            "429",
+            "100054",
+            "too many",
+            "rate",
+            "limit",
+            "timeout",
+            "timed out",
+            "temporarily",
+            "gateway",
+            "read timed out",
+            "request failed",
+        )
+    )
+
+
+def _is_active_storyboard_image_status(status: str) -> bool:
+    return str(status or "").lower() in {"pending", "queued", "running", "inprogress", "submitted"}
+
+
+def _friendly_storyboard_image_error(message: str) -> str:
+    raw = str(message or "")
+    lowered = raw.lower()
+    if "429" in lowered or "100054" in lowered or "rate" in lowered or "limit" in lowered:
+        return "LibLibAI 生成服务繁忙或达到频率限制，系统已自动重试但仍未成功。请稍后重新生成该镜头。"
+    if "timeout" in lowered or "timed out" in lowered or "gateway" in lowered:
+        return "LibLibAI 生成耗时过长，系统已转入后台队列并重试后仍未成功。请稍后重新生成该镜头。"
+    return raw or "参考图生成失败。"
+
+
 def _load_product_image_assets():
     data = _read_json(PRODUCT_IMAGE_ASSETS_KEY, [])
     return data if isinstance(data, list) else []
@@ -2943,6 +3008,7 @@ def _liblibai_image_config() -> LiblibAIConfig:
         secret_key=secret_key,
         base_url=LIBLIBAI_BASE_URL,
         template_uuid=LIBLIBAI_TEMPLATE_UUID,
+        img2img_template_uuid=LIBLIBAI_IMG2IMG_TEMPLATE_UUID,
         aspect_ratio=LIBLIBAI_IMAGE_ASPECT_RATIO,
         width=LIBLIBAI_IMAGE_WIDTH,
         height=LIBLIBAI_IMAGE_HEIGHT,
@@ -2954,6 +3020,8 @@ def _liblibai_image_config() -> LiblibAIConfig:
         poll_interval_seconds=LIBLIBAI_POLL_INTERVAL,
         max_prompt_length=LIBLIBAI_MAX_PROMPT_LENGTH,
         reference_control_type=LIBLIBAI_REFERENCE_CONTROL_TYPE,
+        reference_mode=LIBLIBAI_REFERENCE_MODE,
+        fallback_to_controlnet=LIBLIBAI_FALLBACK_TO_CONTROLNET,
     )
 
 
@@ -2971,7 +3039,8 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
         f"Required scene: {context['must']}",
         f"Camera constraints: {action_constraints}" if action_constraints else "",
         f"Storyboard details: {detail}" if detail else "",
-        "When a product reference image is supplied, preserve the same appliance geometry, visible controls, door layout, color family, and proportions.",
+        "When a product reference image is supplied, use it as the exact appliance identity: preserve body color, finish, door outline, handle/control-panel placement, visible buttons, cavity shape, logo position, and proportions.",
+        "Do not change a black appliance into white or silver; do not replace the referenced product with a different appliance design.",
         "Commercial soft daylight, realistic product proportions, clean kitchen styling, product-focused composition.",
         f"Negative: {context['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
     ]
@@ -3131,6 +3200,70 @@ def _start_storyboard_image(
         reference_image_bytes=reference_image_bytes,
     )
     return image_key, image_uri, seed, {}
+
+
+def _run_storyboard_image_job(
+    image_job_id: str,
+    generation_prompt: str,
+    script_job_id: str,
+    variant_index: int,
+    shot_index: int,
+    category: str = "",
+    model: str = "",
+    reference_image_bytes: bytes | None = None,
+):
+    attempts = STORYBOARD_IMAGE_RETRY_COUNT + 1
+    last_error = ""
+    for attempt in range(attempts):
+        _update_nova_canvas_job(
+            image_job_id,
+            status="running",
+            failure_message="" if attempt == 0 else "第三方生成服务繁忙，正在自动重试...",
+            attempt=attempt + 1,
+        )
+        try:
+            image_key, image_uri, seed, provider_meta = _start_storyboard_image(
+                generation_prompt,
+                script_job_id,
+                variant_index,
+                shot_index,
+                category=category,
+                model=model,
+                reference_image_bytes=reference_image_bytes,
+            )
+            _update_nova_canvas_job(
+                image_job_id,
+                status="succeeded",
+                failure_message="",
+                image_key=image_key,
+                image_uri=image_uri,
+                seed=seed,
+                external_job_id=str((provider_meta or {}).get("generate_uuid") or ""),
+                remote_image_url=str((provider_meta or {}).get("image_url") or ""),
+                reference_image_url=str((provider_meta or {}).get("reference_image_url") or ""),
+                image_generation_mode=str((provider_meta or {}).get("mode") or ""),
+                reference_control_type=str((provider_meta or {}).get("control_type") or ""),
+                provider_warning=str((provider_meta or {}).get("fallback_error") or ""),
+            )
+            return
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < attempts - 1 and _is_transient_storyboard_image_error(last_error):
+                _update_nova_canvas_job(
+                    image_job_id,
+                    status="queued",
+                    failure_message="LibLibAI 服务繁忙，已进入自动重试队列。",
+                    attempt=attempt + 1,
+                )
+                time.sleep(STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            break
+
+    _update_nova_canvas_job(
+        image_job_id,
+        status="failed",
+        failure_message=_friendly_storyboard_image_error(last_error),
+    )
 
 
 def _safe_ascii_slug(text):
@@ -5190,6 +5323,21 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     reference_image_bytes = None
     if product_asset:
         reference_image_bytes = STORAGE.read_file_bytes(product_asset.get("normalized_key", ""))
+    with job_lock:
+        existing_jobs = _load_nova_canvas_jobs()
+        existing_active = next(
+            (
+                item
+                for item in existing_jobs
+                if item.get("script_job_id") == req.script_job_id
+                and int(item.get("variant_index", -1)) == int(req.variant_index)
+                and int(item.get("shot_index", -1)) == int(req.shot_index)
+                and _is_active_storyboard_image_status(item.get("status", ""))
+            ),
+            None,
+        )
+    if existing_active:
+        return {"job": _public_nova_canvas_job(existing_active)}
     if _image_provider_name() == "liblibai":
         generation_prompt = _compact_liblibai_storyboard_prompt(
             raw_prompt,
@@ -5219,7 +5367,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "product_image_key": (product_asset or {}).get("normalized_key", ""),
         "prompt": raw_prompt,
         "generation_prompt": generation_prompt,
-        "status": "succeeded",
+        "status": "queued",
         "failure_message": "",
         "image_key": "",
         "image_uri": "",
@@ -5229,41 +5377,31 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "external_job_id": "",
         "remote_image_url": "",
         "reference_image_url": "",
-        "image_generation_mode": "reference-controlnet" if reference_image_bytes else "text-to-image",
+        "image_generation_mode": (
+            "image-to-image"
+            if reference_image_bytes and LIBLIBAI_REFERENCE_MODE.lower() in {"img2img", "image_to_image", "image-to-image"}
+            else "reference-controlnet" if reference_image_bytes else "text-to-image"
+        ),
         "reference_control_type": LIBLIBAI_REFERENCE_CONTROL_TYPE if _image_provider_name() == "liblibai" and reference_image_bytes else "",
+        "attempt": 0,
         "seed": None,
     }
-    try:
-        image_key, image_uri, seed, provider_meta = _start_storyboard_image(
-            generation_prompt,
-            req.script_job_id,
-            req.variant_index,
-            req.shot_index,
-            category=image_job["category"],
-            model=image_job["model"],
-            reference_image_bytes=reference_image_bytes,
-        )
-        image_job["image_key"] = image_key
-        image_job["image_uri"] = image_uri
-        image_job["seed"] = seed
-        image_job["external_job_id"] = str((provider_meta or {}).get("generate_uuid") or "")
-        image_job["remote_image_url"] = str((provider_meta or {}).get("image_url") or "")
-        image_job["reference_image_url"] = str((provider_meta or {}).get("reference_image_url") or "")
-        image_job["image_generation_mode"] = str((provider_meta or {}).get("mode") or image_job["image_generation_mode"])
-        image_job["reference_control_type"] = str((provider_meta or {}).get("control_type") or image_job["reference_control_type"])
-    except Exception as exc:
-        image_job["status"] = "failed"
-        image_job["failure_message"] = str(exc)
-        with job_lock:
-            jobs = _load_nova_canvas_jobs()
-            jobs.insert(0, image_job)
-            _save_nova_canvas_jobs(jobs)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     with job_lock:
         jobs = _load_nova_canvas_jobs()
         jobs.insert(0, image_job)
         _save_nova_canvas_jobs(jobs)
+
+    storyboard_image_executor.submit(
+        _run_storyboard_image_job,
+        image_job["id"],
+        generation_prompt,
+        req.script_job_id,
+        req.variant_index,
+        req.shot_index,
+        image_job["category"],
+        image_job["model"],
+        reference_image_bytes,
+    )
     return {"job": _public_nova_canvas_job(image_job)}
 
 

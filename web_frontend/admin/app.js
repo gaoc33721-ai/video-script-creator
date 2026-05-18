@@ -18,6 +18,7 @@ const state = {
   canvasJobs: [],
   canvasProvider: "",
   canvasModelId: "",
+  canvasPollTimer: null,
   storyboardShots: [],
   canvasGenerating: new Set(),
   jobsExpanded: false,
@@ -1638,6 +1639,10 @@ function hideResults() {
   $("resultBody").innerHTML = "";
   if ($("videoJobs")) $("videoJobs").innerHTML = "";
   if ($("videoMessage")) $("videoMessage").textContent = "";
+  if (state.canvasPollTimer) {
+    clearTimeout(state.canvasPollTimer);
+    state.canvasPollTimer = null;
+  }
   state.currentResultJob = null;
 }
 
@@ -1720,7 +1725,7 @@ function renderStoryboardCards(content) {
         subtitle,
       });
       state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, prompt });
-      const isGenerating = state.canvasGenerating.has(index);
+      const isGenerating = state.canvasGenerating.has(index) || hasActiveCanvasJobForShot(index);
       return `
         <article class="storyboard-card">
           <div class="storyboard-meta">
@@ -1841,6 +1846,20 @@ function storyboardImageModelLabel(job = {}) {
   return job.model_id || state.canvasModelId || storyboardImageProviderLabel();
 }
 
+function isActiveCanvasJob(job = {}) {
+  return ["pending", "queued", "running", "inprogress", "submitted"].includes(String(job.status || "").toLowerCase());
+}
+
+function canvasJobForShot(shotIndex) {
+  return (state.canvasJobs || []).find((item) => {
+    return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
+  });
+}
+
+function hasActiveCanvasJobForShot(shotIndex) {
+  return isActiveCanvasJob(canvasJobForShot(shotIndex));
+}
+
 function renderCanvasJobForShot(shotIndex) {
   if (state.canvasGenerating.has(shotIndex)) {
     return `
@@ -1852,11 +1871,21 @@ function renderCanvasJobForShot(shotIndex) {
       </div>
     `;
   }
-  const job = (state.canvasJobs || []).find((item) => {
-    return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
-  });
+  const job = canvasJobForShot(shotIndex);
   if (!job) {
     return '<div class="storyboard-image-slot empty">生成后会在这里显示 16:9 静态分镜图。</div>';
+  }
+  if (isActiveCanvasJob(job)) {
+    const attempt = Number(job.attempt || 0);
+    const suffix = attempt > 1 ? `（第 ${attempt} 次尝试）` : "";
+    return `
+      <div class="storyboard-image-slot loading">
+        ${renderTaskProgress(
+          { status: "running", progress: 45, current_step: `${storyboardImageGeneratingMessage()}${suffix}` },
+          { title: "参考图生成进度", activeOnly: false }
+        )}
+      </div>
+    `;
   }
   if (job.status === "failed") {
     return `<div class="storyboard-image-slot error">${escapeHtml(job.failure_message || "参考图生成失败")}</div>`;
@@ -1885,6 +1914,40 @@ async function loadCanvasJobs(scriptJobId) {
   state.canvasProvider = data.provider || "";
   state.canvasModelId = data.model_id || "";
   rerenderStoryboardCards();
+  scheduleCanvasJobsPoll();
+}
+
+function scheduleCanvasJobsPoll() {
+  if (state.canvasPollTimer) {
+    clearTimeout(state.canvasPollTimer);
+    state.canvasPollTimer = null;
+  }
+  const job = state.currentResultJob;
+  const hasActiveJobs = (state.canvasJobs || []).some((item) => {
+    return Number(item.variant_index || 0) === Number(state.activeVariantIndex) && isActiveCanvasJob(item);
+  });
+  if (!job || !hasActiveJobs) return;
+  state.canvasPollTimer = setTimeout(() => {
+    loadCanvasJobs(job.id).catch((error) => {
+      console.warn("Failed to poll storyboard image jobs", error);
+    });
+  }, 3500);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCanvasJob(shotIndex, timeoutMs = 420000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await sleep(3500);
+    if (!state.currentResultJob) return null;
+    await loadCanvasJobs(state.currentResultJob.id);
+    const job = canvasJobForShot(shotIndex);
+    if (job && !isActiveCanvasJob(job)) return job;
+  }
+  throw new Error("参考图已提交后台生成，请稍后刷新状态。");
 }
 
 async function submitCanvasImage(shotIndex) {
@@ -1905,7 +1968,12 @@ async function submitCanvasImage(shotIndex) {
       }),
     });
     await loadCanvasJobs(job.id);
+    await waitForCanvasJob(shotIndex);
   } catch (error) {
+    if (String(error.message || "").includes("已提交后台")) {
+      await loadCanvasJobs(job.id).catch(() => {});
+      return;
+    }
     state.canvasJobs = [
       {
         id: `failed-${Date.now()}`,
@@ -1913,7 +1981,7 @@ async function submitCanvasImage(shotIndex) {
         variant_index: state.activeVariantIndex,
         shot_index: shotIndex,
         status: "failed",
-        failure_message: error.message,
+        failure_message: error.message || "参考图生成失败",
         created_at: new Date().toISOString(),
       },
       ...(state.canvasJobs || []),
