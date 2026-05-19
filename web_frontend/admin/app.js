@@ -16,6 +16,7 @@ const state = {
   currentResultJob: null,
   videoJobs: [],
   canvasJobs: [],
+  canvasJobsSignature: "",
   canvasProvider: "",
   canvasModelId: "",
   canvasPollTimer: null,
@@ -1643,6 +1644,7 @@ function hideResults() {
     clearTimeout(state.canvasPollTimer);
     state.canvasPollTimer = null;
   }
+  state.canvasJobsSignature = "";
   state.currentResultJob = null;
 }
 
@@ -1665,6 +1667,7 @@ function renderResult(job, variantIndex = 0) {
   $("resultBody").innerHTML = renderVariantContent(current);
   state.currentResultJob = job;
   state.canvasJobs = [];
+  state.canvasJobsSignature = "";
   state.canvasProvider = "";
   state.canvasModelId = "";
   state.storyboardShots = [];
@@ -1681,6 +1684,7 @@ function rerenderStoryboardCards() {
   const variants = (job && job.variants) || [];
   const current = variants[state.activeVariantIndex] || {};
   $("storyboardCards").innerHTML = renderStoryboardCards(current.content || "");
+  state.canvasJobsSignature = canvasJobsRenderSignature();
   hydrateProtectedImages();
 }
 
@@ -1860,6 +1864,28 @@ function hasActiveCanvasJobForShot(shotIndex) {
   return isActiveCanvasJob(canvasJobForShot(shotIndex));
 }
 
+function canvasJobsRenderSignature(jobs = state.canvasJobs, provider = state.canvasProvider, modelId = state.canvasModelId) {
+  const relevantJobs = (jobs || [])
+    .filter((item) => Number(item.variant_index || 0) === Number(state.activeVariantIndex))
+    .map((item) => ({
+      id: item.id || "",
+      shot_index: Number(item.shot_index),
+      status: item.status || "",
+      attempt: Number(item.attempt || 0),
+      preview_url: item.preview_url || "",
+      image_uri: item.image_uri || "",
+      failure_message: item.failure_message || "",
+      updated_at: item.updated_at || "",
+    }))
+    .sort((a, b) => a.shot_index - b.shot_index || String(a.id).localeCompare(String(b.id)));
+  return JSON.stringify({
+    variant: Number(state.activeVariantIndex),
+    provider: provider || "",
+    modelId: modelId || "",
+    jobs: relevantJobs,
+  });
+}
+
 function renderCanvasJobForShot(shotIndex) {
   if (state.canvasGenerating.has(shotIndex)) {
     return `
@@ -1910,10 +1936,19 @@ async function loadCanvasJobs(scriptJobId) {
   const data = await api(
     `/api/nova-canvas/jobs?script_job_id=${encodeURIComponent(scriptJobId)}&variant_index=${state.activeVariantIndex}`
   );
-  state.canvasJobs = data.jobs || [];
-  state.canvasProvider = data.provider || "";
-  state.canvasModelId = data.model_id || "";
-  rerenderStoryboardCards();
+  const nextJobs = data.jobs || [];
+  const nextProvider = data.provider || "";
+  const nextModelId = data.model_id || "";
+  const nextSignature = canvasJobsRenderSignature(nextJobs, nextProvider, nextModelId);
+  const shouldRerender = nextSignature !== state.canvasJobsSignature;
+  state.canvasJobs = nextJobs;
+  state.canvasProvider = nextProvider;
+  state.canvasModelId = nextModelId;
+  if (shouldRerender) {
+    rerenderStoryboardCards();
+  } else {
+    hydrateProtectedImages();
+  }
   scheduleCanvasJobsPoll();
 }
 
@@ -2020,6 +2055,7 @@ function buildStoryboardImagePrompt({ category, model, segment, feature, method,
     "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
     "Follow the storyboard exactly; do not invent another product category, room, or action.",
     "Single-product rule: show exactly one physical Hisense appliance unit; no duplicate product, no second unit, no side-by-side appliances, no showroom lineup, and no background appliance of the same category.",
+    "Brand text rule: any readable logo or brand text must be exactly 'Hisense' with complete, sharp Latin letters; no misspelled, partial, garbled, or fake brand text.",
     category ? `Product category from brief: ${category}.` : "",
     categoryHint ? `Product category in English: ${categoryHint.subject}.` : "",
     categoryHint ? `Required setting: ${categoryHint.setting}.` : "",
@@ -2032,7 +2068,7 @@ function buildStoryboardImagePrompt({ category, model, segment, feature, method,
     angle ? `Camera angle: ${angle}.` : "",
     movement ? `Camera movement: ${movement}.` : "",
     subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
-    "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no text overlay unless required by the script.",
+    "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no misspelled Hisense logo, no text overlay unless required by the script.",
   ]
     .filter(Boolean)
     .join(" ");

@@ -185,6 +185,9 @@ LIBLIBAI_FALLBACK_TO_CONTROLNET = os.getenv("LIBLIBAI_FALLBACK_TO_CONTROLNET", "
 STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")))
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
+STORYBOARD_IMAGE_BRAND_STAMP_ENABLED = os.getenv(
+    "STORYBOARD_IMAGE_BRAND_STAMP_ENABLED", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
 _LIBLIBAI_ACCESS_KEY = os.getenv("LIBLIBAI_ACCESS_KEY", "")
 _LIBLIBAI_ACCESS_KEY_SECRET_ID = (
     os.getenv("LIBLIBAI_ACCESS_KEY_SECRET_ID")
@@ -2664,6 +2667,17 @@ _SINGLE_PRODUCT_NEGATIVE = (
     "showroom display, appliance showroom lineup, background appliance of the same category"
 )
 
+_HISENSE_BRAND_RULE = (
+    "Brand text rule: any readable appliance logo or brand text must be exactly 'Hisense' with complete, sharp "
+    "Latin letters. Do not invent, abbreviate, distort, or misspell the brand; if exact text cannot be rendered, "
+    "leave the appliance badge blank rather than using fake letters."
+)
+
+_HISENSE_BRAND_NEGATIVE = (
+    "misspelled Hisense, partial Hisense, distorted Hisense, garbled logo, unreadable logo, fake brand word, "
+    "Hisnse, Hiense, Hisens, Hisensse, Hicense, Hissense, Hisonse"
+)
+
 
 def _storyboard_category_context(category, model, detection_text=""):
     raw = f"{category or ''} {model or ''} {detection_text or ''}".lower()
@@ -2845,6 +2859,7 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         f"Mandatory primary scene: {context['must']}",
         f"Camera and action constraints: {action_constraints}" if action_constraints else "",
         _SINGLE_PRODUCT_RULE,
+        _HISENSE_BRAND_RULE,
         (
             "If a product reference image is supplied, use it only as a loose reference for product identity, "
             "silhouette, color, logo placement, and control-panel layout. Do not copy the reference image's "
@@ -2871,6 +2886,7 @@ def _image_negative_prompt(prompt, category="", model=""):
     terms = [
         "competitor brands",
         "distorted logo",
+        _HISENSE_BRAND_NEGATIVE,
         "unreadable text",
         "text overlay",
         "watermark",
@@ -3044,24 +3060,92 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
     context = _storyboard_category_context(category, model, detection_text=raw_prompt)
     action_constraints = _storyboard_action_constraints(raw_prompt)
     detail = re.sub(r"\s+", " ", str(raw_prompt or "")).strip()
+    for boilerplate in (
+        "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
+        "Follow the storyboard exactly; do not invent another product category, room, or action.",
+    ):
+        detail = detail.replace(boilerplate, "").strip()
+    detail = re.sub(r"\bSingle-product rule:.*?(?=(?:Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
+    detail = re.sub(r"\bBrand text rule:.*?(?=(?:Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
     detail = re.sub(r"\bThe selected product must be the main subject.*$", "", detail).strip()
-    detail = detail[:700].strip()
+    detail = detail[:500].strip()
     lines = [
         "Premium photorealistic 16:9 e-commerce storyboard still.",
         f"Subject: {context['subject']}.",
         f"Setting: {context['setting']}.",
-        f"Shot {int(shot_index) + 1}: follow this storyboard exactly.",
-        f"Required scene: {context['must']}",
+        f"Shot {int(shot_index) + 1}: follow storyboard exactly.",
+        f"Scene: {context['must']}",
         f"Camera constraints: {action_constraints}" if action_constraints else "",
         f"Storyboard details: {detail}" if detail else "",
-        _SINGLE_PRODUCT_RULE,
-        "When a product reference image is supplied, use it as the exact appliance identity: preserve body color, finish, door outline, handle/control-panel placement, visible buttons, cavity shape, logo position, and proportions.",
-        "Do not change a black appliance into white or silver; do not replace the referenced product with a different appliance design.",
-        "Commercial soft daylight, realistic product proportions, clean home styling, product-focused composition.",
-        f"Negative: {context['negative']}, {_SINGLE_PRODUCT_NEGATIVE}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
+        "One-product rule: exactly one physical Hisense appliance; no duplicate, second unit, side-by-side appliance, product lineup, or background same-category appliance.",
+        "Brand rule: readable logo text must be exactly 'Hisense' with complete sharp letters; no misspelled, partial, garbled, or fake brand text. If unsure, leave the appliance badge blank.",
+        "Reference image: preserve exact appliance identity, color, finish, door outline, handle/control-panel, buttons, cavity, logo position, and proportions.",
+        "Do not change black appliances into white or silver; do not replace the referenced design.",
+        "Commercial soft daylight, realistic proportions, clean home scene, product-focused composition.",
+        f"Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
     ]
     prompt = " ".join(line for line in lines if line)
     return prompt[:LIBLIBAI_MAX_PROMPT_LENGTH].strip()
+
+
+def _storyboard_image_with_hisense_brand_stamp(image_bytes: bytes) -> bytes:
+    if not STORYBOARD_IMAGE_BRAND_STAMP_ENABLED or not image_bytes:
+        return image_bytes
+    try:
+        from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+        image = Image.open(io.BytesIO(image_bytes))
+        image = ImageOps.exif_transpose(image).convert("RGBA")
+        width, height = image.size
+        scale = max(0.75, min(width, height) / 720)
+        font_size = max(26, int(32 * scale))
+        font = None
+        for font_path in (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+        ):
+            try:
+                font = ImageFont.truetype(font_path, font_size)
+                break
+            except Exception:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        text = "Hisense"
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        pad_x = int(18 * scale)
+        pad_y = int(10 * scale)
+        margin = int(22 * scale)
+        box_width = text_width + pad_x * 2
+        box_height = text_height + pad_y * 2
+        x0 = margin
+        y0 = height - box_height - margin
+        x1 = x0 + box_width
+        y1 = y0 + box_height
+        draw.rounded_rectangle(
+            (x0, y0, x1, y1),
+            radius=int(10 * scale),
+            fill=(255, 255, 255, 225),
+        )
+        draw.text(
+            (x0 + pad_x, y0 + pad_y - text_bbox[1]),
+            text,
+            font=font,
+            fill=(0, 129, 120, 255),
+        )
+        composed = Image.alpha_composite(image, overlay).convert("RGB")
+        output = io.BytesIO()
+        composed.save(output, format="PNG", optimize=True)
+        return output.getvalue()
+    except Exception:
+        return image_bytes
 
 
 def _start_liblibai_image(
@@ -3073,6 +3157,7 @@ def _start_liblibai_image(
 ):
     client = LiblibAIClient(_liblibai_image_config())
     image_bytes, metadata = client.generate_image(prompt, reference_image_bytes=reference_image_bytes)
+    image_bytes = _storyboard_image_with_hisense_brand_stamp(image_bytes)
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
     return image_key, image_uri, metadata
@@ -3180,6 +3265,7 @@ def _start_nova_canvas_image(
     if not image_bytes:
         raise RuntimeError("分镜图生成失败：所有图像生成方式均不可用。请检查网络连接或稍后重试。")
 
+    image_bytes = _storyboard_image_with_hisense_brand_stamp(image_bytes)
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
     return image_key, image_uri, seed
