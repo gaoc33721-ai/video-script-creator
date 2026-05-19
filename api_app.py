@@ -2653,19 +2653,32 @@ def _has_any_storyboard_token(raw: str, tokens: tuple[str, ...]) -> bool:
     return any(token in raw for token in tokens)
 
 
+_SINGLE_PRODUCT_RULE = (
+    "Single-product rule: show exactly one physical Hisense appliance unit as the only product in the scene. "
+    "Do not add a second unit, duplicate product, side-by-side appliance, showroom lineup, or background appliance "
+    "of the same category."
+)
+
+_SINGLE_PRODUCT_NEGATIVE = (
+    "multiple appliances, duplicate product, second product unit, side-by-side appliances, product lineup, "
+    "showroom display, appliance showroom lineup, background appliance of the same category"
+)
+
+
 def _storyboard_category_context(category, model, detection_text=""):
     raw = f"{category or ''} {model or ''} {detection_text or ''}".lower()
     if _is_laundry_storyboard(raw):
         return {
-            "subject": "Hisense front-loading washer-dryer combo or front-loading laundry appliances",
+            "subject": "one Hisense front-loading washing machine or washer-dryer combo",
             "setting": "a modern laundry room or utility room, never a kitchen",
             "must": (
-                "The frame must clearly show front-loading laundry appliances and laundry-room cues such as folded towels, "
-                "a laundry basket, hanging clothes, or a utility shelf as relevant to the shot."
+                "The frame must clearly show exactly one front-loading laundry appliance unit as the main subject. "
+                "Use laundry-room cues such as folded towels, a laundry basket, hanging clothes, detergent, or a utility "
+                "shelf as relevant to the shot, but do not show a second washer or dryer."
             ),
             "negative": (
                 "kitchen, stove, stovetop, oven, microwave, refrigerator, kettle, cookware, food preparation, "
-                "dining room, cooking appliance, kitchen island"
+                "dining room, cooking appliance, kitchen island, second washer, second dryer, paired washer and dryer"
             ),
         }
 
@@ -2767,7 +2780,7 @@ def _storyboard_action_constraints(prompt):
         )
     if _storyboard_switching_laundry(raw):
         constraints.append(
-            "Show the pain point literally: the user is centered between two front-loading laundry machines, holding a laundry basket full of wet clothes and moving clothes from washer to dryer."
+            "Show the laundry pain point with one front-loading washer-dryer combo: the user holds a laundry basket or wet clothes near the open drum, implying avoided washer-to-dryer transfer without showing a second machine."
         )
     if "top-down" in lower or "overhead" in lower or "\u4fef\u62cd" in raw:
         constraints.append("Use a high-angle overhead or three-quarter top-down camera view, not a straight eye-level kitchen view.")
@@ -2831,6 +2844,7 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         f"Shot number: {int(shot_index) + 1}.",
         f"Mandatory primary scene: {context['must']}",
         f"Camera and action constraints: {action_constraints}" if action_constraints else "",
+        _SINGLE_PRODUCT_RULE,
         (
             "If a product reference image is supplied, use it only as a loose reference for product identity, "
             "silhouette, color, logo placement, and control-panel layout. Do not copy the reference image's "
@@ -2872,6 +2886,7 @@ def _image_negative_prompt(prompt, category="", model=""):
         "cgi look",
         "deformed product",
         "extra products",
+        _SINGLE_PRODUCT_NEGATIVE,
         "cluttered composition",
         context["negative"],
     ]
@@ -2888,7 +2903,7 @@ def _image_negative_prompt(prompt, category="", model=""):
     if _storyboard_requires_user(prompt):
         terms.extend(["empty room", "empty appliance showroom", "appliance-only lineup with no user"])
     if _storyboard_switching_laundry(prompt):
-        terms.extend(["three washing machines", "more than two laundry machines", "appliance showroom lineup"])
+        terms.extend(["second laundry machine", "separate dryer", "washer and dryer pair", "appliance showroom lineup"])
     return ", ".join(item for item in terms if item)
 
 
@@ -3039,10 +3054,11 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
         f"Required scene: {context['must']}",
         f"Camera constraints: {action_constraints}" if action_constraints else "",
         f"Storyboard details: {detail}" if detail else "",
+        _SINGLE_PRODUCT_RULE,
         "When a product reference image is supplied, use it as the exact appliance identity: preserve body color, finish, door outline, handle/control-panel placement, visible buttons, cavity shape, logo position, and proportions.",
         "Do not change a black appliance into white or silver; do not replace the referenced product with a different appliance design.",
-        "Commercial soft daylight, realistic product proportions, clean kitchen styling, product-focused composition.",
-        f"Negative: {context['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
+        "Commercial soft daylight, realistic product proportions, clean home styling, product-focused composition.",
+        f"Negative: {context['negative']}, {_SINGLE_PRODUCT_NEGATIVE}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
     ]
     prompt = " ".join(line for line in lines if line)
     return prompt[:LIBLIBAI_MAX_PROMPT_LENGTH].strip()

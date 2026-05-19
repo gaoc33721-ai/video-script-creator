@@ -2019,6 +2019,7 @@ function buildStoryboardImagePrompt({ category, model, segment, feature, method,
   return [
     "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
     "Follow the storyboard exactly; do not invent another product category, room, or action.",
+    "Single-product rule: show exactly one physical Hisense appliance unit; no duplicate product, no second unit, no side-by-side appliances, no showroom lineup, and no background appliance of the same category.",
     category ? `Product category from brief: ${category}.` : "",
     categoryHint ? `Product category in English: ${categoryHint.subject}.` : "",
     categoryHint ? `Required setting: ${categoryHint.setting}.` : "",
@@ -2069,6 +2070,14 @@ function storyboardCategoryHint(category, feature, method, subtitle) {
       setting: "modern kitchen, never a living room TV wall",
       must: "the refrigerator as the main subject, with shelves, drawers, food containers, produce, or storage result cues visible",
       negative: "television, TV screen, entertainment console, sofa, unrelated appliance",
+    };
+  }
+  if (/(\u6d17\u8863|\u70d8\u5e72|\u6d17\u70d8|laundry|washer|dryer|washing\s*machine|15\s*washing\s*programs|clothes|towel|\u6eda\u7b52|\u8863\u7269|\u6bdb\u5dfe|\u886c\u886b)/i.test(raw)) {
+    return {
+      subject: "one front-loading washing machine or washer-dryer combo with a visible door and control panel",
+      setting: "modern laundry room or utility room, never a kitchen showroom",
+      must: "exactly one laundry appliance unit as the only product, with clothes, towels, laundry basket, detergent, or control-panel interaction according to the shot",
+      negative: "multiple washing machines, second washer, second dryer, washer and dryer pair, side-by-side appliances, appliance lineup, showroom display, duplicate product, kitchen, TV screen, unrelated appliance",
     };
   }
   if (/(洗碗|dishwasher|dishes|tableware|餐具)/i.test(raw)) {
