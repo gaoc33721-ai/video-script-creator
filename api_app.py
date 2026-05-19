@@ -180,7 +180,7 @@ LIBLIBAI_POLL_TIMEOUT = int(os.getenv("LIBLIBAI_POLL_TIMEOUT", "240"))
 LIBLIBAI_POLL_INTERVAL = float(os.getenv("LIBLIBAI_POLL_INTERVAL", "3"))
 LIBLIBAI_MAX_PROMPT_LENGTH = int(os.getenv("LIBLIBAI_MAX_PROMPT_LENGTH", "1800"))
 LIBLIBAI_REFERENCE_CONTROL_TYPE = os.getenv("LIBLIBAI_REFERENCE_CONTROL_TYPE", "depth")
-LIBLIBAI_REFERENCE_MODE = os.getenv("LIBLIBAI_REFERENCE_MODE", "img2img")
+LIBLIBAI_REFERENCE_MODE = os.getenv("LIBLIBAI_REFERENCE_MODE", "controlnet")
 LIBLIBAI_FALLBACK_TO_CONTROLNET = os.getenv("LIBLIBAI_FALLBACK_TO_CONTROLNET", "true").strip().lower() in {"1", "true", "yes", "on"}
 STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")))
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
@@ -2635,6 +2635,165 @@ def _normalize_product_image_bytes(data: bytes):
     return image_format, width, height, output.getvalue()
 
 
+def _clamp_crop_box(box, width: int, height: int):
+    left, top, right, bottom = box
+    left = max(0, min(int(round(left)), width - 1))
+    top = max(0, min(int(round(top)), height - 1))
+    right = max(left + 1, min(int(round(right)), width))
+    bottom = max(top + 1, min(int(round(bottom)), height))
+    return left, top, right, bottom
+
+
+def _front_load_appliance_crop_box(image):
+    width, height = image.size
+    if width < 80 or height < 80:
+        return None
+    analysis_width = min(360, max(120, width))
+    analysis_height = max(1, int(round(height * analysis_width / width)))
+    gray = image.convert("L").resize((analysis_width, analysis_height))
+    pixels = gray.tobytes()
+    mean_value = sum(pixels) / max(1, len(pixels))
+    threshold = min(120, max(42, int(mean_value * 0.68)))
+    mask = bytearray(1 if value <= threshold else 0 for value in pixels)
+    visited = bytearray(len(mask))
+    best = None
+
+    for y in range(analysis_height):
+        for x in range(analysis_width):
+            index = y * analysis_width + x
+            if visited[index] or not mask[index]:
+                continue
+            stack = [index]
+            visited[index] = 1
+            area = 0
+            min_x = max_x = x
+            min_y = max_y = y
+            while stack:
+                current = stack.pop()
+                cx = current % analysis_width
+                cy = current // analysis_width
+                area += 1
+                min_x = min(min_x, cx)
+                max_x = max(max_x, cx)
+                min_y = min(min_y, cy)
+                max_y = max(max_y, cy)
+                for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                    if nx < 0 or ny < 0 or nx >= analysis_width or ny >= analysis_height:
+                        continue
+                    neighbor = ny * analysis_width + nx
+                    if visited[neighbor] or not mask[neighbor]:
+                        continue
+                    visited[neighbor] = 1
+                    stack.append(neighbor)
+
+            box_width = max_x - min_x + 1
+            box_height = max_y - min_y + 1
+            if area < 55 or box_width < 12 or box_height < 12:
+                continue
+            aspect = box_width / max(1, box_height)
+            fill = area / max(1, box_width * box_height)
+            center_x = (min_x + max_x) / 2 / analysis_width
+            center_y = (min_y + max_y) / 2 / analysis_height
+            if not (0.45 <= aspect <= 2.25 and 0.08 <= fill <= 0.92):
+                continue
+            if not (0.18 <= center_x <= 0.82 and 0.25 <= center_y <= 0.90):
+                continue
+            centrality = 1.0 - min(1.0, abs(center_x - 0.5) * 2.0)
+            roundness = 1.0 - min(1.0, abs(1.0 - aspect) / 1.25)
+            score = area * (0.35 + centrality) * (0.45 + roundness) * (0.65 + center_y)
+            if best is None or score > best[0]:
+                best = (score, min_x, min_y, max_x, max_y)
+
+    if not best:
+        return None
+    _, min_x, min_y, max_x, max_y = best
+    scale_x = width / analysis_width
+    scale_y = height / analysis_height
+    center_x = ((min_x + max_x) / 2) * scale_x
+    center_y = ((min_y + max_y) / 2) * scale_y
+    diameter = max((max_x - min_x + 1) * scale_x, (max_y - min_y + 1) * scale_y)
+    crop_width = max(diameter * 3.05, width * 0.22)
+    crop_height = max(diameter * 3.75, height * 0.40)
+    return _clamp_crop_box(
+        (
+            center_x - crop_width * 0.50,
+            center_y - crop_height * 0.58,
+            center_x + crop_width * 0.50,
+            center_y + crop_height * 0.42,
+        ),
+        width,
+        height,
+    )
+
+
+def _center_product_crop_box(image):
+    width, height = image.size
+    ratio = width / max(1, height)
+    if ratio >= 1.45:
+        crop_width = int(width * 0.58)
+        crop_height = int(height * 0.96)
+    elif ratio <= 0.78:
+        crop_width = int(width * 0.96)
+        crop_height = int(height * 0.72)
+    else:
+        crop_width = int(width * 0.78)
+        crop_height = int(height * 0.86)
+    left = (width - crop_width) / 2
+    top = (height - crop_height) / 2
+    return _clamp_crop_box((left, top, left + crop_width, top + crop_height), width, height)
+
+
+def _prepare_storyboard_reference_image_bytes(data: bytes, category="", model="", prompt=""):
+    try:
+        from PIL import Image, ImageEnhance, ImageOps, UnidentifiedImageError
+    except ModuleNotFoundError:
+        return data, {"reference_preprocess": "original"}
+
+    try:
+        image = Image.open(io.BytesIO(data))
+        image.load()
+    except (UnidentifiedImageError, OSError):
+        return data, {"reference_preprocess": "original"}
+
+    image = ImageOps.exif_transpose(image)
+    if image.mode in {"RGBA", "LA"} or ("transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (246, 248, 249, 255))
+        background.alpha_composite(rgba)
+        image = background.convert("RGB")
+    else:
+        image = image.convert("RGB")
+
+    detection_text = f"{category} {model} {prompt}"
+    crop_box = None
+    reference_preprocess = "center-product-reference-card"
+    if _is_laundry_storyboard(detection_text):
+        crop_box = _front_load_appliance_crop_box(image)
+        if crop_box:
+            reference_preprocess = "front-load-product-reference-card"
+    if not crop_box:
+        crop_box = _center_product_crop_box(image)
+
+    crop = image.crop(crop_box)
+    crop = ImageEnhance.Sharpness(crop).enhance(1.18)
+    card = Image.new("RGB", (1024, 1024), (246, 248, 249))
+    contained = ImageOps.contain(crop, (900, 930), method=Image.Resampling.LANCZOS)
+    x = (1024 - contained.width) // 2
+    y = (1024 - contained.height) // 2
+    card.paste(contained, (x, y))
+    output = io.BytesIO()
+    card.save(output, format="PNG", optimize=True)
+    return output.getvalue(), {
+        "reference_preprocess": reference_preprocess,
+        "reference_crop_box": list(crop_box),
+        "reference_card_size": [1024, 1024],
+    }
+
+
+def _liblibai_uses_source_image_mode() -> bool:
+    return str(LIBLIBAI_REFERENCE_MODE or "").lower().strip() in LiblibAIClient.SOURCE_IMAGE_REFERENCE_MODES
+
+
 def _is_laundry_storyboard(text):
     raw = str(text or "").lower()
     if "dishwasher" in raw or "\u6d17\u7897" in raw:
@@ -2862,12 +3021,17 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         _HISENSE_BRAND_RULE,
         (
             "If a product reference image is supplied, use it only as a loose reference for product identity, "
-            "silhouette, color, logo placement, and control-panel layout. Do not copy the reference image's "
-            "white background, catalog packshot angle, sticker/badge, lighting, crop, or composition."
+            "silhouette, color, finish, door outline, handle/buttons, logo placement, and control-panel layout. "
+            "Do not copy the reference image's white background, catalog packshot angle, room, closet, cabinet "
+            "layout, lighting, crop, sticker/badge, or composition."
         ),
         (
             "Scene priority: the storyboard action, environment, props, food/container, hands, door/cavity/control "
             "interaction, and camera angle from the row must override the reference image composition."
+        ),
+        (
+            "Product-detail priority: keep handles, buttons, knobs, display area, door seams, drum/cavity shape, "
+            "and panel geometry straight, sharp, and physically plausible; do not invent extra controls."
         ),
         "The selected product must remain recognizable inside a new real-life scene, not as an isolated product cutout.",
         f"Storyboard details to preserve: {raw_prompt}",
@@ -3079,7 +3243,9 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
         f"Storyboard details: {detail}" if detail else "",
         "One-product rule: exactly one physical Hisense appliance; no duplicate, second unit, side-by-side appliance, product lineup, or background same-category appliance.",
         "Brand rule: readable logo text must be exactly 'Hisense' with complete sharp letters; no misspelled, partial, garbled, or fake brand text. If unsure, leave the appliance badge blank.",
-        "Reference image: preserve exact appliance identity, color, finish, door outline, handle/control-panel, buttons, cavity, logo position, and proportions.",
+        "Reference image: preserve appliance identity, color, finish, door outline, handle/control-panel, buttons, knobs, display, cavity/drum shape, logo position, and proportions.",
+        "Use the reference only for product design, not for the final scene. Build a new scene from the storyboard row; do not copy the reference room, closet, cabinet layout, lighting, crop, or camera angle.",
+        "Product details must stay straight, sharp, and physically plausible; no warped handles, melted buttons, extra knobs, or distorted display panels.",
         "Do not change black appliances into white or silver; do not replace the referenced design.",
         "Commercial soft daylight, realistic proportions, clean home scene, product-focused composition.",
         f"Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
@@ -5423,8 +5589,25 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     if req.product_image_id and not product_asset:
         raise HTTPException(status_code=404, detail="Product image not found.")
     reference_image_bytes = None
+    reference_metadata = {}
     if product_asset:
-        reference_image_bytes = STORAGE.read_file_bytes(product_asset.get("normalized_key", ""))
+        raw_reference_bytes = None
+        for key_name in ("image_key", "normalized_key"):
+            key = product_asset.get(key_name, "")
+            if not key:
+                continue
+            try:
+                raw_reference_bytes = STORAGE.read_file_bytes(key)
+                break
+            except Exception:
+                continue
+        if raw_reference_bytes:
+            reference_image_bytes, reference_metadata = _prepare_storyboard_reference_image_bytes(
+                raw_reference_bytes,
+                category=request_payload.get("category", ""),
+                model=request_payload.get("model", ""),
+                prompt=raw_prompt,
+            )
     with job_lock:
         existing_jobs = _load_nova_canvas_jobs()
         existing_active = next(
@@ -5481,10 +5664,12 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "reference_image_url": "",
         "image_generation_mode": (
             "image-to-image"
-            if reference_image_bytes and LIBLIBAI_REFERENCE_MODE.lower() in {"img2img", "image_to_image", "image-to-image"}
+            if reference_image_bytes and _liblibai_uses_source_image_mode()
             else "reference-controlnet" if reference_image_bytes else "text-to-image"
         ),
         "reference_control_type": LIBLIBAI_REFERENCE_CONTROL_TYPE if _image_provider_name() == "liblibai" and reference_image_bytes else "",
+        "reference_preprocess": reference_metadata.get("reference_preprocess", ""),
+        "reference_crop_box": reference_metadata.get("reference_crop_box", []),
         "attempt": 0,
         "seed": None,
     }

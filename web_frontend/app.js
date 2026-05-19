@@ -1416,6 +1416,8 @@ function buildStoryboardImagePrompt({ category, model, segment, feature, method,
     "Follow the storyboard exactly; do not invent another product category, room, or action.",
     "Single-product rule: show exactly one physical Hisense appliance unit; no duplicate product, no second unit, no side-by-side appliances, no showroom lineup, and no background appliance of the same category.",
     "Brand text rule: any readable logo or brand text must be exactly 'Hisense' with complete, sharp Latin letters; no misspelled, partial, garbled, or fake brand text.",
+    "Reference image rule: use the uploaded product image only for product identity, color, finish, door outline, handle, buttons, display/control-panel layout, logo position, and proportions.",
+    "Scene rewrite rule: create a new storyboard scene from the prompt; do not copy the uploaded image's room, closet, cabinet layout, lighting, crop, or camera angle.",
     category ? `Product category from brief: ${category}.` : "",
     categoryHint ? `Product category in English: ${categoryHint.subject}.` : "",
     categoryHint ? `Required setting: ${categoryHint.setting}.` : "",
@@ -1428,7 +1430,7 @@ function buildStoryboardImagePrompt({ category, model, segment, feature, method,
     angle ? `Camera angle: ${angle}.` : "",
     movement ? `Camera movement: ${movement}.` : "",
     subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
-    "The selected product must be the main subject with realistic product proportions, soft commercial lighting, no competitor brands, no distorted logo, no misspelled Hisense logo, no text overlay unless required by the script.",
+    "The selected product must be the main subject with realistic product proportions, straight handles, sharp buttons, plausible panel geometry, soft commercial lighting, no competitor brands, no distorted logo, no misspelled Hisense logo, no text overlay unless required by the script.",
   ]
     .filter(Boolean)
     .join(" ");

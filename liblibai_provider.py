@@ -32,13 +32,20 @@ class LiblibAIConfig:
     poll_interval_seconds: float = 3.0
     max_prompt_length: int = 1800
     reference_control_type: str = "depth"
-    reference_mode: str = "img2img"
+    reference_mode: str = "controlnet"
     fallback_to_controlnet: bool = True
 
 
 class LiblibAIClient:
     SUCCESS_STATUSES = {5}
     FAILED_STATUSES = {6, 7}
+    SOURCE_IMAGE_REFERENCE_MODES = {
+        "locked_img2img",
+        "source_image",
+        "source-image",
+        "image_to_image_strict",
+        "image-to-image-strict",
+    }
 
     def __init__(self, config: LiblibAIConfig):
         self.config = config
@@ -50,7 +57,7 @@ class LiblibAIClient:
         fallback_error = ""
         if reference_image_bytes:
             reference_image_url = self.upload_image(reference_image_bytes)
-            if self.config.reference_mode.lower() in {"img2img", "image_to_image", "image-to-image"}:
+            if self._uses_source_image_mode():
                 try:
                     generate_uuid = self.submit_image_to_image(prompt, reference_image_url)
                     mode = "image-to-image"
@@ -82,6 +89,9 @@ class LiblibAIClient:
             "seed": image_info.get("seed") or status_payload.get("seed"),
             "raw_status": self._compact_status_payload(status_payload),
         }
+
+    def _uses_source_image_mode(self) -> bool:
+        return self.config.reference_mode.lower().strip() in self.SOURCE_IMAGE_REFERENCE_MODES
 
     def submit_text_to_image(self, prompt: str) -> str:
         payload = self._ultra_payload(prompt)
