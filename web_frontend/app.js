@@ -45,6 +45,27 @@ function authHeaders(headers = {}) {
   return nextHeaders;
 }
 
+function formatErrorDetail(value, fallback = "请求失败") {
+  if (value == null || value === "") return fallback;
+  if (value instanceof Error) return formatErrorDetail(value.message, fallback);
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const lines = value.map((item) => formatErrorDetail(item, "")).filter(Boolean);
+    return lines.length ? lines.join("；") : fallback;
+  }
+  if (typeof value === "object") {
+    const location = Array.isArray(value.loc) ? value.loc.filter((item) => item !== "body").join(".") : "";
+    const message = value.msg || value.message || value.detail || value.error;
+    if (message) return `${location ? `${location}: ` : ""}${formatErrorDetail(message, fallback)}`;
+    try {
+      return JSON.stringify(value);
+    } catch (_) {
+      return fallback;
+    }
+  }
+  return String(value);
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
@@ -55,7 +76,7 @@ async function api(path, options = {}) {
     let message = response.statusText;
     try {
       const body = await response.json();
-      message = body.detail || message;
+      message = formatErrorDetail(body.detail || body.message || body.error, message);
     } catch (_) {}
     if (response.status === 401) {
       clearAuth(message);
@@ -74,7 +95,7 @@ async function fetchProtectedBlob(path) {
     let message = response.statusText;
     try {
       const body = await response.json();
-      message = body.detail || message;
+      message = formatErrorDetail(body.detail || body.message || body.error, message);
     } catch (_) {}
     if (response.status === 401) {
       clearAuth(message);
@@ -191,7 +212,7 @@ async function initializeAuth() {
 
 function setMessage(id, text, kind = "") {
   const node = $(id);
-  node.textContent = text || "";
+  node.textContent = formatErrorDetail(text, "");
   node.className = `message ${kind}`.trim();
 }
 
@@ -1202,6 +1223,20 @@ function hasActiveCanvasJobForShot(shotIndex) {
   return isActiveCanvasJob(canvasJobForShot(shotIndex));
 }
 
+function storyboardSubmitPrompt(shot = {}) {
+  return [
+    shot.segment ? `Shot: ${shot.segment}.` : "",
+    shot.feature ? `Feature: ${shot.feature}.` : "",
+    shot.method ? `Visual action: ${shot.method}.` : "",
+    shot.angle ? `Camera angle: ${shot.angle}.` : "",
+    shot.movement ? `Camera movement: ${shot.movement}.` : "",
+    shot.subtitle ? `Voiceover/subtitle: ${shot.subtitle}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 1800);
+}
+
 function canvasJobsRenderSignature(jobs = state.canvasJobs, provider = state.canvasProvider, modelId = state.canvasModelId) {
   const relevantJobs = (jobs || [])
     .filter((item) => Number(item.variant_index || 0) === Number(state.activeVariantIndex))
@@ -1212,7 +1247,7 @@ function canvasJobsRenderSignature(jobs = state.canvasJobs, provider = state.can
       attempt: Number(item.attempt || 0),
       preview_url: item.preview_url || "",
       image_uri: item.image_uri || "",
-      failure_message: item.failure_message || "",
+      failure_message: formatErrorDetail(item.failure_message, ""),
       updated_at: item.updated_at || "",
     }))
     .sort((a, b) => a.shot_index - b.shot_index || String(a.id).localeCompare(String(b.id)));
@@ -1238,7 +1273,7 @@ function renderCanvasJobForShot(shotIndex) {
     return `<div class="storyboard-image-slot loading">${escapeHtml(`${storyboardImageGeneratingMessage()}${suffix}`)}</div>`;
   }
   if (job.status === "failed") {
-    return `<div class="storyboard-image-slot error">${escapeHtml(job.failure_message || "参考图生成失败")}</div>`;
+    return `<div class="storyboard-image-slot error">${escapeHtml(formatErrorDetail(job.failure_message, "参考图生成失败"))}</div>`;
   }
   const imageUrl = job.preview_url || "";
   const image = imageUrl
@@ -1324,7 +1359,7 @@ async function submitCanvasImage(shotIndex, options = {}) {
         script_job_id: job.id,
         variant_index: state.activeVariantIndex,
         shot_index: shotIndex,
-        prompt: shot.prompt,
+        prompt: storyboardSubmitPrompt(shot),
         product_image_id: currentProductImageId(),
       }),
     });
@@ -1337,6 +1372,7 @@ async function submitCanvasImage(shotIndex, options = {}) {
       await loadCanvasJobs(job.id).catch(() => {});
       return;
     }
+    const failureMessage = formatErrorDetail(error, "参考图生成失败");
     state.canvasJobs = [
       {
         id: `failed-${Date.now()}`,
@@ -1344,7 +1380,7 @@ async function submitCanvasImage(shotIndex, options = {}) {
         variant_index: state.activeVariantIndex,
         shot_index: shotIndex,
         status: "failed",
-        failure_message: error.message || "参考图生成失败",
+        failure_message: failureMessage,
         created_at: new Date().toISOString(),
       },
       ...(state.canvasJobs || []),

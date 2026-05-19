@@ -486,7 +486,7 @@ class NovaCanvasSubmitRequest(BaseModel):
     script_job_id: str
     variant_index: int = Field(default=0, ge=0)
     shot_index: int = Field(default=0, ge=0)
-    prompt: str = Field(min_length=10, max_length=2000)
+    prompt: str = Field(min_length=10, max_length=6000)
     product_image_id: str = ""
 
 
