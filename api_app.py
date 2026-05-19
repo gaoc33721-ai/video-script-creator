@@ -2947,6 +2947,9 @@ def _storyboard_action_constraints(prompt):
     raw = str(prompt or "")
     lower = raw.lower()
     constraints = []
+    focus = _storyboard_visual_focus(raw)
+    if focus.get("constraint"):
+        constraints.append(focus["constraint"])
     if _storyboard_requires_user(raw):
         constraints.append(
             "A visible adult user must be present in the foreground and actively interacting with the product or the laundry task."
@@ -2965,7 +2968,136 @@ def _storyboard_action_constraints(prompt):
 def _storyboard_requires_user(prompt):
     raw = str(prompt or "")
     lower = raw.lower()
-    return any(token in lower for token in ("user", "person", "woman", "man")) or "\u7528\u6237" in raw
+    return any(
+        token in lower
+        for token in (
+            "user",
+            "person",
+            "woman",
+            "man",
+            "hand",
+            "hands",
+            "holding",
+            "take out",
+            "taking out",
+            "remove",
+            "removing",
+        )
+    ) or any(token in raw for token in ("\u7528\u6237", "\u624b", "\u624b\u6301", "\u53d6\u51fa", "\u62ff\u51fa", "\u62ff\u8d77"))
+
+
+def _storyboard_visual_focus(prompt, category="", model=""):
+    raw = str(prompt or "")
+    lower = raw.lower()
+    is_laundry = _is_laundry_storyboard(f"{category} {model} {raw}")
+    result_tokens = (
+        "clean clothes",
+        "clean laundry",
+        "fresh laundry",
+        "fluffy",
+        "washed clothes",
+        "dry clothes",
+        "dried clothes",
+        "folded clothes",
+        "laundry basket",
+        "result",
+        "completion",
+        "finished",
+    )
+    hand_tokens = (
+        "hand",
+        "hands",
+        "holding",
+        "take out",
+        "taking out",
+        "remove clothes",
+        "removing clothes",
+        "pulling out",
+    )
+    control_tokens = (
+        "button",
+        "buttons",
+        "display",
+        "led",
+        "control panel",
+        "panel",
+        "knob",
+        "program",
+        "cycle",
+    )
+    chinese_result_tokens = (
+        "\u5e72\u51c0",
+        "\u6e05\u6d01",
+        "\u6d01\u51c0",
+        "\u84ec\u677e",
+        "\u8863\u7269",
+        "\u8863\u670d",
+        "\u6bdb\u5dfe",
+        "\u6d17\u6da4\u5b8c\u6210",
+        "\u6d17\u5b8c",
+        "\u5b8c\u6210",
+        "\u7ed3\u679c",
+        "\u9a8c\u8bc1",
+    )
+    chinese_hand_tokens = ("\u624b", "\u624b\u6301", "\u53d6\u51fa", "\u62ff\u51fa", "\u62ff\u8d77", "\u53d6\u8d70")
+    chinese_control_tokens = ("\u6309\u94ae", "\u663e\u793a", "\u663e\u793a\u5c4f", "LED", "\u63a7\u5236", "\u65cb\u94ae", "\u7a0b\u5e8f")
+
+    has_result = any(token in lower for token in result_tokens) or any(token in raw for token in chinese_result_tokens)
+    has_hand = any(token in lower for token in hand_tokens) or any(token in raw for token in chinese_hand_tokens)
+    has_control = any(token in lower for token in control_tokens) or any(token in raw for token in chinese_control_tokens)
+
+    if is_laundry and has_hand:
+        return {
+            "kind": "laundry-hand-result",
+            "primary": "hands holding or taking out clean, fluffy laundry from the washer opening",
+            "composition": (
+                "The hands and clean laundry must be the dominant foreground subject. Show the washer door or drum "
+                "as supporting context, but do not make this a front-on appliance product shot."
+            ),
+            "constraint": (
+                "Must show visible hands and clean/fluffy clothes being removed or held; an appliance-only image is incorrect."
+            ),
+            "negative": "closed washer with no hands, no clothes, appliance-only hero shot, empty drum",
+            "reference_policy": "skip-action-result-reference",
+        }
+    if is_laundry and has_result and not has_control:
+        return {
+            "kind": "laundry-clean-result",
+            "primary": "clean washed laundry, towels, or clothes presented as the washing result",
+            "composition": (
+                "The clean laundry result must be clearly visible and visually dominant. The washer may appear open, "
+                "partial, or in the background as context."
+            ),
+            "constraint": (
+                "Must show clean clothes/towels as the result of washing; an appliance-only image is incorrect."
+            ),
+            "negative": "closed washer with no clothes, appliance-only hero shot, empty laundry room",
+            "reference_policy": "skip-action-result-reference",
+        }
+    if is_laundry and has_control:
+        return {
+            "kind": "laundry-control-detail",
+            "primary": "the washer control-panel/display/button interaction requested by the storyboard",
+            "composition": (
+                "A close product-detail composition is acceptable, but the requested button, knob, display, or program "
+                "state must be visible and sharp."
+            ),
+            "constraint": "Must clearly show the requested control-panel/display/button detail.",
+            "negative": "generic washer front with unreadable controls, missing display, missing button interaction",
+            "reference_policy": "use-product-reference",
+        }
+    return {
+        "kind": "default",
+        "primary": "the exact visual action or result stated in the storyboard row",
+        "composition": "Follow the storyboard row before product reference composition.",
+        "constraint": "",
+        "negative": "image unrelated to the storyboard action",
+        "reference_policy": "use-product-reference",
+    }
+
+
+def _storyboard_reference_policy(prompt, category="", model=""):
+    return _storyboard_visual_focus(prompt, category=category, model=model).get("reference_policy", "use-product-reference")
 
 
 def _storyboard_switching_laundry(prompt):
@@ -3006,16 +3138,20 @@ def _storyboard_switching_laundry(prompt):
     return False
 
 
-def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0):
+def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0, reference_policy="use-product-reference"):
     raw_prompt = str(prompt or "").strip()[:900]
     context = _storyboard_category_context(category, model, detection_text=raw_prompt)
+    focus = _storyboard_visual_focus(raw_prompt, category=category, model=model)
     action_constraints = _storyboard_action_constraints(raw_prompt)
+    scene_instruction = focus["constraint"] if str(reference_policy or "").startswith("skip-") else context["must"]
     lines = [
         "Create one premium 16:9 photorealistic e-commerce storyboard still.",
         "Hard requirement: depict the exact storyboard row below; do not substitute another product, room, or action.",
-        f"Required product and place: {context['subject']} in {context['setting']}.",
+        f"Critical visual target: {focus['primary']}.",
+        f"Required composition: {focus['composition']}",
+        f"Product context: {context['subject']} in {context['setting']}.",
         f"Shot number: {int(shot_index) + 1}.",
-        f"Mandatory primary scene: {context['must']}",
+        f"Mandatory primary scene: {scene_instruction}",
         f"Camera and action constraints: {action_constraints}" if action_constraints else "",
         _SINGLE_PRODUCT_RULE,
         _HISENSE_BRAND_RULE,
@@ -3024,7 +3160,9 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
             "silhouette, color, finish, door outline, handle/buttons, logo placement, and control-panel layout. "
             "Do not copy the reference image's white background, catalog packshot angle, room, closet, cabinet "
             "layout, lighting, crop, sticker/badge, or composition."
-        ),
+        )
+        if not str(reference_policy or "").startswith("skip-")
+        else "No product reference image is used for this action/result shot; obey the storyboard row instead of making a product packshot.",
         (
             "Scene priority: the storyboard action, environment, props, food/container, hands, door/cavity/control "
             "interaction, and camera angle from the row must override the reference image composition."
@@ -3035,9 +3173,9 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         ),
         "The selected product must remain recognizable inside a new real-life scene, not as an isolated product cutout.",
         f"Storyboard details to preserve: {raw_prompt}",
-        f"Do not show: {context['negative']}.",
+        f"Do not show: {context['negative']}; {focus['negative']}.",
         (
-            "Visual style: clean commercial lighting, realistic product proportions, product-focused composition, "
+            "Visual style: clean commercial lighting, realistic product proportions, storyboard-action-focused composition, "
             "natural colors, no UI mockups, no text overlay, no watermarks, no discount badges, no round stickers, "
             "no competitor brands, no wrong product category."
         ),
@@ -3220,9 +3358,11 @@ def _liblibai_image_config() -> LiblibAIConfig:
     )
 
 
-def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_index=0) -> str:
+def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_index=0, reference_policy="use-product-reference") -> str:
     context = _storyboard_category_context(category, model, detection_text=raw_prompt)
+    focus = _storyboard_visual_focus(raw_prompt, category=category, model=model)
     action_constraints = _storyboard_action_constraints(raw_prompt)
+    scene_instruction = focus["constraint"] if str(reference_policy or "").startswith("skip-") else context["must"]
     detail = re.sub(r"\s+", " ", str(raw_prompt or "")).strip()
     for boilerplate in (
         "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
@@ -3235,20 +3375,30 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
     detail = detail[:500].strip()
     lines = [
         "Premium photorealistic 16:9 e-commerce storyboard still.",
-        f"Subject: {context['subject']}.",
+        f"Critical visual target: {focus['primary']}.",
+        f"Composition: {focus['composition']}",
+        f"Product context: {context['subject']}.",
         f"Setting: {context['setting']}.",
         f"Shot {int(shot_index) + 1}: follow storyboard exactly.",
-        f"Scene: {context['must']}",
+        f"Scene: {scene_instruction}",
         f"Camera constraints: {action_constraints}" if action_constraints else "",
         f"Storyboard details: {detail}" if detail else "",
         "One-product rule: exactly one physical Hisense appliance; no duplicate, second unit, side-by-side appliance, product lineup, or background same-category appliance.",
         "Brand rule: readable logo text must be exactly 'Hisense' with complete sharp letters; no misspelled, partial, garbled, or fake brand text. If unsure, leave the appliance badge blank.",
-        "Reference image: preserve appliance identity, color, finish, door outline, handle/control-panel, buttons, knobs, display, cavity/drum shape, logo position, and proportions.",
-        "Use the reference only for product design, not for the final scene. Build a new scene from the storyboard row; do not copy the reference room, closet, cabinet layout, lighting, crop, or camera angle.",
+        (
+            "Reference image: preserve appliance identity, color, finish, door outline, handle/control-panel, buttons, knobs, display, cavity/drum shape, logo position, and proportions."
+            if not str(reference_policy or "").startswith("skip-")
+            else "No product reference image is used for this action/result shot; obey the storyboard row instead of making a product packshot."
+        ),
+        (
+            "Use the reference only for product design, not for the final scene. Build a new scene from the storyboard row; do not copy the reference room, closet, cabinet layout, lighting, crop, or camera angle."
+            if not str(reference_policy or "").startswith("skip-")
+            else ""
+        ),
         "Product details must stay straight, sharp, and physically plausible; no warped handles, melted buttons, extra knobs, or distorted display panels.",
         "Do not change black appliances into white or silver; do not replace the referenced design.",
-        "Commercial soft daylight, realistic proportions, clean home scene, product-focused composition.",
-        f"Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
+        "Commercial soft daylight, realistic proportions, clean home scene, storyboard-action-focused composition.",
+        f"Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, {focus['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
     ]
     prompt = " ".join(line for line in lines if line)
     return prompt[:LIBLIBAI_MAX_PROMPT_LENGTH].strip()
@@ -5585,6 +5735,11 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
     variant = variants[req.variant_index]
     now = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
     raw_prompt = str(req.prompt or "")[:2000]
+    reference_policy = _storyboard_reference_policy(
+        raw_prompt,
+        category=request_payload.get("category", ""),
+        model=request_payload.get("model", ""),
+    )
     product_asset = _product_image_by_id(req.product_image_id, script_job_id=req.script_job_id) if req.product_image_id else None
     if req.product_image_id and not product_asset:
         raise HTTPException(status_code=404, detail="Product image not found.")
@@ -5608,6 +5763,8 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
                 model=request_payload.get("model", ""),
                 prompt=raw_prompt,
             )
+    if reference_policy.startswith("skip-"):
+        reference_image_bytes = None
     with job_lock:
         existing_jobs = _load_nova_canvas_jobs()
         existing_active = next(
@@ -5629,6 +5786,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
             category=request_payload.get("category", ""),
             model=request_payload.get("model", ""),
             shot_index=req.shot_index,
+            reference_policy=reference_policy,
         )
     else:
         generation_prompt = _enhance_storyboard_image_prompt(
@@ -5636,6 +5794,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
             category=request_payload.get("category", ""),
             model=request_payload.get("model", ""),
             shot_index=req.shot_index,
+            reference_policy=reference_policy,
         )
     image_job = {
         "id": uuid.uuid4().hex[:12],
@@ -5668,6 +5827,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
             else "reference-controlnet" if reference_image_bytes else "text-to-image"
         ),
         "reference_control_type": LIBLIBAI_REFERENCE_CONTROL_TYPE if _image_provider_name() == "liblibai" and reference_image_bytes else "",
+        "reference_policy": reference_policy,
         "reference_preprocess": reference_metadata.get("reference_preprocess", ""),
         "reference_crop_box": reference_metadata.get("reference_crop_box", []),
         "attempt": 0,
