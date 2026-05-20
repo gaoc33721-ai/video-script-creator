@@ -435,9 +435,28 @@ function renderMessages() {
     messages.push({ id: "pending-user", role: "user", content: state.pending.text, created_at: state.pending.created_at });
     messages.push({ id: "pending-assistant", role: "assistant", content: "", created_at: state.pending.created_at, pending: true });
   }
+  const displayMessages = newestTurnsFirst(messages);
   $("emptyChat").classList.toggle("hidden", messages.length > 0);
-  $("messageList").innerHTML = messages.map(renderMessage).join("");
-  $("messageList").scrollTop = $("messageList").scrollHeight;
+  $("messageList").innerHTML = displayMessages.map(renderMessage).join("");
+  $("messageList").scrollTop = 0;
+}
+
+function newestTurnsFirst(messages) {
+  const turns = [];
+  let index = 0;
+  while (index < messages.length) {
+    const message = messages[index];
+    const turn = [message];
+    index += 1;
+    if (message.role === "user") {
+      while (index < messages.length && messages[index].role !== "user") {
+        turn.push(messages[index]);
+        index += 1;
+      }
+    }
+    turns.push(turn);
+  }
+  return turns.reverse().flat();
 }
 
 function renderMessage(message) {
