@@ -545,9 +545,122 @@ def _mentioned_models(question: str, available_models: list[str], selected_model
     return matches
 
 
+def _mentioned_series(question: str, available_series: list[str]) -> list[str]:
+    question_text = question.lower()
+    matches = []
+    for series in available_series:
+        series_text = str(series or "").strip()
+        if len(series_text) < 2:
+            continue
+        series_lower = series_text.lower()
+        if series_lower in question_text or f"{series_lower}系列" in question_text:
+            matches.append(series_text)
+    return matches
+
+
+def _is_product_list_question(question: str) -> bool:
+    question_text = str(question or "").lower()
+    list_phrases = [
+        "哪些产品",
+        "有哪些产品",
+        "都有哪些产品",
+        "产品有哪些",
+        "哪些型号",
+        "有哪些型号",
+        "都有哪些型号",
+        "型号有哪些",
+        "产品列表",
+        "型号列表",
+        "产品清单",
+        "型号清单",
+        "都有什么型号",
+        "有什么型号",
+        "有几款",
+        "多少款",
+        "几个型号",
+        "几款产品",
+        "all products",
+        "which products",
+        "what products",
+        "model list",
+    ]
+    return any(phrase in question_text for phrase in list_phrases)
+
+
+def _is_product_card_question(question: str) -> bool:
+    question_text = str(question or "").lower()
+    card_phrases = [
+        "产品卡片",
+        "型号卡片",
+        "规格卡片",
+        "详细参数",
+        "规格参数",
+        "完整参数",
+        "参数表",
+        "产品信息",
+        "型号信息",
+        "product card",
+        "spec sheet",
+    ]
+    return any(phrase in question_text for phrase in card_phrases)
+
+
+def _is_field_lookup_question(question: str) -> bool:
+    question_text = str(question or "").lower()
+    field_phrases = [
+        "物料",
+        "ean",
+        "条码",
+        "销售型号",
+        "生产版本",
+        "认证",
+        "承诺",
+        "过度",
+        "能效",
+        "噪音",
+        "标称",
+        "上市",
+        "规划",
+        "ir",
+        "销量",
+        "生产基地",
+        "状态",
+    ]
+    return any(phrase in question_text for phrase in field_phrases)
+
+
+def _question_intent(question: str) -> str:
+    if _is_product_list_question(question):
+        return "product_list"
+    if _is_product_card_question(question):
+        return "product_card"
+    question_text = str(question or "").lower()
+    if "对比" in question_text or "compare" in question_text:
+        return "compare"
+    if _is_field_lookup_question(question):
+        return "field_lookup"
+    return "general"
+
+
+def _should_scope_to_selected_model(question: str, selected_model: str, explicit_models: list[str], requested_series: list[str]) -> bool:
+    if not selected_model:
+        return False
+    if explicit_models or requested_series:
+        return False
+    if _is_product_list_question(question):
+        return False
+    return True
+
+
+def _filter_by_series(df: pd.DataFrame, requested_series: list[str]) -> pd.DataFrame:
+    if df.empty or not requested_series or "series" not in df.columns:
+        return pd.DataFrame()
+    return df[df["series"].astype(str).isin(requested_series)].copy()
+
+
 def _keywords(question: str) -> list[str]:
     words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_.-]{1,}|\d+(?:\.\d+)?|[\u4e00-\u9fff]{2,}", question)
-    stop = {"请问", "一下", "这个", "产品", "冰箱", "海信", "生成", "帮我", "哪些", "如何", "什么", "怎么"}
+    stop = {"请问", "一下", "这个", "产品", "冰箱", "海信", "生成", "帮我", "哪些", "如何", "什么", "怎么", "系列"}
     return [word.lower() for word in words if word.lower() not in stop]
 
 
@@ -787,12 +900,25 @@ class FridgeKnowledgeStore:
         competitors = self.load_dataset("competitors")
         documents = self.load_dataset("documents")
         available_models = sorted(specs["model"].dropna().astype(str).unique().tolist()) if not specs.empty and "model" in specs else []
-        requested_models = _mentioned_models(question, available_models, selected_model)
+        available_series = sorted(specs["series"].dropna().astype(str).unique().tolist()) if not specs.empty and "series" in specs else []
+        explicit_models = _mentioned_models(question, available_models, "")
+        requested_series = [] if explicit_models else _mentioned_series(question, available_series)
+        selected_model_applied = _should_scope_to_selected_model(question, selected_model, explicit_models, requested_series)
+        requested_models = _mentioned_models(question, available_models, selected_model if selected_model_applied else "")
+        intent = _question_intent(question)
         words = _keywords(question)
 
         spec_hits = pd.DataFrame()
         if not specs.empty:
-            if requested_models:
+            if requested_series:
+                spec_hits = _filter_by_series(specs, requested_series)
+            elif intent == "product_list":
+                spec_hits = specs.copy()
+                if words and "search_text" in specs:
+                    keyword_hits = specs[specs["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))]
+                    if not keyword_hits.empty:
+                        spec_hits = keyword_hits
+            elif requested_models:
                 spec_hits = specs[specs["model"].astype(str).isin(requested_models)].copy()
             else:
                 spec_hits = _apply_spec_filters(question, specs)
@@ -800,13 +926,15 @@ class FridgeKnowledgeStore:
                     text_hits = specs[specs["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))]
                     if not text_hits.empty:
                         spec_hits = text_hits
-            spec_hits = spec_hits.head(8)
+            spec_hits = spec_hits.head(30 if intent == "product_list" else 8)
 
         marketing_hits = pd.DataFrame()
         if not marketing.empty:
             mask = pd.Series([False] * len(marketing), index=marketing.index)
             if requested_models and "model" in marketing:
                 mask = mask | marketing["model"].astype(str).isin(requested_models)
+            if requested_series and "series" in marketing:
+                mask = mask | marketing["series"].astype(str).isin(requested_series)
             if words and "search_text" in marketing:
                 mask = mask | marketing["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))
             scope_mask = marketing.get("scope", pd.Series([""] * len(marketing), index=marketing.index)).astype(str).str.lower().isin(["global", "全局", "通用"])
@@ -825,19 +953,31 @@ class FridgeKnowledgeStore:
         if not documents.empty:
             if requested_models and "model" in documents:
                 document_hits = documents[documents["model"].astype(str).isin(requested_models)]
+            if requested_series and "series" in documents:
+                document_hits = pd.concat([document_hits, documents[documents["series"].astype(str).isin(requested_series)]], ignore_index=True)
             if words and "search_text" in documents:
                 keyword_hits = documents[documents["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))]
+                if requested_models and "model" in keyword_hits:
+                    keyword_hits = keyword_hits[keyword_hits["model"].astype(str).isin(requested_models)]
+                elif requested_series and "series" in keyword_hits:
+                    keyword_hits = keyword_hits[keyword_hits["series"].astype(str).isin(requested_series)]
                 document_hits = pd.concat([document_hits, keyword_hits], ignore_index=True).drop_duplicates().head(6)
             elif document_hits.empty:
                 document_hits = documents.head(3)
 
         return {
+            "intent": intent,
             "requested_models": requested_models,
+            "explicit_models": explicit_models,
+            "requested_series": requested_series,
+            "selected_model": selected_model if selected_model else "",
+            "selected_model_applied": selected_model_applied,
             "specs": spec_hits.fillna("").to_dict(orient="records"),
             "marketing": marketing_hits.fillna("").to_dict(orient="records"),
             "competitors": competitor_hits.fillna("").to_dict(orient="records"),
             "documents": document_hits.fillna("").to_dict(orient="records"),
             "available_models": available_models[:200],
+            "available_series": [item for item in available_series if item][:200],
         }
 
 
@@ -913,6 +1053,105 @@ def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join([header_line, sep_line, *body])
 
 
+def _model_list_answer(evidence: dict) -> str:
+    specs = evidence.get("specs") or []
+    if not specs:
+        return ""
+    requested_series = [item for item in evidence.get("requested_series", []) if item]
+    scope = f"{'、'.join(requested_series)} 系列" if requested_series else "当前知识库"
+    rows = []
+    seen = set()
+    for row in specs:
+        model = _text(row.get("model"))
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        capacity = _join_unique(
+            [
+                row.get("capacity_total_l"),
+                row.get("washing_capacity_kg"),
+                row.get("drying_capacity_kg"),
+                row.get("drum_volume_l"),
+            ],
+            limit=120,
+        )
+        status = _join_unique([row.get("launch_status"), row.get("planning_launch_date")], limit=120)
+        rows.append(
+            [
+                model,
+                _text(row.get("series")),
+                _text(row.get("product_type")),
+                _join_unique([row.get("country"), row.get("market")], limit=120),
+                capacity,
+                _text(row.get("energy_rating")) or _text(row.get("energy_rating_wash")) or _text(row.get("energy_rating_dry")),
+                status,
+            ]
+        )
+    if not rows:
+        return ""
+    intro = f"根据当前已入库规格/规划数据，{scope}共找到 {len(rows)} 个产品型号："
+    return intro + "\n\n" + _markdown_table(["型号", "系列", "产品类型", "国家/市场", "容量信息", "能效", "状态/上市时间"], rows)
+
+
+def _spec_context_answer(question: str, evidence: dict) -> str:
+    specs = evidence.get("specs") or []
+    if not specs:
+        return ""
+    question_text = str(question or "").lower()
+    row = specs[0]
+    fields: list[tuple[str, str]] = []
+
+    def add(label: str, *values) -> None:
+        value = _join_unique(values, limit=900)
+        if value and (label, value) not in fields:
+            fields.append((label, value))
+
+    add("型号", row.get("model"))
+    add("系列", row.get("series"))
+    add("产品类型", row.get("product_type"))
+    if any(word in question_text for word in ["物料", "ean", "条码", "销售型号", "生产版本"]):
+        add("生产版本", row.get("production_version"))
+        add("物料号", row.get("material_codes"))
+        add("销售型号", row.get("sales_models"))
+        add("EAN", row.get("eans"))
+    if any(word in question_text for word in ["认证", "承诺", "过度", "能效", "噪音", "标称"]):
+        add("认证", row.get("certification"))
+        add("能效", row.get("energy_rating"), row.get("energy_rating_wash"), row.get("energy_rating_dry"))
+        add("噪音", row.get("noise_db"))
+        add("水效/冷凝效率", row.get("water_rating"))
+    if any(word in question_text for word in ["上市", "规划", "ir", "销量", "生产基地", "状态"]):
+        add("型号状态", row.get("launch_status"))
+        add("规划上市时间", row.get("planning_launch_date"))
+        add("产品 IR 完成时间", row.get("product_ir_finish_date"))
+        add("规划销量", row.get("first_year_plan_volume"), row.get("second_year_plan_volume"), row.get("third_year_plan_volume"))
+        add("生产基地", row.get("planned_factory"), row.get("product_list_factory_name"))
+    if any(word in question_text for word in ["卖点", "优势", "场景", "介绍", "话术", "功能"]):
+        add("关键功能/背景", row.get("key_features"))
+        add("容量", row.get("capacity_total_l"), row.get("washing_capacity_kg"), row.get("drying_capacity_kg"), row.get("drum_volume_l"))
+        add("颜色", row.get("color"))
+    if len(fields) <= 3:
+        add("容量", row.get("capacity_total_l"), row.get("washing_capacity_kg"), row.get("drying_capacity_kg"), row.get("drum_volume_l"))
+        add("能效", row.get("energy_rating"), row.get("energy_rating_wash"), row.get("energy_rating_dry"))
+        add("噪音", row.get("noise_db"))
+        add("认证", row.get("certification"))
+        add("关键功能/背景", row.get("key_features"))
+
+    rows = [[label, value] for label, value in fields if value]
+    if not rows:
+        return ""
+    answer = "以下是与问题最相关的已入库信息：\n\n" + _markdown_table(["字段", "信息"], rows[:12])
+    documents = evidence.get("documents") or []
+    snippets = []
+    for item in documents[:2]:
+        title = _text(item.get("title")) or _text(item.get("file_name")) or "文档"
+        content = _text(item.get("summary")) or _text(item.get("content"))
+        if content:
+            snippets.append(f"- **{title}**：{content[:320]}")
+    if snippets:
+        answer += "\n\n### 相关文档摘要\n" + "\n".join(snippets)
+    return answer
+
+
 def _fallback_answer(question: str, evidence: dict) -> str:
     if not any(evidence.get(key) for key in ("specs", "marketing", "competitors", "documents")):
         models = "、".join(evidence.get("available_models", [])[:12])
@@ -921,6 +1160,12 @@ def _fallback_answer(question: str, evidence: dict) -> str:
 
     question_text = question.lower()
     specs = evidence.get("specs") or []
+    intent = evidence.get("intent") or _question_intent(question)
+    if intent == "product_list" and specs:
+        answer = _model_list_answer(evidence)
+        if answer:
+            return answer
+
     if ("对比" in question_text or "compare" in question_text) and len(specs) >= 2:
         headers = ["字段"] + [_text(row.get("model")) or f"型号{i}" for i, row in enumerate(specs, start=1)]
         rows = []
@@ -930,7 +1175,7 @@ def _fallback_answer(question: str, evidence: dict) -> str:
                 rows.append([SPEC_LABELS.get(column, column), *values])
         return "以下对比仅基于当前已上传规格表：\n\n" + _markdown_table(headers, rows[:16])
 
-    if specs:
+    if specs and intent == "product_card":
         row = specs[0]
         detail_rows = [[SPEC_LABELS.get(column, column), _text(row.get(column))] for column in KEY_SPEC_COLUMNS if _text(row.get(column))]
         answer = f"### {_text(row.get('model')) or '产品型号'} 产品卡片\n\n" + _markdown_table(["字段", "信息"], detail_rows)
@@ -950,6 +1195,11 @@ def _fallback_answer(question: str, evidence: dict) -> str:
                 points.append(f"- **{title or '竞品资料'}**：{_format_competitor_row(item)}")
             answer += "\n\n### 竞品卖点参考\n" + "\n".join(points)
         return answer
+
+    if specs:
+        answer = _spec_context_answer(question, evidence)
+        if answer:
+            return answer
 
     lines = ["以下内容仅基于当前已上传知识库："]
     for item in evidence.get("marketing", [])[:6]:
@@ -978,6 +1228,8 @@ def _call_fridge_bedrock(question: str, history: list[dict], evidence: dict) -> 
 回答必须严格基于提供的证据，不得编造参数、认证、价格、竞品表现或功能。
 如果证据不足，请明确说“当前知识库未覆盖”，并说明需要补充哪类数据。
 默认用中文回答。需要对比时优先输出 Markdown 表格；需要营销材料时输出可直接给渠道使用的话术。
+不要在用户未明确要求“产品卡片/规格卡片/参数表”时输出完整产品卡片。
+如果用户询问“有哪些产品/哪些型号/产品清单/型号列表”，请直接输出产品型号清单，并优先按用户提到的系列或关键词筛选。
 """.strip()
     user_prompt = f"""
 用户问题：
@@ -1002,6 +1254,8 @@ def _call_fridge_bedrock(question: str, history: list[dict], evidence: dict) -> 
 
 
 def answer_fridge_question(question: str, history: list[dict], evidence: dict) -> str:
+    if evidence.get("intent") in {"product_list", "field_lookup"}:
+        return _fallback_answer(question, evidence)
     try:
         answer = _call_fridge_bedrock(question, history, evidence)
         if answer.strip():
