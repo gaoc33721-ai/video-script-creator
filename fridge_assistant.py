@@ -899,8 +899,24 @@ class FridgeKnowledgeStore:
         marketing = self.load_dataset("marketing")
         competitors = self.load_dataset("competitors")
         documents = self.load_dataset("documents")
-        available_models = sorted(specs["model"].dropna().astype(str).unique().tolist()) if not specs.empty and "model" in specs else []
-        available_series = sorted(specs["series"].dropna().astype(str).unique().tolist()) if not specs.empty and "series" in specs else []
+        available_models = sorted(
+            {
+                _text(model)
+                for frame in (specs, marketing, documents)
+                if not frame.empty and "model" in frame
+                for model in frame["model"].dropna().astype(str).unique().tolist()
+                if _text(model)
+            }
+        )
+        available_series = sorted(
+            {
+                _text(series)
+                for frame in (specs, marketing, documents)
+                if not frame.empty and "series" in frame
+                for series in frame["series"].dropna().astype(str).unique().tolist()
+                if _text(series)
+            }
+        )
         explicit_models = _mentioned_models(question, available_models, "")
         requested_series = [] if explicit_models else _mentioned_series(question, available_series)
         selected_model_applied = _should_scope_to_selected_model(question, selected_model, explicit_models, requested_series)
@@ -937,7 +953,7 @@ class FridgeKnowledgeStore:
                 mask = mask | marketing["series"].astype(str).isin(requested_series)
             if words and "search_text" in marketing:
                 mask = mask | marketing["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))
-            scope_mask = marketing.get("scope", pd.Series([""] * len(marketing), index=marketing.index)).astype(str).str.lower().isin(["global", "全局", "通用"])
+            scope_mask = marketing.get("scope", pd.Series([""] * len(marketing), index=marketing.index)).astype(str).str.lower().isin(["global", "general", "全局", "通用"])
             marketing_hits = marketing[mask | scope_mask].head(10)
 
         competitor_hits = pd.DataFrame()
