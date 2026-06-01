@@ -954,7 +954,9 @@ class FridgeKnowledgeStore:
             if words and "search_text" in marketing:
                 mask = mask | marketing["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))
             scope_mask = marketing.get("scope", pd.Series([""] * len(marketing), index=marketing.index)).astype(str).str.lower().isin(["global", "general", "全局", "通用"])
-            marketing_hits = marketing[mask | scope_mask].head(10)
+            direct_hits = marketing[mask]
+            general_hits = marketing[scope_mask & ~mask]
+            marketing_hits = pd.concat([direct_hits, general_hits], ignore_index=True).head(10)
 
         competitor_hits = pd.DataFrame()
         if not competitors.empty:
