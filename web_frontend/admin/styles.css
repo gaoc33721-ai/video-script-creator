@@ -1319,9 +1319,34 @@ button.secondary.danger {
 }
 
 .youtube-capture-panel {
-  margin: 22px 0;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 14px;
+  margin: 2px 0 4px;
+  padding: 14px;
+  border: 1px solid rgba(0, 170, 166, 0.24);
+  border-radius: 12px;
+  background: rgba(232, 251, 248, 0.52);
+}
+
+.youtube-capture-panel.hidden {
+  display: none;
+}
+
+.inline-section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inline-section-head strong,
+.inline-section-head span {
+  display: block;
+}
+
+.inline-section-head span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .youtube-picker-grid {
@@ -1336,7 +1361,7 @@ button.secondary.danger {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: #fbfbfd;
+  background: #fff;
 }
 
 .picker-head {

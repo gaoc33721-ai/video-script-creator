@@ -1468,7 +1468,7 @@ function youtubeCategoryOptions() {
 }
 
 function youtubeBrandOptions() {
-  const selectedCategories = Array.from(state.selectedYoutubeCategories || []);
+  const selectedCategories = uniqueList([...Array.from(state.selectedYoutubeCategories || []), ...splitList($("collectionCategory")?.value || "")]);
   const matchingConfigs = selectedCategories.length
     ? (state.competitorConfigs || []).filter((config) =>
         selectedCategories.some((category) => String(config.category || "").toLowerCase() === category.toLowerCase())
@@ -1505,14 +1505,31 @@ function renderYoutubeCapturePickers() {
 }
 
 function youtubeCapturePayload() {
-  const categories = uniqueList([...Array.from(state.selectedYoutubeCategories), ...splitList($("youtubeCaptureCategoryInput")?.value || "")]);
-  const brands = uniqueList([...Array.from(state.selectedYoutubeBrands), ...splitList($("youtubeCaptureBrandInput")?.value || "")]);
+  const categoryText = $("collectionCategory")?.value || "";
+  const keywordText = $("collectionKeywords")?.value || "";
+  const brandText = $("collectionBrands")?.value || "";
+  const categories = uniqueList([...Array.from(state.selectedYoutubeCategories), ...splitList(categoryText), ...splitList(keywordText)]);
+  const brands = uniqueList([...Array.from(state.selectedYoutubeBrands), ...splitList(brandText)]);
   return {
-    category: categories[0] || "",
+    category: splitList(categoryText)[0] || categories[0] || "",
     keywords: categories,
     brands,
-    target_market: $("youtubeCaptureMarket")?.value || "北美 (US/CA)",
+    target_market: $("collectionMarket")?.value || "北美 (US/CA)",
   };
+}
+
+function isCollectionYoutube() {
+  return String($("collectionPlatform")?.value || "").toLowerCase() === "youtube";
+}
+
+function updateCollectionPlatformUi() {
+  const isYoutube = isCollectionYoutube();
+  $("youtubeCapturePanel")?.classList.toggle("hidden", !isYoutube);
+  $("youtubeCaptureResults")?.classList.toggle("hidden", !isYoutube || !state.youtubeCaptureAssets.length);
+  if ($("collectionSubmit")) {
+    $("collectionSubmit").textContent = isYoutube ? "提交 YouTube 采集任务" : "提交采集任务";
+  }
+  if (isYoutube) renderYoutubeCapturePickers();
 }
 
 function youtubeAssetStats(asset) {
@@ -1571,13 +1588,13 @@ function renderYoutubeCaptureResults(assets) {
 }
 
 async function discoverYoutubeCapture(event) {
-  event.preventDefault();
+  if (event) event.preventDefault();
   const payload = youtubeCapturePayload();
   if (!payload.keywords.length || !payload.brands.length) {
-    setMessage("youtubeCaptureMessage", "请至少选择或填写 1 个品类检索词和 1 个品牌检索词。", "error");
+    setMessage("collectionMessage", "请至少选择或填写 1 个品类检索词和 1 个品牌检索词。", "error");
     return;
   }
-  setMessage("youtubeCaptureMessage", "正在抓取 YouTube 视频素材...");
+  setMessage("collectionMessage", "正在抓取 YouTube 视频素材...");
   try {
     const data = await api("/api/competitor-sources/youtube/discover", {
       method: "POST",
@@ -1589,9 +1606,10 @@ async function discoverYoutubeCapture(event) {
       .map((asset) => asset.metadata?.youtube_video_id || asset.metadata?.platform_content_id)
       .filter(Boolean);
     renderYoutubeCaptureResults(state.youtubeCaptureAssets);
-    setMessage("youtubeCaptureMessage", `已抓取 ${state.youtubeCaptureAssets.length} 条 YouTube 视频素材。`, "ok");
+    updateCollectionPlatformUi();
+    setMessage("collectionMessage", `已抓取 ${state.youtubeCaptureAssets.length} 条 YouTube 视频素材。`, "ok");
   } catch (error) {
-    setMessage("youtubeCaptureMessage", error.message, "error");
+    setMessage("collectionMessage", error.message, "error");
   }
 }
 
@@ -1601,10 +1619,10 @@ async function refreshYoutubeCapture() {
     .map((asset) => asset.metadata?.youtube_video_id || asset.metadata?.platform_content_id)
     .filter(Boolean);
   if (!videoIds.length && (!payload.keywords.length || !payload.brands.length)) {
-    setMessage("youtubeCaptureMessage", "请先抓取候选素材，或选择品类和品牌后再刷新入库。", "error");
+    setMessage("collectionMessage", "请先抓取候选素材，或选择品类和品牌后再刷新入库。", "error");
     return;
   }
-  setMessage("youtubeCaptureMessage", "正在刷新 YouTube 素材入库...");
+  setMessage("collectionMessage", "正在刷新 YouTube 素材入库...");
   try {
     const data = await api("/api/competitor-assets/youtube/refresh", {
       method: "POST",
@@ -1617,16 +1635,18 @@ async function refreshYoutubeCapture() {
     });
     state.youtubeCaptureAssets = data.assets || [];
     renderYoutubeCaptureResults(state.youtubeCaptureAssets);
-    setMessage("youtubeCaptureMessage", `已入库/更新 ${data.upsert?.total || 0} 条 YouTube 素材。`, "ok");
+    updateCollectionPlatformUi();
+    setMessage("collectionMessage", `已入库/更新 ${data.upsert?.total || 0} 条 YouTube 素材。`, "ok");
     await loadCollectionRuns().catch(() => {});
     await loadAdminOverview().catch(() => {});
   } catch (error) {
-    setMessage("youtubeCaptureMessage", error.message, "error");
+    setMessage("collectionMessage", error.message, "error");
   }
 }
 
 async function submitCollectionRun(event) {
   event.preventDefault();
+  const platform = $("collectionPlatform").value;
   try {
     await api("/api/competitor-collection-runs", {
       method: "POST",
@@ -1634,10 +1654,10 @@ async function submitCollectionRun(event) {
       body: JSON.stringify({
         category: $("collectionCategory").value.trim(),
         target_market: $("collectionMarket").value.trim(),
-        platform: $("collectionPlatform").value,
-        source: $("collectionPlatform").value.toLowerCase(),
-        brands: splitList($("collectionBrands").value || ""),
-        keywords: splitList($("collectionKeywords").value || ""),
+        platform,
+        source: platform.toLowerCase(),
+        brands: platform === "YouTube" ? youtubeCapturePayload().brands : splitList($("collectionBrands").value || ""),
+        keywords: platform === "YouTube" ? youtubeCapturePayload().keywords : splitList($("collectionKeywords").value || ""),
         status: "queued",
       }),
     });
@@ -1654,6 +1674,7 @@ async function loadCompetitorConfigs() {
   state.competitorConfigs = data.configs || [];
   renderCompetitorConfigs();
   renderYoutubeCapturePickers();
+  updateCollectionPlatformUi();
 }
 
 function renderCompetitorConfigs() {
@@ -2719,7 +2740,9 @@ on("hotspotRows", "click", async (event) => {
 });
 on("collectionRunForm", "submit", submitCollectionRun);
 on("loadCollectionRuns", "click", loadCollectionRuns);
-on("youtubeCaptureForm", "submit", discoverYoutubeCapture);
+on("collectionPlatform", "change", updateCollectionPlatformUi);
+on("collectionCategory", "input", renderYoutubeCapturePickers);
+on("youtubeCaptureDiscover", "click", discoverYoutubeCapture);
 on("youtubeCaptureRefresh", "click", refreshYoutubeCapture);
 on("youtubeCaptureLoadConfigs", "click", loadCompetitorConfigs);
 on("youtubeClearCategories", "click", () => {
