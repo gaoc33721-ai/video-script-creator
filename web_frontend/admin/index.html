@@ -198,6 +198,44 @@
               <button type="submit">提交采集任务</button>
               <div id="collectionMessage" class="message"></div>
             </form>
+            <section class="youtube-capture-panel">
+              <div class="card-head compact">
+                <div>
+                  <h3>YouTube 竞品视频素材抓取</h3>
+                  <p>点选品类检索词和品牌检索词后，抓取视频链接、视频名、观看量、点赞量和评论量。</p>
+                </div>
+                <button id="youtubeCaptureRefresh" type="button" class="secondary">刷新入库</button>
+              </div>
+              <form id="youtubeCaptureForm" class="admin-form">
+                <div class="field-row">
+                  <label>目标市场<select id="youtubeCaptureMarket"><option>北美 (US/CA)</option><option>欧洲 (UK/DE/FR)</option><option>英国 (UK)</option><option>德国 (DE)</option><option>法国 (FR)</option></select></label>
+                  <label>补充品类检索词<input id="youtubeCaptureCategoryInput" placeholder="如 refrigerator, Cooling" /></label>
+                  <label>补充品牌检索词<input id="youtubeCaptureBrandInput" placeholder="如 samsung, haier, LG" /></label>
+                </div>
+                <div class="youtube-picker-grid">
+                  <section>
+                    <div class="picker-head">
+                      <strong>品类检索词</strong>
+                      <button id="youtubeClearCategories" type="button" class="link-button">清空</button>
+                    </div>
+                    <div id="youtubeCategoryChips" class="choice-chips"></div>
+                  </section>
+                  <section>
+                    <div class="picker-head">
+                      <strong>品牌检索词</strong>
+                      <button id="youtubeClearBrands" type="button" class="link-button">清空</button>
+                    </div>
+                    <div id="youtubeBrandChips" class="choice-chips"></div>
+                  </section>
+                </div>
+                <div class="competitor-actions">
+                  <button type="submit">抓取 YouTube 素材</button>
+                  <button id="youtubeCaptureLoadConfigs" type="button" class="secondary">加载配置词</button>
+                </div>
+                <div id="youtubeCaptureMessage" class="message"></div>
+              </form>
+              <div id="youtubeCaptureResults" class="admin-table-wrap hidden"></div>
+            </section>
             <div id="collectionRuns" class="compact-list"></div>
           </section>
         </section>

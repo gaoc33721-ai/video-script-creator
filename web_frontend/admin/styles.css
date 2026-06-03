@@ -1318,6 +1318,66 @@ button.secondary.danger {
   margin-bottom: 18px;
 }
 
+.youtube-capture-panel {
+  margin: 22px 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.youtube-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.youtube-picker-grid section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fbfbfd;
+}
+
+.picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.choice-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 38px;
+}
+
+.choice-chip {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 750;
+}
+
+.choice-chip:hover,
+.choice-chip.selected {
+  border-color: rgba(0, 170, 166, 0.46);
+  background: var(--brand-tint);
+  color: var(--brand-dark);
+}
+
+.youtube-result-table td:first-child {
+  min-width: 260px;
+}
+
+.youtube-result-table td:nth-child(2) {
+  min-width: 320px;
+}
+
 .admin-table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -1574,6 +1634,7 @@ button.secondary {
   .admin-metrics,
   .field-row,
   .admin-filter-row,
+  .youtube-picker-grid,
   .selection-summary,
   .guide-steps,
   .job-tools,
