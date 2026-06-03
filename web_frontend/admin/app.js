@@ -599,6 +599,24 @@ function competitorPayload() {
   };
 }
 
+function validateYoutubeBusinessPayload(payload, messageId) {
+  const hasBrand = Boolean(payload.brands?.length);
+  const hasCategory = Boolean(payload.category || payload.keywords?.length);
+  if (!hasBrand && !hasCategory) {
+    setMessage(messageId, "请填写家电品类和竞品品牌后再抓取 YouTube 官方品牌素材，例如：品类 refrigerator，品牌 haier。", "error");
+    return false;
+  }
+  if (!hasBrand) {
+    setMessage(messageId, "请至少填写 1 个竞品品牌检索词，例如 haier、samsung、LG。", "error");
+    return false;
+  }
+  if (!hasCategory) {
+    setMessage(messageId, "请至少填写 1 个家电品类检索词，例如 refrigerator、Cooling、dishwasher。", "error");
+    return false;
+  }
+  return true;
+}
+
 function competitorSourceValue() {
   return $("competitorSource")?.value || "";
 }
@@ -712,6 +730,7 @@ async function discoverYouTube() {
   setMessage("competitorMessage", "正在通过 YouTube API 发现竞品视频...");
   try {
     const payload = competitorPayload();
+    if (!validateYoutubeBusinessPayload(payload, "competitorMessage")) return;
     const data = await api("/api/competitor-sources/youtube/discover", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -724,7 +743,8 @@ async function discoverYouTube() {
     });
     renderYouTubeDiscovery(data);
     renderCompetitorAssets(data.assets || []);
-    setMessage("competitorMessage", `已发现 ${data.assets?.length || 0} 条 YouTube 候选素材，可继续刷新入库。`, "ok");
+    const filtered = data.filtered_count ? `，已过滤 ${data.filtered_count} 条非官方/非家电素材` : "";
+    setMessage("competitorMessage", `已发现 ${data.assets?.length || 0} 条 YouTube 官方家电候选素材${filtered}，可继续刷新入库。`, "ok");
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
   }
@@ -739,6 +759,7 @@ async function refreshYouTube() {
   try {
     const payload = competitorPayload();
     const videoIds = Array.from(new Set([...state.lastDiscoveredVideoIds, ...youtubeInputsFromSocialUrls()]));
+    if (!videoIds.length && !validateYoutubeBusinessPayload(payload, "competitorMessage")) return;
     const data = await api("/api/competitor-assets/youtube/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -753,7 +774,8 @@ async function refreshYouTube() {
     });
     renderCompetitorAssets(data.assets || []);
     const errors = data.errors?.length ? `，失败 ${data.errors.length} 条` : "";
-    setMessage("competitorMessage", `已入库/更新 ${data.upsert?.total || 0} 条 YouTube 素材${errors}。`, "ok");
+    const filtered = data.discovery?.filtered_count ? `，已过滤 ${data.discovery.filtered_count} 条非官方/非家电素材` : "";
+    setMessage("competitorMessage", `已入库/更新 ${data.upsert?.total || 0} 条 YouTube 官方家电素材${filtered}${errors}。`, "ok");
   } catch (error) {
     setMessage("competitorMessage", error.message, "error");
   }
@@ -1590,10 +1612,7 @@ function renderYoutubeCaptureResults(assets) {
 async function discoverYoutubeCapture(event) {
   if (event) event.preventDefault();
   const payload = youtubeCapturePayload();
-  if (!payload.keywords.length || !payload.brands.length) {
-    setMessage("collectionMessage", "请至少选择或填写 1 个品类检索词和 1 个品牌检索词。", "error");
-    return;
-  }
+  if (!validateYoutubeBusinessPayload(payload, "collectionMessage")) return;
   setMessage("collectionMessage", "正在抓取 YouTube 视频素材...");
   try {
     const data = await api("/api/competitor-sources/youtube/discover", {
@@ -1607,7 +1626,8 @@ async function discoverYoutubeCapture(event) {
       .filter(Boolean);
     renderYoutubeCaptureResults(state.youtubeCaptureAssets);
     updateCollectionPlatformUi();
-    setMessage("collectionMessage", `已抓取 ${state.youtubeCaptureAssets.length} 条 YouTube 视频素材。`, "ok");
+    const filtered = data.filtered_count ? `，已过滤 ${data.filtered_count} 条非官方/非家电素材` : "";
+    setMessage("collectionMessage", `已抓取 ${state.youtubeCaptureAssets.length} 条 YouTube 官方家电素材${filtered}。`, "ok");
   } catch (error) {
     setMessage("collectionMessage", error.message, "error");
   }
@@ -1636,7 +1656,8 @@ async function refreshYoutubeCapture() {
     state.youtubeCaptureAssets = data.assets || [];
     renderYoutubeCaptureResults(state.youtubeCaptureAssets);
     updateCollectionPlatformUi();
-    setMessage("collectionMessage", `已入库/更新 ${data.upsert?.total || 0} 条 YouTube 素材。`, "ok");
+    const filtered = data.discovery?.filtered_count ? `，已过滤 ${data.discovery.filtered_count} 条非官方/非家电素材` : "";
+    setMessage("collectionMessage", `已入库/更新 ${data.upsert?.total || 0} 条 YouTube 官方家电素材${filtered}。`, "ok");
     await loadCollectionRuns().catch(() => {});
     await loadAdminOverview().catch(() => {});
   } catch (error) {
@@ -1647,6 +1668,8 @@ async function refreshYoutubeCapture() {
 async function submitCollectionRun(event) {
   event.preventDefault();
   const platform = $("collectionPlatform").value;
+  const youtubePayload = platform === "YouTube" ? youtubeCapturePayload() : null;
+  if (youtubePayload && !validateYoutubeBusinessPayload(youtubePayload, "collectionMessage")) return;
   try {
     await api("/api/competitor-collection-runs", {
       method: "POST",
@@ -1656,8 +1679,8 @@ async function submitCollectionRun(event) {
         target_market: $("collectionMarket").value.trim(),
         platform,
         source: platform.toLowerCase(),
-        brands: platform === "YouTube" ? youtubeCapturePayload().brands : splitList($("collectionBrands").value || ""),
-        keywords: platform === "YouTube" ? youtubeCapturePayload().keywords : splitList($("collectionKeywords").value || ""),
+        brands: youtubePayload ? youtubePayload.brands : splitList($("collectionBrands").value || ""),
+        keywords: youtubePayload ? youtubePayload.keywords : splitList($("collectionKeywords").value || ""),
         status: "queued",
       }),
     });

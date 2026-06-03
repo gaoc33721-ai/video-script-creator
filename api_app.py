@@ -5207,6 +5207,11 @@ def youtube_refresh(req: YouTubeRefreshRequest):
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not video_sources:
+        if discovery_result.get("filtered_count"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"YouTube 已发现 {discovery_result.get('filtered_count')} 条视频，但均不符合官方竞品家电素材规则；请检查品牌和品类检索词。",
+            )
         raise HTTPException(status_code=400, detail="请提供 YouTube 视频 ID/链接，或提供品类/品牌/关键词用于自动发现。")
 
     normalized_assets = []

@@ -12,6 +12,68 @@ from typing import Any
 YOUTUBE_API_ENDPOINT = "https://www.googleapis.com/youtube/v3"
 DEFAULT_TIMEOUT = 15
 
+GENERIC_YOUTUBE_TERMS = {
+    "product demo",
+    "product video",
+    "demo video",
+    "video",
+    "official",
+    "appliance",
+    "appliances",
+}
+
+APPLIANCE_CATEGORY_SYNONYMS = {
+    "refrigerator": ["refrigerator", "fridge", "freezer", "cooling", "fresh food", "french door"],
+    "冰箱": ["refrigerator", "fridge", "freezer", "cooling", "fresh food", "french door", "冰箱", "冷柜", "冷藏"],
+    "fridge": ["refrigerator", "fridge", "freezer", "cooling", "fresh food", "french door"],
+    "freezer": ["refrigerator", "fridge", "freezer"],
+    "冷柜": ["refrigerator", "fridge", "freezer", "冷柜", "冰柜"],
+    "cooling": ["refrigerator", "fridge", "freezer", "air conditioner", "air conditioning", "ac ", "hvac", "cooling"],
+    "制冷": ["refrigerator", "fridge", "freezer", "air conditioner", "air conditioning", "ac ", "hvac", "cooling", "制冷", "空调", "冰箱"],
+    "air conditioner": ["air conditioner", "air conditioning", "ac ", "hvac", "cooling"],
+    "空调": ["air conditioner", "air conditioning", "ac ", "hvac", "cooling", "空调"],
+    "washer": ["washer", "washing machine", "laundry", "washer dryer", "front load"],
+    "washing machine": ["washer", "washing machine", "laundry", "washer dryer", "front load"],
+    "洗衣机": ["washer", "washing machine", "laundry", "washer dryer", "front load", "洗衣机", "洗烘"],
+    "dryer": ["dryer", "laundry", "washer dryer"],
+    "干衣机": ["dryer", "laundry", "washer dryer", "干衣机", "烘干机"],
+    "dishwasher": ["dishwasher", "dish washer", "dishes"],
+    "洗碗机": ["dishwasher", "dish washer", "dishes", "洗碗机"],
+    "air fryer": ["air fryer", "airfryer"],
+    "空气炸锅": ["air fryer", "airfryer", "空气炸锅"],
+    "oven": ["oven", "range", "cooktop", "cooking"],
+    "烤箱": ["oven", "range", "cooktop", "cooking", "烤箱"],
+    "microwave": ["microwave"],
+    "微波炉": ["microwave", "微波炉"],
+}
+
+APPLIANCE_GENERIC_TERMS = [
+    "appliance",
+    "appliances",
+    "kitchen",
+    "laundry",
+    "home appliance",
+    "home appliances",
+]
+
+NON_APPLIANCE_YOUTUBE_TERMS = [
+    "saas",
+    "software",
+    "api",
+    "ai product",
+    "agent platform",
+    "palantir",
+    "camtasia",
+    "template",
+    "explainer",
+    "sales",
+    "presentation",
+    "b2b",
+    "startup",
+    "crypto",
+    "tutorial",
+]
+
 
 class SocialApiError(RuntimeError):
     pass
@@ -172,10 +234,17 @@ def discover_youtube_videos(
 ) -> dict[str, Any]:
     if not api_key:
         raise SocialApiError("YOUTUBE_API_KEY is required.")
-    queries = build_youtube_queries(category=category, brands=brands or [], keywords=keywords or [])
+    clean_brands = _clean_terms(brands or [])
+    category_terms = _youtube_category_terms(category=category, keywords=keywords or [])
+    if not clean_brands:
+        raise SocialApiError("请至少提供 1 个竞品品牌检索词，例如 samsung、haier、LG。")
+    if not category_terms:
+        raise SocialApiError("请至少提供 1 个家电品类检索词，例如 refrigerator、Cooling、dishwasher。")
+
+    queries = build_youtube_queries(category=category, brands=clean_brands, keywords=keywords or [])
     queries = queries[: max(1, int(request_limit or 1))]
     if not queries:
-        raise SocialApiError("Please provide category, brands, or keywords for YouTube discovery.")
+        raise SocialApiError("请提供品牌和家电品类后再抓取 YouTube 竞品素材。")
 
     region = normalize_region_code(region_code, target_market)
     seen: dict[str, dict[str, Any]] = {}
@@ -204,14 +273,23 @@ def discover_youtube_videos(
 
     details = fetch_youtube_videos(api_key, list(seen.keys()), timeout=timeout)
     assets = []
+    rejected = []
     for detail in details:
         video_id = str(detail.get("id") or "")
         source = seen.get(video_id, {})
+        ok, reason = is_relevant_youtube_appliance_video(
+            detail,
+            brands=clean_brands,
+            category_terms=category_terms,
+        )
+        if not ok:
+            rejected.append({"video_id": video_id, "reason": reason, "source_query": source.get("source_query") or ""})
+            continue
         assets.append(
             normalize_youtube_video_item(
                 detail,
                 category=category,
-                preferred_brands=brands or [],
+                preferred_brands=clean_brands,
                 source_query=source.get("source_query") or "",
                 search_position=source.get("position"),
             )
@@ -223,6 +301,8 @@ def discover_youtube_videos(
         "queries": request_logs,
         "video_ids": list(seen.keys()),
         "assets": assets,
+        "filtered_count": len(rejected),
+        "filtered": rejected[:20],
     }
 
 
@@ -631,20 +711,53 @@ def fetch_json(url: str, *, params: dict[str, Any] | None = None, timeout: int =
 
 
 def build_youtube_queries(*, category: str, brands: list[str], keywords: list[str]) -> list[str]:
-    base_terms = [item.strip() for item in keywords if item and item.strip()]
-    if category and category.strip():
-        base_terms.append(category.strip())
+    base_terms = _youtube_category_terms(category=category, keywords=keywords)
     if not base_terms:
-        base_terms = ["product demo"]
+        return []
     queries = []
-    clean_brands = [item.strip() for item in brands if item and item.strip()]
-    if clean_brands:
-        for brand in clean_brands:
-            for term in base_terms:
-                queries.append(f"{brand} {term} video")
-    else:
-        queries.extend(f"{term} product video" for term in base_terms)
+    clean_brands = _clean_terms(brands)
+    for brand in clean_brands:
+        for term in base_terms:
+            queries.extend(
+                [
+                    f"{brand} {term} official",
+                    f"{brand} {term} appliance",
+                    f"{brand} {term} product video",
+                    f"{brand} {term} demo",
+                ]
+            )
     return _dedupe(queries)
+
+
+def is_relevant_youtube_appliance_video(
+    item: dict[str, Any],
+    *,
+    brands: list[str],
+    category_terms: list[str],
+) -> tuple[bool, str]:
+    snippet = item.get("snippet") or {}
+    title = str(snippet.get("title") or "")
+    description = str(snippet.get("description") or "")
+    channel_title = str(snippet.get("channelTitle") or "")
+    haystack = _normalized_text(" ".join([title, description, channel_title]))
+    channel_text = _normalized_text(channel_title)
+
+    matched_brand = next((brand for brand in _clean_terms(brands) if _term_in_text(brand, haystack)), "")
+    if not matched_brand:
+        return False, "brand_not_matched"
+
+    category_synonyms = _expand_appliance_terms(category_terms)
+    matched_category = next((term for term in category_synonyms if _term_in_text(term, haystack)), "")
+    if not matched_category:
+        return False, "appliance_category_not_matched"
+
+    if any(_term_in_text(term, haystack) for term in NON_APPLIANCE_YOUTUBE_TERMS):
+        return False, "non_appliance_or_software_signal"
+
+    official_signal = _term_in_text(matched_brand, channel_text) or "official" in haystack
+    if not official_signal:
+        return False, "official_brand_signal_not_matched"
+    return True, ""
 
 
 def extract_content_id(platform: str, url: str) -> str:
@@ -860,6 +973,55 @@ def _clean_url(url: str) -> str:
     if not re.match(r"^https?://", text, flags=re.I):
         text = "https://" + text
     return text
+
+
+def _clean_terms(values: list[str]) -> list[str]:
+    return _dedupe([str(item or "").strip() for item in values if str(item or "").strip()])
+
+
+def _youtube_category_terms(*, category: str, keywords: list[str]) -> list[str]:
+    terms = _clean_terms([category, *(keywords or [])])
+    result = []
+    for term in terms:
+        normalized = _normalized_text(term)
+        if not normalized or normalized in GENERIC_YOUTUBE_TERMS:
+            continue
+        expanded = _expand_appliance_terms([term])
+        if expanded:
+            result.append(term)
+    return _dedupe(result)
+
+
+def _expand_appliance_terms(terms: list[str]) -> list[str]:
+    expanded = []
+    for term in _clean_terms(terms):
+        normalized = _normalized_text(term)
+        if normalized in GENERIC_YOUTUBE_TERMS:
+            continue
+        matched = False
+        for key, synonyms in APPLIANCE_CATEGORY_SYNONYMS.items():
+            if _term_in_text(key, normalized) or any(_term_in_text(value, normalized) for value in synonyms):
+                expanded.extend(synonyms)
+                matched = True
+        if not matched and any(_term_in_text(term, value) or _term_in_text(value, term) for value in APPLIANCE_GENERIC_TERMS):
+            expanded.append(term)
+    return _dedupe(expanded)
+
+
+def _normalized_text(value: Any) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _term_in_text(term: str, text: str) -> bool:
+    clean_term = _normalized_text(term)
+    clean_text = _normalized_text(text)
+    if not clean_term or not clean_text:
+        return False
+    if re.search(r"[a-z0-9]", clean_term):
+        return re.search(rf"(?<![a-z0-9]){re.escape(clean_term)}(?![a-z0-9])", clean_text) is not None
+    return clean_term in clean_text
 
 
 def _stable_id(value: str) -> str:
