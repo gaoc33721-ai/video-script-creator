@@ -1945,11 +1945,62 @@ function renderVariantContent(variant) {
   return `${label}<div class="script-markdown">${markdownToHtml(variant.content || "")}</div>`;
 }
 
+function storyboardRowFromCells(row, index) {
+  const isAgencyStoryboard = row.length >= 13;
+  if (isAgencyStoryboard) {
+    const shotLabel = row[0] || `镜头 ${index + 1}`;
+    const segment = row[1] || shotLabel;
+    const visualPrompt = row[2] || "";
+    const movement = row[3] || "";
+    const sceneNote = row[4] || "";
+    const storyNote = row[5] || "";
+    const sellingPoint = row[6] || "";
+    const feature = row[7] || sellingPoint || "";
+    const voiceover = row[8] || "";
+    const subtitle = row[9] || "";
+    const duration = row[12] || "";
+    const method = [visualPrompt, sceneNote, storyNote].filter(Boolean).join("；");
+    return {
+      shotLabel,
+      segment,
+      feature,
+      method,
+      voiceover,
+      subtitle,
+      angle: "",
+      movement,
+      duration,
+      sellingPoint,
+    };
+  }
+  const hasLegacyEffectColumns = row.length >= 12;
+  const segment = row[0] || `镜头 ${index + 1}`;
+  const feature = row[1] || "";
+  const method = row[2] || "";
+  const voiceover = row[3] || "";
+  const subtitle = row[4] || "";
+  const angle = row[hasLegacyEffectColumns ? 6 : 5] || "";
+  const movement = row[hasLegacyEffectColumns ? 7 : 6] || "";
+  const duration = row[hasLegacyEffectColumns ? 11 : 9] || "";
+  return {
+    shotLabel: `镜头 ${String(index + 1).padStart(2, "0")}`,
+    segment,
+    feature,
+    method,
+    voiceover,
+    subtitle,
+    angle,
+    movement,
+    duration,
+    sellingPoint: "",
+  };
+}
+
 function renderStoryboardCards(content) {
   const rows = parseFirstMarkdownTable(content);
   const shotRows = rows.filter((row) => {
-    const segment = row[0] || "";
-    return segment && !segment.includes("总时长") && !segment.toLowerCase().includes("total");
+    const marker = [row[0], row[1]].filter(Boolean).join(" ");
+    return marker && !marker.includes("总时长") && !marker.toLowerCase().includes("total");
   });
   state.storyboardShots = [];
   if (!shotRows.length) {
@@ -1961,15 +2012,8 @@ function renderStoryboardCards(content) {
   return shotRows
     .slice(0, 12)
     .map((row, index) => {
-      const segment = row[0] || `镜头 ${index + 1}`;
-      const feature = row[1] || "";
-      const method = row[2] || "";
-      const voiceover = row[3] || "";
-      const subtitle = row[4] || "";
-      const hasLegacyEffectColumns = row.length >= 12;
-      const angle = row[hasLegacyEffectColumns ? 6 : 5] || "";
-      const movement = row[hasLegacyEffectColumns ? 7 : 6] || "";
-      const duration = row[hasLegacyEffectColumns ? 11 : 9] || "";
+      const { shotLabel, segment, feature, method, voiceover, subtitle, angle, movement, duration, sellingPoint } =
+        storyboardRowFromCells(row, index);
       const prompt = buildStoryboardImagePrompt({
         category: productCategory,
         model: productModel,
@@ -1985,7 +2029,7 @@ function renderStoryboardCards(content) {
       return `
         <article class="storyboard-card">
           <div class="storyboard-meta">
-            <span>镜头 ${String(index + 1).padStart(2, "0")}</span>
+            <span>${escapeHtml(shotLabel)}</span>
             <strong>${escapeHtml(duration || "-")}</strong>
           </div>
           <h4>${escapeHtml(segment)}</h4>
@@ -1993,6 +2037,7 @@ function renderStoryboardCards(content) {
           <dl>
             <div><dt>画面表现</dt><dd>${escapeHtml(method || "按脚本场景执行")}</dd></div>
             <div><dt>拍摄方式</dt><dd>${escapeHtml([angle, movement].filter(Boolean).join(" / ") || "稳定镜头")}</dd></div>
+            ${sellingPoint ? `<div><dt>对应卖点</dt><dd>${escapeHtml(sellingPoint)}</dd></div>` : ""}
             <div><dt>旁白/字幕</dt><dd>${escapeHtml([voiceover, subtitle].filter(Boolean).join(" / "))}</dd></div>
           </dl>
           <div class="storyboard-actions">
