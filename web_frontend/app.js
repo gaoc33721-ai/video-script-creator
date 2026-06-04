@@ -28,8 +28,6 @@ const state = {
   selectedProductImageId: "",
   productImageAsset: null,
   jobsExpanded: false,
-  jobFilter: "all",
-  jobSearch: "",
   competitorResearchTimer: null,
   lastDiscoveredAsins: [],
   lastDiscoveredVideoIds: [],
@@ -339,14 +337,14 @@ function formPayload(form) {
     category: data.get("category"),
     model: data.get("model"),
     selected_features: state.selectedFeatures,
-    video_usage: data.get("video_usage"),
+    video_usage: "站外种草",
     video_type: state.selectedVideoTypes,
     expected_duration: Number(data.get("expected_duration") || 30),
-    project_type: data.get("project_type"),
+    project_type: "常规上新",
     use_competitor_context: data.get("use_competitor_context") === "on",
     use_hotspot_context: data.get("use_hotspot_context") === "on",
-    target_audience: data.get("target_audience") || "",
-    pain_points: data.get("pain_points") || "",
+    target_audience: "",
+    pain_points: "",
     custom_requirements: data.get("custom_requirements") || "",
   };
 }
@@ -781,18 +779,17 @@ async function uploadFile(event) {
 async function loadJobs() {
   try {
     const data = await api("/api/jobs");
-    const jobs = filterJobs(data.jobs || []);
-    updateJobFilterButtons();
+    const jobs = data.jobs || [];
     if (!jobs.length) {
-      $("jobs").innerHTML = '<div class="empty-state"><strong>暂无匹配任务</strong><span>可调整筛选条件，或提交新的脚本生成任务。</span></div>';
+      $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>暂无任务</strong><span>提交脚本后会显示最近一条。</span></div>';
       return;
     }
-    const defaultVisible = 3;
+    const defaultVisible = 1;
     const expanded = state.jobsExpanded || false;
     const visible = expanded ? jobs : jobs.slice(0, defaultVisible);
     let html = visible.map(renderJob).join("");
     if (jobs.length > defaultVisible) {
-      const label = expanded ? "收起历史任务" : `展开全部（共 ${jobs.length} 条）`;
+      const label = expanded ? "收起历史任务" : `展开历史任务（共 ${jobs.length} 条）`;
       html += `<button class="jobs-toggle" type="button" id="toggleJobs">${escapeHtml(label)}</button>`;
     }
     $("jobs").innerHTML = html;
@@ -806,31 +803,6 @@ async function loadJobs() {
   } catch (error) {
     $("jobs").innerHTML = `<div class="empty-state"><strong>任务加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
   }
-}
-
-function filterJobs(jobs) {
-  const keyword = state.jobSearch.trim().toLowerCase();
-  return (jobs || []).filter((job) => {
-    const status = String(job.status || "");
-    const statusMatched =
-      state.jobFilter === "all" ||
-      status === state.jobFilter ||
-      (state.jobFilter === "running" && ["pending", "running"].includes(status));
-    if (!statusMatched) return false;
-    if (!keyword) return true;
-    const request = job.request || {};
-    const haystack = [job.id, status, request.model, request.category, request.platform, request.target_market]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(keyword);
-  });
-}
-
-function updateJobFilterButtons() {
-  document.querySelectorAll("#jobFilters button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.filter === state.jobFilter);
-  });
 }
 
 function renderJob(job) {
@@ -1880,18 +1852,6 @@ $("videoTypePicker").addEventListener("click", (event) => {
 $("generateForm").addEventListener("submit", submitGeneration);
 if ($("uploadInput")) $("uploadInput").addEventListener("change", uploadFile);
 $("refreshJobs").addEventListener("click", loadJobs);
-$("jobFilters").addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-filter]");
-  if (!button) return;
-  state.jobFilter = button.dataset.filter || "all";
-  state.jobsExpanded = false;
-  loadJobs();
-});
-$("jobSearch").addEventListener("input", (event) => {
-  state.jobSearch = event.target.value || "";
-  state.jobsExpanded = false;
-  loadJobs();
-});
 $("jobs").addEventListener("click", async (event) => {
   const downloadButton = event.target.closest(".download-job");
   if (downloadButton) {

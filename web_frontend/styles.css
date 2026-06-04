@@ -263,42 +263,28 @@ button,
 .jobs {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.job-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px;
   gap: 10px;
-  margin: -4px 0 16px;
 }
 
-.job-filters {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+.compact-jobs-card {
+  padding: 20px;
 }
 
-.job-filters button {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  background: #fbfbfd;
-  color: var(--text);
-  font-size: 13px;
+.compact-card-head {
+  margin-bottom: 12px;
 }
 
-.job-filters button.active {
-  border-color: rgba(0, 170, 166, 0.4);
-  background: var(--brand);
-  color: #fff;
+.compact-card-head h2 {
+  font-size: 24px;
 }
 
-.job-tools input {
-  min-height: 34px;
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 13px;
+.compact-card-head button {
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.compact-empty {
+  min-height: 96px;
 }
 
 .check-list {
@@ -528,8 +514,8 @@ button,
 
 .job {
   border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 14px;
+  border-radius: 16px;
+  padding: 12px;
   background: #fbfbfd;
 }
 
@@ -541,14 +527,14 @@ button,
 }
 
 .job-time {
-  margin: 6px 0 10px;
+  margin: 4px 0 8px;
   color: var(--muted);
   font-size: 13px;
 }
 
 .progress {
-  height: 8px;
-  margin: 12px 0;
+  height: 7px;
+  margin: 8px 0;
   border-radius: 999px;
   background: #e8e8ed;
   overflow: hidden;
@@ -596,8 +582,8 @@ button,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  padding: 0 16px;
+  min-height: 34px;
+  padding: 0 14px;
   border-radius: 999px;
   background: var(--brand);
   color: #fff;
@@ -607,7 +593,6 @@ button,
 
 .load-result {
   margin-right: 8px;
-  min-height: 36px;
 }
 
 .result-card {

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260604-flow-to-hero" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260604-compact-jobs" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -48,18 +48,12 @@
             <label>方案数<select name="variant_count"><option value="2">2</option><option value="3">3</option></select></label>
           </div>
           <label>核心卖点<div id="featurePicker" class="check-list"></div></label>
-          <div class="field-row">
-            <label>视频用途<select name="video_usage"><option>站外种草</option><option>站内首推</option><option>内部培训</option><option>其他</option></select></label>
-            <label>项目类型<select name="project_type"><option>常规上新</option><option>新品上市</option><option>大促活动</option><option>教程培训</option><option>其他</option></select></label>
-            <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
-          </div>
+          <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
           <label>脚本方向<div id="videoTypePicker" class="check-list compact"></div></label>
           <div class="context-toggles">
             <label class="inline-toggle"><input name="use_competitor_context" type="checkbox" checked /> 引用已审核竞品素材</label>
             <label class="inline-toggle"><input name="use_hotspot_context" type="checkbox" checked /> 引用有效行业热点</label>
           </div>
-          <label>目标受众<input name="target_audience" placeholder="不填则按通用海外消费者处理" /></label>
-          <label>用户痛点<textarea name="pain_points" rows="3"></textarea></label>
           <label>补充要求<textarea name="custom_requirements" rows="3"></textarea></label>
           <button type="submit">提交脚本生成任务</button>
           <div id="formMessage" class="message"></div>
@@ -71,22 +65,12 @@
             <div id="selectionSummary" class="selection-summary"></div>
           </section>
 
-          <section class="card">
-          <div class="card-head">
+          <section class="card compact-jobs-card">
+          <div class="card-head compact-card-head">
             <div>
               <h2>任务中心</h2>
-              <p>通过普通 HTTPS 轮询状态，公司网络更容易放行。</p>
             </div>
             <button id="refreshJobs" type="button">刷新</button>
-          </div>
-          <div class="job-tools">
-            <div id="jobFilters" class="job-filters" aria-label="任务状态筛选">
-              <button type="button" class="active" data-filter="all">全部</button>
-              <button type="button" data-filter="running">进行中</button>
-              <button type="button" data-filter="succeeded">已完成</button>
-              <button type="button" data-filter="failed">失败</button>
-            </div>
-            <input id="jobSearch" type="search" placeholder="搜索型号 / 任务ID" />
           </div>
           <div id="jobs" class="jobs"></div>
           </section>
@@ -206,6 +190,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260604-flow-to-hero"></script>
+    <script src="/static/app.js?v=20260604-compact-jobs"></script>
   </body>
 </html>
