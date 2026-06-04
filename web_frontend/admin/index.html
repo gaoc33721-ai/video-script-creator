@@ -236,6 +236,20 @@
           <section class="card">
             <div class="card-head">
               <div>
+                <h2>产品卖点库</h2>
+                <p>后台维护新版或旧版 Excel，系统会校验字段并保存为当前知识库；前台用户不开放更新入口。</p>
+              </div>
+              <label class="upload">
+                <input id="uploadInput" type="file" accept=".xlsx,.xls" />
+                上传 Excel
+              </label>
+            </div>
+            <div id="uploadMessage" class="message"></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <div>
                 <h2>配置与审计</h2>
                 <p>维护品类默认品牌、关键词模板和合规策略；采集任务未填写品牌或关键词时会自动套用同品类配置。</p>
               </div>
@@ -285,6 +299,6 @@
     <script>
       window.APP_BASE_PATH = "__APP_BASE_PATH__";
     </script>
-    <script src="__BASE_PATH__/static/app.js?v=20260604-agency-storyboard"></script>
+    <script src="__BASE_PATH__/static/app.js?v=20260604-front-cleanup"></script>
   </body>
 </html>

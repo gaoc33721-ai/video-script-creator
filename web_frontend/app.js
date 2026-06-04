@@ -258,6 +258,7 @@ function checkItemHtml(value, selected) {
 }
 
 async function loadSummary() {
+  if (!$("metrics")) return;
   const summary = await api("/api/summary");
   $("metrics").innerHTML = [
     ["当前品类数", summary.category_count],
@@ -768,7 +769,7 @@ async function uploadFile(event) {
   try {
     await api("/api/upload", { method: "POST", body });
     setMessage("uploadMessage", "卖点库已更新。", "ok");
-    await loadSummary();
+    if ($("metrics")) await loadSummary();
     await loadOptions();
   } catch (error) {
     setMessage("uploadMessage", error.message, "error");
@@ -1849,7 +1850,7 @@ async function startApp() {
   state.appReady = true;
   renderVideoTypePicker();
   try {
-    await Promise.all([loadSummary(), loadOptions(), loadJobs()]);
+    await Promise.all([loadOptions(), loadJobs()]);
     if (!state.jobsTimer) {
       state.jobsTimer = setInterval(loadJobs, 5000);
     }
@@ -1877,7 +1878,7 @@ $("videoTypePicker").addEventListener("click", (event) => {
   renderVideoTypePicker();
 });
 $("generateForm").addEventListener("submit", submitGeneration);
-$("uploadInput").addEventListener("change", uploadFile);
+if ($("uploadInput")) $("uploadInput").addEventListener("change", uploadFile);
 $("refreshJobs").addEventListener("click", loadJobs);
 $("jobFilters").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-filter]");

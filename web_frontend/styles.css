@@ -68,7 +68,7 @@ body {
 
 .hero {
   display: grid;
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: 1fr;
   gap: 16px;
   align-items: stretch;
   margin-bottom: 16px;
