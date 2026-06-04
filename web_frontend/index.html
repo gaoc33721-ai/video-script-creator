@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260604-front-cleanup" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260604-flow-to-hero" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -25,16 +25,19 @@
           <h1>海外爆款内容引擎</h1>
           <p class="lede">普通 HTTP 架构试验版，不依赖 Streamlit WebSocket，适合公司网络环境验证。</p>
         </div>
+        <section class="guide-card hero-guide">
+          <h2>使用流程</h2>
+          <div class="guide-steps">
+            <div><span>1</span><strong>选择产品</strong><small>品类、型号、核心卖点</small></div>
+            <div><span>2</span><strong>提交任务</strong><small>服务端异步生成，不阻塞页面</small></div>
+            <div><span>3</span><strong>查看结果</strong><small>完成后预览并下载 Excel</small></div>
+          </div>
+        </section>
       </section>
 
       <section class="grid">
         <form id="generateForm" class="card form-card">
           <h2>脚本需求</h2>
-          <div class="field-row">
-            <label>发布渠道<select name="platform"><option>TikTok / Reels / Shorts</option><option>Amazon 主图视频</option><option>独立站详情页</option></select></label>
-            <label>目标市场<select name="target_market"><option>北美 (US/CA)</option><option>欧洲 (UK/DE/FR)</option><option>东南亚</option><option>其他</option></select></label>
-            <label>方案数<select name="variant_count"><option value="2">2</option><option value="3">3</option></select></label>
-          </div>
           <div class="field-row">
             <label>产品品类<select id="categorySelect" name="category"></select></label>
             <label class="model-field">
@@ -42,6 +45,7 @@
               <input id="modelSearch" class="model-search" type="search" placeholder="搜索型号" autocomplete="off" aria-label="搜索产品型号" />
               <select id="modelSelect" name="model"></select>
             </label>
+            <label>方案数<select name="variant_count"><option value="2">2</option><option value="3">3</option></select></label>
           </div>
           <label>核心卖点<div id="featurePicker" class="check-list"></div></label>
           <div class="field-row">
@@ -65,15 +69,6 @@
           <section class="card selection-card">
             <h2>当前选择</h2>
             <div id="selectionSummary" class="selection-summary"></div>
-          </section>
-
-          <section class="card guide-card">
-            <h2>使用流程</h2>
-            <div class="guide-steps">
-              <div><span>1</span><strong>选择产品</strong><small>品类、型号、核心卖点</small></div>
-              <div><span>2</span><strong>提交任务</strong><small>服务端异步生成，不阻塞页面</small></div>
-              <div><span>3</span><strong>查看结果</strong><small>完成后预览并下载 Excel</small></div>
-            </div>
           </section>
 
           <section class="card">
@@ -211,6 +206,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260604-front-cleanup"></script>
+    <script src="/static/app.js?v=20260604-flow-to-hero"></script>
   </body>
 </html>

@@ -333,8 +333,8 @@ function renderVideoTypePicker() {
 function formPayload(form) {
   const data = new FormData(form);
   return {
-    platform: data.get("platform"),
-    target_market: data.get("target_market"),
+    platform: "TikTok / Reels / Shorts",
+    target_market: "北美 (US/CA)",
     variant_count: Number(data.get("variant_count") || 2),
     category: data.get("category"),
     model: data.get("model"),

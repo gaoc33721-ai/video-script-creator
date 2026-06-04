@@ -68,13 +68,14 @@ body {
 
 .hero {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.58fr);
   gap: 16px;
   align-items: stretch;
   margin-bottom: 16px;
 }
 
 .hero > div,
+.hero-guide,
 .card,
 .metric {
   background: var(--card);
@@ -450,11 +451,27 @@ button,
     #fff;
 }
 
+.hero-guide {
+  padding: 28px;
+  margin: 0;
+}
+
 .guide-steps {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   margin-top: 18px;
+}
+
+.hero-guide .guide-steps {
+  height: calc(100% - 48px);
+  align-items: stretch;
+}
+
+.hero-guide .guide-steps div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .guide-steps div {
