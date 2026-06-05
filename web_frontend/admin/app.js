@@ -972,6 +972,32 @@ function reviewActionButtons(asset) {
   return buttons.join("");
 }
 
+function youtubeVideoIdFromAsset(asset) {
+  const metadata = asset?.metadata || {};
+  const direct = metadata.youtube_video_id || metadata.platform_content_id || "";
+  if (/^[A-Za-z0-9_-]{11}$/.test(String(direct))) return String(direct);
+  const text = [asset?.source_url, asset?.canonical_url, asset?.embed_url, ...(asset?.media || []).map((item) => item.media_url || item.product_url || "")]
+    .filter(Boolean)
+    .join(" ");
+  const match = String(text).match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
+  return match ? match[1] : "";
+}
+
+function isYoutubeAsset(asset) {
+  return String(asset?.platform || "").toLowerCase() === "youtube" || Boolean(youtubeVideoIdFromAsset(asset));
+}
+
+function primaryAssetUrl(asset) {
+  const videoId = youtubeVideoIdFromAsset(asset);
+  if (videoId) return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+  return asset?.source_url || asset?.canonical_url || "#";
+}
+
+function embeddablePreviewUrl(asset) {
+  if (isYoutubeAsset(asset)) return "";
+  return asset?.embed_url || "";
+}
+
 function renderCompetitorAsset(asset, interactive = true) {
   const media = asset.media || [];
   const videoCount = Number(asset.video_count ?? media.filter((item) => item.media_type === "video").length);
@@ -982,10 +1008,10 @@ function renderCompetitorAsset(asset, interactive = true) {
   const mediaLine = `${videoCount} 条视频 / ${gifCount} 条动图 / ${mediaCount} 个媒体项`;
   const sourceLabel = asset.platform || asset.source_type || "素材";
   const assetKey = asset.asin ? `ASIN ${asset.asin}` : sourceLabel;
-  const evidenceLabel = asset.platform ? `打开 ${asset.platform} 证据` : "打开素材证据";
+  const evidenceLabel = isYoutubeAsset(asset) ? "打开 YouTube" : asset.platform ? `打开 ${asset.platform} 证据` : "打开素材证据";
   const contentId = asset.metadata?.platform_content_id || asset.metadata?.youtube_video_id || "";
   const publishedAt = asset.metadata?.published_at ? `发布 ${formatDateTime(asset.metadata.published_at)}` : "";
-  const embedLink = asset.embed_url ? `<a href="${escapeAttr(asset.embed_url)}" target="_blank" rel="noreferrer">嵌入预览</a>` : "";
+  const embedLink = embeddablePreviewUrl(asset) ? `<a href="${escapeAttr(embeddablePreviewUrl(asset))}" target="_blank" rel="noreferrer">嵌入预览</a>` : "";
   const emptyPreviewLabel = asset.embed_url || asset.embed_html ? "可嵌入预览" : "无缩略图";
   const checked = state.selectedAssetIds.has(asset.id);
   const actions = interactive ? reviewActionButtons(asset) : "";
@@ -1013,7 +1039,7 @@ function renderCompetitorAsset(asset, interactive = true) {
           <span class="asset-links">
             ${embedLink}
             ${actions}
-            <a href="${escapeAttr(asset.source_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(evidenceLabel)}</a>
+            <a href="${escapeAttr(primaryAssetUrl(asset))}" target="_blank" rel="noreferrer">${escapeHtml(evidenceLabel)}</a>
           </span>
         </div>
       </div>
@@ -1094,9 +1120,23 @@ function renderAssetDrawer(asset, loading = false) {
   const media = asset.media || [];
   const preview = asset.image_url || media.find((item) => item.thumbnail_url)?.thumbnail_url || "";
   const metadata = asset.metadata ? JSON.stringify(asset.metadata, null, 2) : "{}";
-  const embedUrl = asset.embed_url || "";
+  const embedUrl = embeddablePreviewUrl(asset);
+  const sourceUrl = primaryAssetUrl(asset);
+  const youtubeAsset = isYoutubeAsset(asset);
   const evidenceStatus = asset.metadata?.evidence_status || "";
   const reviewMeta = reviewStatusMeta(asset.review_status);
+  const youtubePreview = youtubeAsset
+    ? `
+      <div class="drawer-youtube-preview">
+        ${preview ? `<img src="${escapeAttr(appPath(preview))}" alt="" referrerpolicy="no-referrer" />` : `<div class="asset-image-empty"><strong>YouTube</strong><span>无缩略图</span></div>`}
+        <div>
+          <strong>YouTube 视频需在平台侧播放</strong>
+          <span>YouTube 嵌入播放器可能因视频权限、来源页面或浏览器策略返回 153；这里保留链接证据，不把 iframe 作为播放入口。</span>
+          <a class="drawer-action" href="${escapeAttr(sourceUrl)}" target="_blank" rel="noreferrer">在 YouTube 打开</a>
+        </div>
+      </div>
+    `
+    : "";
   $("assetDrawerBody").innerHTML = `
     <div class="drawer-header">
       <span>${escapeHtml(asset.platform || asset.source_type || "素材")}</span>
@@ -1104,11 +1144,12 @@ function renderAssetDrawer(asset, loading = false) {
       <p>${escapeHtml(asset.brand || "Unknown")} · ${escapeHtml(reviewMeta.label)} · ${escapeHtml(asset.rights_status || "")}</p>
     </div>
     ${loading ? '<div class="empty-state small"><strong>正在加载完整详情</strong><span>卡片已先显示，完整元数据和深度分析马上补齐。</span></div>' : ""}
-    ${preview ? `<img class="drawer-preview" src="${escapeAttr(appPath(preview))}" alt="" referrerpolicy="no-referrer" />` : ""}
+    ${!youtubeAsset && preview ? `<img class="drawer-preview" src="${escapeAttr(appPath(preview))}" alt="" referrerpolicy="no-referrer" />` : ""}
+    ${youtubePreview}
     ${embedUrl ? `<iframe class="drawer-embed" src="${escapeAttr(embedUrl)}" title="素材嵌入预览" loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" allowfullscreen></iframe>` : ""}
     <dl class="drawer-meta">
-      <dt>原始链接</dt><dd><a href="${escapeAttr(asset.source_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(asset.source_url || "-")}</a></dd>
-      <dt>嵌入预览</dt><dd>${embedUrl ? `<a href="${escapeAttr(embedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(embedUrl)}</a>` : "-"}</dd>
+      <dt>原始链接</dt><dd><a href="${escapeAttr(sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(sourceUrl || "-")}</a></dd>
+      <dt>嵌入预览</dt><dd>${embedUrl ? `<a href="${escapeAttr(embedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(embedUrl)}</a>` : youtubeAsset ? "YouTube 嵌入可能受限，已改为平台侧打开" : "-"}</dd>
       <dt>证据状态</dt><dd>${escapeHtml(evidenceStatus || "-")}</dd>
       <dt>业务状态</dt><dd class="drawer-status">${reviewStatusBadge(asset.review_status)}<span>${escapeHtml(reviewMeta.hint)}</span></dd>
       <dt>AI 分析</dt><dd>${escapeHtml(asset.ai_analysis || "-")}</dd>
