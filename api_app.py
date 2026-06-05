@@ -1488,6 +1488,8 @@ def _search_competitor_assets(
         if _is_social_profile_asset(asset) and review_lower != "rejected":
             continue
         asset = _ensure_asset_admin_defaults(asset)
+        if not review_lower and _asset_review_status(asset) == "rejected":
+            continue
         search_text = ""
         if q_lower:
             search_text = _competitor_asset_search_text(asset)
@@ -1527,11 +1529,16 @@ def _search_competitor_assets(
         matched.sort(key=lambda item: int(item.get("quality_score") or 0))
     elif sort == "created_desc":
         matched.sort(key=lambda item: str(item.get("created_at") or item.get("collected_at") or ""), reverse=True)
+    elif sort in {"newest", "updated_desc"}:
+        matched.sort(
+            key=lambda item: str(item.get("updated_at") or item.get("collected_at") or item.get("created_at") or ""),
+            reverse=True,
+        )
     else:
         matched.sort(
             key=lambda item: (
+                str(item.get("updated_at") or item.get("collected_at") or item.get("created_at") or ""),
                 int(item.get("quality_score") or 0),
-                str(item.get("collected_at") or item.get("updated_at") or ""),
             ),
             reverse=True,
         )
@@ -4863,7 +4870,11 @@ def admin_overview():
     today = dt.date.today()
     assets = _visible_competitor_assets(_load_competitor_assets())
     hotspots, active_hotspot_total = _search_hotspots(active_only=True, limit=6)
-    latest_assets = sorted(assets, key=lambda item: str(item.get("updated_at") or item.get("collected_at") or ""), reverse=True)[:6]
+    latest_assets = sorted(
+        _business_usable_competitor_assets(assets),
+        key=lambda item: str(item.get("updated_at") or item.get("collected_at") or ""),
+        reverse=True,
+    )[:6]
     recent_runs = _load_collection_runs()[:8]
     video_asset_count = sum(1 for item in assets if _asset_media_types(item) & {"video", "gif"})
     today_asset_count = sum(1 for item in assets if (_parse_date(item.get("collected_at") or item.get("created_at")) == today))
