@@ -1034,7 +1034,13 @@ async function updateAssetReview(assetId, reviewStatus) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ review_status: reviewStatus }),
     });
-    state.competitorAssets = state.competitorAssets.map((item) => (item.id === assetId ? data.asset : item));
+    const showingRejected = String($("competitorReviewStatus")?.value || "").toLowerCase() === "rejected";
+    if (reviewStatus === "rejected" && !showingRejected) {
+      state.competitorAssets = state.competitorAssets.filter((item) => item.id !== assetId);
+      state.selectedAssetIds.delete(assetId);
+    } else {
+      state.competitorAssets = state.competitorAssets.map((item) => (item.id === assetId ? data.asset : item));
+    }
     renderCompetitorAssets(state.competitorAssets);
     const meta = reviewStatusMeta(reviewStatus);
     setMessage("competitorMessage", `素材已标记为“${meta.label}”：${meta.afterAction}`, "ok");
