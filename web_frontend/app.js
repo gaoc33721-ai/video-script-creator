@@ -1933,28 +1933,30 @@ document.addEventListener("keydown", (event) => {
     closeStoryboardImagePreview();
   }
 });
-$("discoverRainforest").addEventListener("click", discoverRainforest);
-$("refreshRainforest").addEventListener("click", refreshRainforest);
-$("loadCompetitorAssets").addEventListener("click", loadCompetitorAssets);
-$("importSocialUrls").addEventListener("click", importSocialUrls);
-$("discoverYouTube").addEventListener("click", discoverYouTube);
-$("refreshYouTube").addEventListener("click", refreshYouTube);
-$("refreshSocialThumbnails").addEventListener("click", refreshSocialThumbnails);
-$("competitorResearchForm").addEventListener("submit", submitCompetitorResearch);
-$("competitorDiscovery").addEventListener("click", (event) => {
-  const chip = event.target.closest(".asin-chip");
-  if (!chip) return;
-  if (chip.dataset.videoId) {
-    if (!state.lastDiscoveredVideoIds.includes(chip.dataset.videoId)) {
-      state.lastDiscoveredVideoIds.push(chip.dataset.videoId);
+if ($("discoverRainforest")) $("discoverRainforest").addEventListener("click", discoverRainforest);
+if ($("refreshRainforest")) $("refreshRainforest").addEventListener("click", refreshRainforest);
+if ($("loadCompetitorAssets")) $("loadCompetitorAssets").addEventListener("click", loadCompetitorAssets);
+if ($("importSocialUrls")) $("importSocialUrls").addEventListener("click", importSocialUrls);
+if ($("discoverYouTube")) $("discoverYouTube").addEventListener("click", discoverYouTube);
+if ($("refreshYouTube")) $("refreshYouTube").addEventListener("click", refreshYouTube);
+if ($("refreshSocialThumbnails")) $("refreshSocialThumbnails").addEventListener("click", refreshSocialThumbnails);
+if ($("competitorResearchForm")) $("competitorResearchForm").addEventListener("submit", submitCompetitorResearch);
+if ($("competitorDiscovery")) {
+  $("competitorDiscovery").addEventListener("click", (event) => {
+    const chip = event.target.closest(".asin-chip");
+    if (!chip) return;
+    if (chip.dataset.videoId) {
+      if (!state.lastDiscoveredVideoIds.includes(chip.dataset.videoId)) {
+        state.lastDiscoveredVideoIds.push(chip.dataset.videoId);
+      }
+      return;
     }
-    return;
-  }
-  const current = splitList($("competitorAsins").value || "");
-  if (!current.includes(chip.dataset.asin)) {
-    $("competitorAsins").value = [...current, chip.dataset.asin].join(", ");
-  }
-});
+    const current = splitList($("competitorAsins")?.value || "");
+    if (!current.includes(chip.dataset.asin)) {
+      $("competitorAsins").value = [...current, chip.dataset.asin].join(", ");
+    }
+  });
+}
 // Nova Reel video section hidden - guard against missing elements
 if ($("videoVariantSelect")) $("videoVariantSelect").addEventListener("change", updateVideoPrompt);
 if ($("submitVideo")) $("submitVideo").addEventListener("click", submitVideoGeneration);
