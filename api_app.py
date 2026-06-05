@@ -138,20 +138,8 @@ SYSTEM_PROMPT = f"""##角色
 - “对应卖点”必须用①②③方式明确映射卖点；没有直接卖点的开场/收尾镜头写“无直接卖点，用于痛点铺垫/品牌记忆”，不得硬凑不存在功能。
 - 每个卖点证明镜头都必须能被画面看见，不能只靠旁白说服。
 
-##额外输出
-表格后必须追加：
-
-整体AI视频生成Prompt（English）:
-- 用一段完整英文描述整支视频的统一风格、镜头语言、光影、场景、产品露出、细节特写、道具/被处理对象、可选手部操作和品牌调性，且要与表格中的具体场景一致；不要描述专业模特或正脸表演。
-- 必须概括表格里的镜头运动轨迹与故事推进，不要只写产品卖点集合。
-- 必须包含：4k, cinematic lighting, shallow depth of field, smooth camera movement。
-- 必须包含品牌收尾：Hisense Designed to Ease, Crafted to Cheer.
-
-Negative Prompt（English，选填）:
-- 输出一行即可。
-
-Recommended Settings（选填）:
-- 输出一行即可。
+##输出边界
+只输出分镜脚本表格，不再输出整段 AI 视频生成 Prompt、Negative Prompt 或 Recommended Settings。
 """
 
 BEDROCK_AWS_REGION = (
@@ -2088,6 +2076,15 @@ def _strip_code_fences(text: str) -> str:
     return cleaned.strip()
 
 
+def _strip_overall_video_prompt_sections(text: str) -> str:
+    return re.sub(
+        r"\n*\s*(?:整体AI视频生成Prompt|整体 AI 视频生成 Prompt|Overall AI Video Generation Prompt)\s*(?:（English）|\(English\))?\s*[:：][\s\S]*$",
+        "",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    ).strip()
+
+
 def _has_expected_table(content: str) -> bool:
     text = str(content or "")
     return TABLE_HEADER_LINE in text and TABLE_SEPARATOR_LINE in text and "总时长" in text
@@ -2479,7 +2476,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 表格必须包含并使用如下表头（逐字一致）：
 {TABLE_HEADER_LINE}
 - 表格单元格内禁止使用英文竖线“|”；时间码和运动轨迹分隔统一使用中文全角“｜”。
-- 表格后紧接着输出：整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings。
+- 表格后不要追加任何整段 AI 视频生成 Prompt、Negative Prompt、Recommended Settings 或解释文字。
 - 与其他方案保持明显差异：开场 hook、产品视角、物品状态、画面口令、镜头运动、故事推进至少两处不同。
 - 参考外部机构 AI 视频口令稿的结构：每一行都必须同时写清“镜号/时间码、可生成单帧示意图的画面口令、镜头运动轨迹、画面说明、故事情节解说、对应卖点”。这 6 个信息不能互相重复，也不能空泛。
 - 镜头设计必须先服务故事推进，再服务卖点露出：开场负责吸引注意，中段用产品动作证明卖点，后段用结果/品牌记忆收束。
@@ -2517,11 +2514,6 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 
 核心卖点：
 {feature_lines or "- 请围绕产品核心功能和使用场景撰写。"}
-
-整体AI视频生成Prompt（English）额外要求：
-- 必须融合每个镜头的画面口令和镜头运动，写成一段可直接投喂 AI 视频模型的英文总提示词。
-- 必须包含统一技术参数：1920x1080 horizontal video, 24fps, 4k look, photographic realism, natural light, cinematic lighting, shallow depth of field, smooth camera movement。
-- 不要把表格改写成泛泛产品广告，不要出现专业模特正脸表演。
 
 {competitor_context}
 
@@ -3942,10 +3934,10 @@ def _compose_manual_shot_prompt(group_rows: list[dict], category: str, model: st
         )
     details = " | ".join(part for part in detail_parts if part)
     prompt = (
-        f"Six-second shot {shot_index + 1} of {shot_count} for a premium Hisense {_category_en(category)} product video, "
-        f"model {model}. Keep the same product appearance, realistic proportions, cinematic soft lighting, smooth camera movement, "
-        f"no text overlays, no competitor brands. Follow the agency-style storyboard exactly: visual composition, camera path, "
-        f"story beat, and selling-point proof must match. Storyboard details: {details or 'product-focused lifestyle proof shot'}."
+        f"Six-second product motion segment {shot_index + 1}/{shot_count} for Hisense {_category_en(category)} model {model}. "
+        f"Use supplied product image only for identity: shape, finish, logo, panel layout, proportions. Create a new scene from this script segment, "
+        f"animate the product or user interaction, cinematic soft light, smooth camera. Keep first/last frames transition-friendly for smart editing. "
+        f"No text overlays, no competitor brands. Segment details: {details or 'product-focused lifestyle proof shot'}."
     )
     return re.sub(r"\s+", " ", prompt).strip()[:512]
 
@@ -4004,7 +3996,7 @@ def _build_storyboard_manual_shots(script_job: dict, variant_index: int, product
     variant = variants[variant_index]
     rows = _storyboard_rows_from_variant(variant.get("content", ""))
     if not rows:
-        raise HTTPException(status_code=400, detail="当前方案未解析到分镜表格，无法生成整段视频。")
+        raise HTTPException(status_code=400, detail="当前方案未解析到分段脚本表格，无法智能转场合成整段视频。")
 
     total_duration = sum(row.get("duration") or 0 for row in rows)
     if total_duration <= 0:
@@ -4160,7 +4152,7 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 3. 后续每一行都必须有且只有 {len(TABLE_COLUMNS)} 个字段，字段顺序不得变更、不得新增、不得删除。
 4. 字段必须保持为：{", ".join(TABLE_COLUMNS)}
 5. 最后一行必须是“总时长”统计；“镜号/时间码”列写“总时长”，“时长”列写总秒数。
-6. 只输出表格和表格后的“整体AI视频生成Prompt（English）/ Negative Prompt / Recommended Settings”，不要输出解释。
+6. 只输出表格，不要输出整段 AI 视频生成 Prompt、Negative Prompt、Recommended Settings 或解释。
 7. 旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是英文，其余列以中文为主。
 8. 不要编造产品卖点；如没有竞品链接，竞品链接和竞品盖帽留空。
 9. 少人露出：只允许手部、手臂、背影、越肩视角或生活痕迹，产品和被处理物品必须是主视觉。
@@ -4223,7 +4215,7 @@ def _build_excel_bytes(job: dict) -> bytes:
             pd.DataFrame(context_rows).to_excel(writer, index=False, sheet_name="引用上下文")
         appendix_rows = []
         for index, variant in enumerate(job.get("variants", []), start=1):
-            table_lines, remainder = _extract_first_md_table(variant.get("content", ""))
+            table_lines, remainder = _extract_first_md_table(_strip_overall_video_prompt_sections(variant.get("content", "")))
             df = _parse_md_table_to_df(table_lines)
             if df.empty:
                 df = pd.DataFrame(columns=TABLE_COLUMNS)
@@ -4257,29 +4249,31 @@ def _run_generation(job_id: str):
         for i in range(total):
             prompt = _build_prompt(req, features, i, context_snapshot=context_snapshot)
             _update_job(job_id, progress=int((i / total) * 80) + 10, current_step=f"生成方案 {i + 1}/{total}")
-            content = _strip_code_fences(_call_bedrock(prompt))
+            content = _strip_overall_video_prompt_sections(_strip_code_fences(_call_bedrock(prompt)))
             if not _has_expected_table(content):
                 retry_prompt = prompt + "\n\n补充要求：输出必须完整，不要截断；若篇幅过长请压缩行文但保留完整表格与总时长行。"
-                retry_content = _strip_code_fences(_call_bedrock(retry_prompt, temperature=0.3, top_p=0.8))
+                retry_content = _strip_overall_video_prompt_sections(
+                    _strip_code_fences(_call_bedrock(retry_prompt, temperature=0.3, top_p=0.8))
+                )
                 if _has_expected_table(retry_content):
                     content = retry_content
             if not _has_expected_table(content):
                 _update_job(job_id, progress=int((i / total) * 80) + 15, current_step=f"修复方案 {i + 1} 为表格格式")
                 repaired = _repair_to_expected_table(content, req, features)
                 if _has_expected_table(repaired):
-                    content = repaired
+                    content = _strip_overall_video_prompt_sections(repaired)
             if _has_expected_table(content) and not _has_rich_duration_structure(content, req.expected_duration):
                 _update_job(job_id, progress=int((i / total) * 80) + 18, current_step=f"细化方案 {i + 1} 的分段和时长")
                 repaired = _repair_to_expected_table(content, req, features)
                 if _has_expected_table(repaired):
-                    content = repaired
+                    content = _strip_overall_video_prompt_sections(repaired)
             if _has_expected_table(content):
                 quality_issues = _script_quality_issues(content, req, features)
                 if quality_issues:
                     _update_job(job_id, progress=int((i / total) * 80) + 22, current_step=f"优化方案 {i + 1} 的品类场景和卖点表达")
                     repaired = _repair_to_expected_table(content, req, features, quality_issues=quality_issues)
                     if _has_expected_table(repaired):
-                        content = repaired
+                        content = _strip_overall_video_prompt_sections(repaired)
             variants.append({"name": f"方案{i + 1}", "label": _infer_variant_label(content), "content": content.strip()})
         _update_job(
             job_id,

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260605-hide-competitor" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260605-motion-segments" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -93,8 +93,8 @@
         <section id="storyboardSection" class="storyboard-section">
           <div class="storyboard-head">
             <div>
-              <h3>分镜拍摄参考</h3>
-              <p>系统会从脚本表格中自动拆出镜头卡片，方便业务和拍摄团队快速对齐画面。</p>
+              <h3>产品动图片段与成片</h3>
+              <p>系统会按脚本分段拆出镜头卡片，以上传产品图和分段脚本为依据生成产品动图片段，并通过智能转场剪辑串联为整段视频。</p>
             </div>
           </div>
           <section id="mediaPanel" class="media-panel">
@@ -115,13 +115,13 @@
               </div>
               <div class="media-actions-tool">
                 <div class="tool-head">
-                  <h3>分镜与视频</h3>
+                  <h3>片段与成片</h3>
                   <span id="storyboardVideoCost"></span>
                 </div>
                 <div class="media-actions-row">
-                  <button id="generateAllStoryboards" type="button">生成全部分镜图</button>
-                  <button id="submitStoryboardVideo" type="button">生成整段视频</button>
-                  <button id="refreshStoryboardVideo" type="button" class="secondary">刷新视频状态</button>
+                  <button id="generateAllStoryboards" type="button">预生成片段参考图</button>
+                  <button id="submitStoryboardVideo" type="button">生成产品动图片段并成片</button>
+                  <button id="refreshStoryboardVideo" type="button" class="secondary">刷新成片状态</button>
                 </div>
                 <div id="storyboardVideoMessage" class="message"></div>
                 <div id="storyboardVideoJobs" class="video-jobs"></div>
@@ -139,6 +139,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260605-hide-competitor"></script>
+    <script src="/static/app.js?v=20260605-motion-segments"></script>
   </body>
 </html>

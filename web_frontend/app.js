@@ -912,7 +912,16 @@ function rerenderStoryboardCards() {
 
 function renderVariantContent(variant) {
   const label = variant.label ? `<div class="result-label">方案定位：${escapeHtml(variant.label)}</div>` : "";
-  return `${label}<div class="script-markdown">${markdownToHtml(variant.content || "")}</div>`;
+  return `${label}<div class="script-markdown">${markdownToHtml(stripOverallVideoPrompt(variant.content || ""))}</div>`;
+}
+
+function stripOverallVideoPrompt(content) {
+  return String(content || "")
+    .replace(
+      /\n*\s*(?:整体AI视频生成Prompt|整体 AI 视频生成 Prompt|Overall AI Video Generation Prompt)\s*(?:（English）|\(English\))?\s*[:：][\s\S]*?(?=\n\s*(?:产品动图片段|分镜拍摄参考|$))/gi,
+      ""
+    )
+    .trim();
 }
 
 function currentProductImageId() {
@@ -1080,7 +1089,7 @@ function renderStoryboardCards(content) {
   });
   state.storyboardShots = [];
   if (!shotRows.length) {
-    return '<div class="empty-state"><strong>暂无分镜</strong><span>脚本表格生成后，这里会自动拆出拍摄参考卡片。</span></div>';
+    return '<div class="empty-state"><strong>暂无产品动图片段</strong><span>脚本表格生成后，这里会自动拆出可生成视频片段的镜头卡片。</span></div>';
   }
   const request = (state.currentResultJob && state.currentResultJob.request) || {};
   const productCategory = request.category || ($("categorySelect") ? $("categorySelect").value : "");
@@ -1118,12 +1127,12 @@ function renderStoryboardCards(content) {
           </dl>
           <div class="storyboard-actions">
             <button class="storyboard-generate" type="button" data-shot-index="${index}" ${isGenerating ? "disabled" : ""}>
-              ${isGenerating ? "正在生成参考图..." : currentProductImageId() ? "结合产品图生成分镜图" : "生成静态分镜参考图"}
+              ${isGenerating ? "正在生成片段参考图..." : currentProductImageId() ? "结合产品图生成片段参考图" : "生成片段参考图"}
             </button>
           </div>
           ${renderCanvasJobForShot(index)}
           <details>
-            <summary>生成 Prompt</summary>
+            <summary>片段生成 Prompt</summary>
             <p>${escapeHtml(prompt)}</p>
           </details>
         </article>
@@ -1210,17 +1219,17 @@ function storyboardImageProviderLabel(modelId = "") {
   if (provider.includes("liblib") || model.includes("liblib")) return "LibLibAI";
   if (modelId) return modelId;
   if (state.canvasModelId) return state.canvasModelId;
-  return "分镜图服务";
+  return "片段参考图服务";
 }
 
 function storyboardImageGeneratingMessage() {
   const provider = storyboardImageProviderLabel();
   if (provider === "LibLibAI") {
     return currentProductImageId()
-      ? "LibLibAI 正在参考产品图生成分镜图，通常需要几十秒。"
-      : "LibLibAI 正在生成分镜图，通常需要几十秒。";
+      ? "LibLibAI 正在参考产品图生成片段参考图，通常需要几十秒。"
+      : "LibLibAI 正在生成片段参考图，通常需要几十秒。";
   }
-  return `${provider} 正在生成分镜图，通常需要几十秒。`;
+  return `${provider} 正在生成片段参考图，通常需要几十秒。`;
 }
 
 function storyboardImageModelLabel(job = {}) {
@@ -1243,12 +1252,14 @@ function hasActiveCanvasJobForShot(shotIndex) {
 
 function storyboardSubmitPrompt(shot = {}) {
   return [
+    "Create a 16:9 product motion segment reference image based on the uploaded product image and this script segment.",
     shot.segment ? `Shot: ${shot.segment}.` : "",
     shot.feature ? `Feature: ${shot.feature}.` : "",
     shot.method ? `Visual action: ${shot.method}.` : "",
     shot.angle ? `Camera angle: ${shot.angle}.` : "",
     shot.movement ? `Camera movement: ${shot.movement}.` : "",
     shot.subtitle ? `Voiceover/subtitle: ${shot.subtitle}.` : "",
+    "Keep product identity from the reference image while generating a new scene, not a copied packshot.",
   ]
     .filter(Boolean)
     .join(" ")
@@ -1283,7 +1294,7 @@ function renderCanvasJobForShot(shotIndex) {
   }
   const job = canvasJobForShot(shotIndex);
   if (!job) {
-    return '<div class="storyboard-image-slot empty">生成后会在这里显示 16:9 静态分镜图。</div>';
+    return '<div class="storyboard-image-slot empty">生成后会在这里显示 16:9 片段参考图。</div>';
   }
   if (isActiveCanvasJob(job)) {
     const attempt = Number(job.attempt || 0);
@@ -1291,7 +1302,7 @@ function renderCanvasJobForShot(shotIndex) {
     return `<div class="storyboard-image-slot loading">${escapeHtml(`${storyboardImageGeneratingMessage()}${suffix}`)}</div>`;
   }
   if (job.status === "failed") {
-    return `<div class="storyboard-image-slot error">${escapeHtml(formatErrorDetail(job.failure_message, "参考图生成失败"))}</div>`;
+    return `<div class="storyboard-image-slot error">${escapeHtml(formatErrorDetail(job.failure_message, "片段参考图生成失败"))}</div>`;
   }
   const imageUrl = job.preview_url || "";
   const image = imageUrl
@@ -1421,19 +1432,19 @@ async function generateAllStoryboards() {
     });
   if (!missing.length) {
     if ((state.canvasJobs || []).some((item) => Number(item.variant_index || 0) === Number(state.activeVariantIndex) && isActiveCanvasJob(item))) {
-      setMessage("storyboardVideoMessage", "分镜图正在后台生成，请稍后刷新状态。", "ok");
+      setMessage("storyboardVideoMessage", "片段参考图正在后台生成，请稍后刷新状态。", "ok");
       return;
     }
-    setMessage("storyboardVideoMessage", "当前方案的分镜图已经生成。", "ok");
+    setMessage("storyboardVideoMessage", "当前方案的片段参考图已经生成。", "ok");
     return;
   }
   state.bulkCanvasGenerating = true;
-  setMessage("storyboardVideoMessage", `正在生成 ${missing.length} 张分镜图...`);
+  setMessage("storyboardVideoMessage", `正在生成 ${missing.length} 张片段参考图...`);
   try {
     for (const index of missing) {
       await submitCanvasImage(index, { waitForCompletion: false });
     }
-    setMessage("storyboardVideoMessage", `已提交 ${missing.length} 张分镜图到后台队列，将按顺序生成。`, "ok");
+    setMessage("storyboardVideoMessage", `已提交 ${missing.length} 张片段参考图到后台队列，将按顺序生成。`, "ok");
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
   } finally {
@@ -1669,7 +1680,7 @@ async function loadStoryboardVideoJobs(scriptJobId) {
       const seconds = estimateStoryboardVideoDuration();
       $("storyboardVideoCost").textContent = seconds
         ? `${seconds} 秒 · 约 $${(seconds * data.estimated_usd_per_second).toFixed(2)}`
-        : "等待分镜";
+        : "等待片段";
     }
     renderStoryboardVideoJobs(state.storyboardVideoJobs);
   } catch (error) {
@@ -1686,11 +1697,11 @@ function renderStoryboardVideoJobs(jobs) {
         ? `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
         : "";
       const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
-      const summary = `${escapeHtml(job.model_id || "Nova Reel")} · ${escapeHtml(job.duration_seconds || "-")} 秒 · ${escapeHtml(job.shot_count || "-")} 镜头`;
+      const summary = `${escapeHtml(job.model_id || "Nova Reel")} · ${escapeHtml(job.duration_seconds || "-")} 秒 · ${escapeHtml(job.shot_count || "-")} 段 · 智能转场`;
       return `
         <article class="video-job">
           <div class="job-head">
-            <span>${escapeHtml(job.variant_name || "整段视频")}</span>
+            <span>${escapeHtml(job.variant_name || "智能转场成片")}</span>
             <span>${escapeHtml(job.status || "")}</span>
           </div>
           <div class="message">${summary}</div>
@@ -1698,13 +1709,13 @@ function renderStoryboardVideoJobs(jobs) {
           ${preview}
         </article>
       `;
-    }).join("") || '<div class="empty-state"><strong>暂无整段视频任务</strong><span>上传产品图并确认分镜后，可提交 Nova Reel 多镜头视频。</span></div>';
+    }).join("") || '<div class="empty-state"><strong>暂无成片任务</strong><span>上传产品图并确认片段后，可提交智能转场合成整段视频。</span></div>';
 }
 
 async function submitStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在提交整段视频任务...");
+  setMessage("storyboardVideoMessage", "正在提交片段串联与智能转场成片任务...");
   try {
     await api("/api/storyboard-video/submit", {
       method: "POST",
@@ -1715,7 +1726,7 @@ async function submitStoryboardVideoGeneration() {
         product_image_id: currentProductImageId(),
       }),
     });
-    setMessage("storyboardVideoMessage", "整段视频任务已提交，稍后点击刷新查看状态。", "ok");
+    setMessage("storyboardVideoMessage", "智能转场成片任务已提交，稍后点击刷新查看状态。", "ok");
     await loadStoryboardVideoJobs(job.id);
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
@@ -1725,7 +1736,7 @@ async function submitStoryboardVideoGeneration() {
 async function refreshStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在刷新整段视频状态...");
+  setMessage("storyboardVideoMessage", "正在刷新智能转场成片状态...");
   try {
     const data = await api(
       `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}`,
