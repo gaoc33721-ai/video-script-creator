@@ -74,6 +74,19 @@ NON_APPLIANCE_YOUTUBE_TERMS = [
     "tutorial",
 ]
 
+INDIA_MARKET_YOUTUBE_TERMS = [
+    "india",
+    "indian",
+    "bharat",
+    "hindustan",
+    "amazon.in",
+    "flipkart",
+    "rs.",
+    "₹",
+    "हिंदी",
+    "हिन्दी",
+]
+
 
 class SocialApiError(RuntimeError):
     pass
@@ -263,6 +276,8 @@ def discover_youtube_videos(
         }
         if region:
             params["regionCode"] = region
+        if region in {"US", "CA", "GB"}:
+            params["relevanceLanguage"] = "en"
         data = fetch_json(f"{YOUTUBE_API_ENDPOINT}/search", params=params, timeout=timeout)
         request_logs.append({"query": query, "result_count": len(data.get("items") or [])})
         for index, item in enumerate(data.get("items") or [], start=1):
@@ -281,6 +296,8 @@ def discover_youtube_videos(
             detail,
             brands=clean_brands,
             category_terms=category_terms,
+            target_market=target_market,
+            region_code=region,
         )
         if not ok:
             rejected.append({"video_id": video_id, "reason": reason, "source_query": source.get("source_query") or ""})
@@ -734,6 +751,8 @@ def is_relevant_youtube_appliance_video(
     *,
     brands: list[str],
     category_terms: list[str],
+    target_market: str = "",
+    region_code: str = "",
 ) -> tuple[bool, str]:
     snippet = item.get("snippet") or {}
     title = str(snippet.get("title") or "")
@@ -753,6 +772,10 @@ def is_relevant_youtube_appliance_video(
 
     if any(_term_in_text(term, haystack) for term in NON_APPLIANCE_YOUTUBE_TERMS):
         return False, "non_appliance_or_software_signal"
+
+    region = normalize_region_code(region_code, target_market)
+    if region in {"US", "CA"} and any(_term_in_text(term, haystack) for term in INDIA_MARKET_YOUTUBE_TERMS):
+        return False, "non_target_market_india_signal"
 
     official_signal = _term_in_text(matched_brand, channel_text) or "official" in haystack
     if not official_signal:
