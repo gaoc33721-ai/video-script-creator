@@ -27,6 +27,8 @@ COPY app.py api_app.py start_server.py healthcheck.py storage_adapters.py produc
 COPY fridge_assistant.py rainforest_competitor.py social_competitor.py ./
 COPY seed_competitor_assets.json ./
 COPY web_frontend ./web_frontend
+COPY scripts/apply_marketing_schema_patch.py ./scripts/apply_marketing_schema_patch.py
+RUN python scripts/apply_marketing_schema_patch.py
 
 RUN mkdir -p /app/data
 
