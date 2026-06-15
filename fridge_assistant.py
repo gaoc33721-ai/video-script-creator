@@ -1170,6 +1170,109 @@ def _spec_context_answer(question: str, evidence: dict) -> str:
     return answer
 
 
+MARKETING_RELATION_FIELDS = [
+    "核心定位语",
+    "用户洞察结论",
+    "核心人群画像",
+    "核心使用场景",
+    "核心购买动机",
+    "场景痛点映射",
+    "核心卖点USP1_卖点定义",
+    "核心卖点USP1_卖点利益点",
+    "支撑卖点USP3_卖点定义",
+    "支撑卖点USP3_卖点利益点",
+    "辅助卖点USP5_卖点定义",
+    "辅助卖点USP5_卖点利益点",
+    "金字塔卖点分层Tier1_卖点定义",
+    "金字塔卖点分层Tier1_卖点利益点",
+    "金字塔卖点体系Tier2_卖点定义",
+    "金字塔卖点体系Tier2_卖点利益点",
+    "金字塔卖点体系Tier3_卖点定义",
+    "金字塔卖点体系Tier3_卖点利益点",
+    "其他补充卖点_定义",
+    "其他补充卖点_利益点",
+]
+
+
+def _marketing_content_fields(row: dict) -> dict[str, list[str]]:
+    values: dict[str, list[str]] = {}
+    content = _text(row.get("content")) or _text(row.get("response"))
+    for line in content.splitlines():
+        if ":" not in line and "：" not in line:
+            continue
+        label, value = re.split(r"[:：]", line, maxsplit=1)
+        label = _text(label)
+        value = _text(value)
+        if not label or not value or value in {"未使用USP135体系", "见下列细分", "见下例细分"}:
+            continue
+        values.setdefault(label, [])
+        if value not in values[label]:
+            values[label].append(value)
+    for field in MARKETING_RELATION_FIELDS:
+        value = _text(row.get(field))
+        if value and value not in {"未使用USP135体系", "见下列细分", "见下例细分"}:
+            values.setdefault(field, [])
+            if value not in values[field]:
+                values[field].append(value)
+    return values
+
+
+def _marketing_context_answer(question: str, evidence: dict) -> str:
+    marketing = evidence.get("marketing") or []
+    if not marketing:
+        return ""
+    question_text = str(question or "").lower()
+    field_groups = [
+        ("定位", ["核心定位语"]),
+        ("用户与场景", ["用户洞察结论", "核心人群画像", "核心使用场景", "核心购买动机", "场景痛点映射"]),
+        ("USP135卖点体系", ["核心卖点USP1_卖点定义", "核心卖点USP1_卖点利益点", "支撑卖点USP3_卖点定义", "支撑卖点USP3_卖点利益点", "辅助卖点USP5_卖点定义", "辅助卖点USP5_卖点利益点"]),
+        ("金字塔卖点体系", ["金字塔卖点分层Tier1_卖点定义", "金字塔卖点分层Tier1_卖点利益点", "金字塔卖点体系Tier2_卖点定义", "金字塔卖点体系Tier2_卖点利益点", "金字塔卖点体系Tier3_卖点定义", "金字塔卖点体系Tier3_卖点利益点"]),
+        ("补充卖点", ["其他补充卖点_定义", "其他补充卖点_利益点"]),
+    ]
+    requested_fields = []
+    for _, fields in field_groups:
+        for field in fields:
+            short = field.split("_")[0]
+            if field.lower() in question_text or short.lower() in question_text:
+                requested_fields.append(field)
+    if not requested_fields:
+        if any(token in question_text for token in ["场景", "人群", "用户", "动机", "痛点"]):
+            requested_fields.extend(field_groups[1][1])
+        if any(token in question_text for token in ["卖点", "usp", "tier", "话术", "优势"]):
+            requested_fields.extend(field_groups[2][1] + field_groups[3][1] + field_groups[4][1])
+        if any(token in question_text for token in ["定位", "角色"]):
+            requested_fields.append("核心定位语")
+    requested_fields = list(dict.fromkeys(requested_fields))
+
+    by_model: dict[str, dict[str, list[str]]] = {}
+    for row in marketing:
+        model = _text(row.get("model")) or "通用"
+        if model.upper() == "GENERAL":
+            model = "通用"
+        by_model.setdefault(model, {})
+        for field, values in _marketing_content_fields(row).items():
+            by_model[model].setdefault(field, [])
+            for value in values:
+                if value not in by_model[model][field]:
+                    by_model[model][field].append(value)
+
+    blocks = []
+    for model, fields in by_model.items():
+        display_fields = requested_fields or [field for _, group in field_groups for field in group]
+        rows = []
+        for field in display_fields:
+            values = fields.get(field) or []
+            if values:
+                rows.append([field, "<br>".join(values[:3])])
+        if not rows:
+            continue
+        blocks.append(f"### {model} 营销画像\n\n" + _markdown_table(["字段", "内容"], rows[:14]))
+    if not blocks:
+        return ""
+    guidance = "已按 V0.2 规则聚合同一型号的多行营销数据：先看定位/用户场景，再看卖点体系；USP135 与金字塔体系互斥读取，通用 FAQ 仅作为补充。"
+    return guidance + "\n\n" + "\n\n".join(blocks)
+
+
 def _fallback_answer(question: str, evidence: dict) -> str:
     if not any(evidence.get(key) for key in ("specs", "marketing", "competitors", "documents")):
         models = "、".join(evidence.get("available_models", [])[:12])
@@ -1179,6 +1282,10 @@ def _fallback_answer(question: str, evidence: dict) -> str:
     question_text = question.lower()
     specs = evidence.get("specs") or []
     intent = evidence.get("intent") or _question_intent(question)
+    if evidence.get("marketing"):
+        marketing_answer = _marketing_context_answer(question, evidence)
+        if marketing_answer and (not specs or any(token in question_text for token in ["营销", "卖点", "usp", "tier", "场景", "人群", "动机", "痛点", "定位", "话术"])):
+            return marketing_answer
     if intent == "product_list" and specs:
         answer = _model_list_answer(evidence)
         if answer:
