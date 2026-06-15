@@ -73,8 +73,14 @@ schema_doc_block = '''            if intent == "marketing_schema" and "data_sour
                     documents["data_source"].astype(str).str.contains("marketing_schema", case=False, na=False)
                 ].head(6)
 '''
-needle = "        document_hits = pd.DataFrame()\n        if not documents.empty:\n"
 if schema_doc_block.strip() not in source:
-    source = source.replace(needle, needle + schema_doc_block, 1)
+    source, doc_count = re.subn(
+        r"(        document_hits = pd\.DataFrame\(\)\n        if not documents\.empty:\n)",
+        r"\1" + schema_doc_block,
+        source,
+        count=1,
+    )
+    if doc_count != 1:
+        raise SystemExit(f"Expected to patch document evidence block, patched {doc_count}")
 
 path.write_text(source, encoding="utf-8")
