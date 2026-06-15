@@ -629,7 +629,29 @@ def _is_field_lookup_question(question: str) -> bool:
     return any(phrase in question_text for phrase in field_phrases)
 
 
+def _is_marketing_schema_question(question: str) -> bool:
+    question_text = str(question or "").lower()
+    schema_phrases = [
+        "营销字段",
+        "字段规范",
+        "字段定义",
+        "数据库组织",
+        "组织逻辑",
+        "关联逻辑",
+        "上游依赖",
+        "下游关联",
+        "行级数据",
+        "父记录",
+        "多行数据",
+        "usp135",
+        "金字塔",
+    ]
+    return any(phrase in question_text for phrase in schema_phrases)
+
+
 def _question_intent(question: str) -> str:
+    if _is_marketing_schema_question(question):
+        return "marketing_schema"
     if _is_product_list_question(question):
         return "product_list"
     if _is_product_card_question(question):
@@ -925,7 +947,7 @@ class FridgeKnowledgeStore:
         words = _keywords(question)
 
         spec_hits = pd.DataFrame()
-        if not specs.empty:
+        if not specs.empty and intent != "marketing_schema":
             if requested_series:
                 spec_hits = _filter_by_series(specs, requested_series)
             elif intent == "product_list":
@@ -959,7 +981,7 @@ class FridgeKnowledgeStore:
             marketing_hits = pd.concat([direct_hits, general_hits], ignore_index=True).head(10)
 
         competitor_hits = pd.DataFrame()
-        if not competitors.empty:
+        if not competitors.empty and intent != "marketing_schema":
             if words and "search_text" in competitors:
                 competitor_hits = competitors[
                     competitors["search_text"].astype(str).str.lower().apply(lambda value: _contains_any(value, words))
@@ -979,6 +1001,10 @@ class FridgeKnowledgeStore:
                     keyword_hits = keyword_hits[keyword_hits["model"].astype(str).isin(requested_models)]
                 elif requested_series and "series" in keyword_hits:
                     keyword_hits = keyword_hits[keyword_hits["series"].astype(str).isin(requested_series)]
+                if intent == "marketing_schema" and "data_source" in keyword_hits:
+                    keyword_hits = keyword_hits.assign(
+                        _schema_rank=keyword_hits["data_source"].astype(str).str.contains("marketing_schema", case=False, na=False).map(lambda value: 0 if value else 1)
+                    ).sort_values("_schema_rank").drop(columns=["_schema_rank"])
                 document_hits = pd.concat([document_hits, keyword_hits], ignore_index=True).drop_duplicates().head(6)
             elif document_hits.empty:
                 document_hits = documents.head(3)
@@ -1273,6 +1299,19 @@ def _marketing_context_answer(question: str, evidence: dict) -> str:
     return guidance + "\n\n" + "\n\n".join(blocks)
 
 
+def _document_context_answer(evidence: dict) -> str:
+    documents = evidence.get("documents") or []
+    if not documents:
+        return ""
+    lines = ["以下依据已入库的营销字段规范 V0.2："]
+    for item in documents[:5]:
+        title = _text(item.get("title")) or _text(item.get("file_name")) or "文档"
+        content = _text(item.get("summary")) or _text(item.get("content"))
+        if content:
+            lines.append(f"- **{title}**：{content[:700]}")
+    return "\n".join(lines)
+
+
 def _fallback_answer(question: str, evidence: dict) -> str:
     if not any(evidence.get(key) for key in ("specs", "marketing", "competitors", "documents")):
         models = "、".join(evidence.get("available_models", [])[:12])
@@ -1282,6 +1321,10 @@ def _fallback_answer(question: str, evidence: dict) -> str:
     question_text = question.lower()
     specs = evidence.get("specs") or []
     intent = evidence.get("intent") or _question_intent(question)
+    if intent == "marketing_schema":
+        document_answer = _document_context_answer(evidence)
+        if document_answer:
+            return document_answer
     if evidence.get("marketing"):
         marketing_answer = _marketing_context_answer(question, evidence)
         if marketing_answer and (not specs or any(token in question_text for token in ["营销", "卖点", "usp", "tier", "场景", "人群", "动机", "痛点", "定位", "话术"])):
