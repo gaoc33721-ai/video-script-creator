@@ -130,7 +130,8 @@ SYSTEM_PROMPT = f"""##角色
 - “镜头分段”参考样例里的“镜头”字段：必须连续写出时间段、具体动作和阶段说明，例如“0-4s 面板预约制冰（家中开场）”“20-26s 回家开门 & 冰箱美学（Pureflat）”，不得只写“镜头01/功能展示/痛点开场”。
 - “画面示意&表现手法”要合并画面示意与执行方式：写清前景/中景/背景、产品比例、产品位置、道具、被处理物品、手部动作、光影和构图；不要写“见图”“参考图”。
 - “镜头运动&运动轨迹”参考样例里的“镜头运动/运镜轨迹”字段：必须像机构稿一样具体，例如“近景特写（CU）｜推进至面板｜手指按键特写”“快速切换（快剪）｜家门→换装→车内｜节奏上场”“俯视滑动 + 特写｜抽屉滑动轨迹｜取冰盒特写”；不要只写“特写/俯拍”。
-- “功能卖点（英文）”必须优先使用卖点库 Feature Name 原文；没有直接卖点的开场/收尾镜头写“Pain-point opening”“Brand closing”等非功能段，不得硬凑不存在功能。
+- “功能卖点（英文）”必须优先使用卖点库 Feature Name 原文；没有直接卖点的开场/收尾镜头该列留空，或写真实产品/场景短语，不得写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。
+- 任何表格单元格都不得出现 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro 等结构标签；这些只能作为内部创作思路，不能出现在字幕、旁白或卖点文案里。
 - 每个卖点证明镜头都必须能被画面看见，不能只靠旁白说服。
 
 ##输出边界
@@ -2045,8 +2046,9 @@ def _feature_focus_targets(req: GenerateRequest, features: list[dict]) -> list[d
 def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
     lines = [
         "产品与卖点质量硬要求：",
-        "- 功能卖点（英文）列必须优先逐字使用下方 Feature Name，不要改写成泛泛的“痛点开场/功能展示”。痛点行如无功能点可写 Pain-point opening，品牌收尾可写 Brand closing，但卖点证明行必须写准确 Feature Name。",
+        "- 功能卖点（英文）列必须优先逐字使用下方 Feature Name，不要改写成泛泛的“痛点开场/功能展示”。没有直接功能卖点的开场/收尾行，该列留空或写真实产品/场景短语，严禁写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。",
         "- 字幕-显示卖点名及描述（英文）列必须使用“Feature Name: Tagline”或从 Feature Description 摘取原文专业短句；不得写成 generic benefit。",
+        "- 旁白和字幕是成片文案，严禁出现 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro 等制作结构标签，也不要写成“开头：/结尾：/字幕：/卖点：”这种字段标签。",
         "- 旁白（英文）可以更口语，但必须围绕卖点库里的专业词：Feature Name、Tagline、Feature Description 至少命中其一。",
         "- 画面示意&表现手法必须把 Feature Description 转成可拍动作，不允许只写“展示平板设计/展示均匀加热效果”这种抽象描述。",
         "- 镜头运动&运动轨迹必须写清运动方式和方向/主体关系，例如近景特写（CU）｜推进至面板、横移跟拍（左→右）、俯拍切到腔体、缓慢拉远；不能只写“俯拍/特写/全景”。",
@@ -2201,6 +2203,18 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
         "镜头运动&运动轨迹",
     ]
     if not body.empty:
+        banned_label_pattern = re.compile(
+            r"\b(?:pain[-\s]?point\s+opening|brand\s+closing)\b|^(?:opening|closing|hook|intro|outro)\b\s*[:：-]?|^(?:开头|结尾|字幕|卖点)\s*[:：]",
+            flags=re.IGNORECASE,
+        )
+        label_leaks = 0
+        for _, row in body.iterrows():
+            if any(banned_label_pattern.search(str(value or "").strip()) for value in row.tolist()):
+                label_leaks += 1
+        if label_leaks:
+            issues.append(
+                f"有 {label_leaks} 行泄漏了制作结构标签（如 Pain-point opening/Brand closing/Opening/Closing），这些不能出现在字幕、旁白或卖点文案里。"
+            )
         if len(body) > MAX_SCRIPT_SEGMENTS:
             issues.append(f"分段过碎：正文镜头共有 {len(body)} 行，必须合并为不超过 {MAX_SCRIPT_SEGMENTS} 段。")
         short_segments = sum(1 for value in body["时长"].tolist() if _duration_seconds(value) <= 2)
@@ -2577,7 +2591,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 镜头分段必须参考上传样例的“镜头”字段：用“时间段 + 具体动作 + 括号内阶段/卖点证据”，例如“0-4s 冷饭盒拿出（复热痛点开场）”，不得只写镜头编号。
 - 画面示意&表现手法必须像制作口令：包含主体比例、前景/中景/背景、产品位置、道具、被处理物品、手部动作和光影；严禁只写“产品特写”“功能展示”“见示意图”。
 - 镜头运动&运动轨迹必须参考上传样例的“镜头运动/运镜轨迹”字段：写运动路径和方向，例如“近景特写（CU）｜推进至面板｜手指按键特写”“横移跟拍（左→右）｜手部动作入画”“俯拍切到腔体｜红点锁定食物中心”。不得只写“特写/俯拍/全景”。
-- 功能卖点（英文）列必须优先逐字使用卖点库 Feature Name；没有直接卖点的开场/收尾写 Pain-point opening 或 Brand closing。
+- 功能卖点（英文）列必须优先逐字使用卖点库 Feature Name；没有直接卖点的开场/收尾行该列留空，或写真实产品/场景短语，严禁写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。
 - 先在内部确定本方案的创意策略，但不要输出策略过程：方案1偏生活痛点开场，方案2偏社媒种草/情绪反差，方案3偏快节奏功能挑战；如果只生成1-2套，也必须让每套的产品切入角度、被处理物品状态和镜头组织不同。
 - 默认拍摄策略：产品/物品展示优先，淡化人物角色；除非补充要求明确需要人物剧情，不要设计专业模特、正脸表演或多人关系。
 - 人物处理：可用手部/手臂/背影/越肩视角完成开门、按键、取放、摆放、擦拭等操作；不要让人物成为画面主角。
@@ -2585,6 +2599,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 画面示意&表现手法必须落到产品可见动作和物品状态变化，不要只写“展示功能/突出卖点/产品特写”；每行至少包含一个产品本体或被处理物品的可拍动作、一个道具或环境细节、一个镜头处理。
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列必须以中文为主。
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
+- 标签泄漏强约束：任何表格单元格都不得出现 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro、“开头：”“结尾：”“字幕：”“卖点：”等制作结构标签；这些只用于内部构思，不能进入成片文案。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
 
 {creative_playbook}
@@ -4246,11 +4261,12 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 5. 最后一行必须是“总时长”统计；“镜头分段”列写“总时长”，“时长”列写总秒数。
 6. 只输出表格，不要输出整段 AI 视频生成 Prompt、Negative Prompt、Recommended Settings 或解释。
 7. 旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是英文，其余列以中文为主。
-8. 不要编造产品卖点；功能卖点（英文）列必须优先使用卖点库 Feature Name。
+8. 不要编造产品卖点；功能卖点（英文）列必须优先使用卖点库 Feature Name；没有直接功能卖点的开场/收尾行该列留空或写真实产品/场景短语。
 9. 少人露出：只允许手部、手臂、背影、越肩视角或生活痕迹，产品和被处理物品必须是主视觉。
 10. 必须按外部机构 AI 视频口令稿风格修复：镜头分段参考样例“镜头”字段，写成“时间段 + 具体动作 + 括号内阶段/卖点证据”；画面示意&表现手法合并画面元素、动作、道具和故事推进；镜头运动&运动轨迹参考样例“镜头运动/运镜轨迹”字段，写清景别、运动路径和方向。
 11. 画面示意&表现手法必须能指导分段产品动图片段生成；镜头运动&运动轨迹必须写运动方向/路径；每行都要能通过产品图 + 分段脚本生成对应片段。
 12. 表格单元格内禁止使用英文竖线“|”；镜头分段和运动轨迹分隔统一使用中文全角“｜”或中文箭头“→”。
+13. 严禁在任何表格单元格中输出 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro、“开头：”“结尾：”“字幕：”“卖点：”等制作结构标签；发现原文里有这些词必须改写成自然成片文案或留空。
 
 {duration_guidance}
 
