@@ -96,6 +96,7 @@ TABLE_COLUMNS = [
 ]
 TABLE_HEADER_LINE = "| " + " | ".join(TABLE_COLUMNS) + " |"
 TABLE_SEPARATOR_LINE = "| " + " | ".join([":---"] * len(TABLE_COLUMNS)) + " |"
+MAX_SCRIPT_SEGMENTS = 6
 SYSTEM_PROMPT = f"""##角色
 你是“海外爆款内容引擎”的资深海外短视频创意导演、社媒内容策划和可落地分镜编剧。你的任务不是平铺产品参数，而是把海信产品卖点转化为以产品和被处理物品为主角、细节突出、动作清晰、适合轻量拍摄的海外电商短视频脚本，并保持可拍摄、可执行、可导出为 Excel 的 Markdown 表格。
 
@@ -2095,17 +2096,19 @@ def _duration_structure_profile(expected_duration) -> tuple[int, int, int]:
     expected = max(6, min(90, expected))
     if expected <= 12:
         min_segments = 3
+        max_segment_seconds = 6
     elif expected <= 20:
-        min_segments = 5
+        min_segments = 4
+        max_segment_seconds = 7
     elif expected <= 30:
-        min_segments = 7
+        min_segments = 5
+        max_segment_seconds = 8
     elif expected <= 45:
-        min_segments = 9
-    elif expected <= 60:
-        min_segments = 11
+        min_segments = 5
+        max_segment_seconds = 10
     else:
-        min_segments = 13
-    max_segment_seconds = 8 if expected > 60 else 6
+        min_segments = 6
+        max_segment_seconds = 15
     return expected, min_segments, max_segment_seconds
 
 
@@ -2114,11 +2117,11 @@ def _duration_structure_guidance(expected_duration, req: GenerateRequest | None 
     min_lifestyle_details = max(3, min_segments - 3)
     segment_examples, detail_examples = _segment_examples_for_request(req, features or [])
     return f"""分段密度硬要求：
-- 正文镜头行（不含表头、分隔行和“总时长”行）至少 {min_segments} 行，所有行时长相加必须精确等于 {expected} 秒，“总时长”行也必须写 {expected}秒。
-- 单行时长以 2-6 秒为主，最长不超过 {max_segment_seconds} 秒；不要把多个生活动作或多个卖点塞进一个长段。
+- 正文镜头行（不含表头、分隔行和“总时长”行）必须控制在 {min_segments}-{MAX_SCRIPT_SEGMENTS} 行，绝对不得超过 {MAX_SCRIPT_SEGMENTS} 行；所有行时长相加必须精确等于 {expected} 秒，“总时长”行也必须写 {expected}秒。
+- 单行时长以 4-8 秒为主，最长不超过 {max_segment_seconds} 秒；除 12 秒以内的短视频外，不要生成 1-2 秒碎片段。
 - “镜头分段”必须从 0 秒开始连续推进，例如“0-3s 冷饭盒拿出（复热痛点开场）”“3-6s 餐盒放入平板腔体（Flatbed 证据）”；每行时间段必须与“时长”列一致，不能重叠、跳秒或只写镜头编号。
 - “镜头分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“时间段 + 生活场景任务 + 括号内阶段/卖点证据”的具体名称。适合当前产品的示例：{segment_examples}。
-- 结构顺序至少覆盖：生活化痛点开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；30 秒以上额外加入等待切换、前后对比或二次使用镜头。
+- 结构顺序用最多 {MAX_SCRIPT_SEGMENTS} 段合并覆盖：生活化痛点开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；不要为了覆盖环节拆成很多 2 秒短段。
 - 每套至少出现 {min_lifestyle_details} 个生活化物品/场景细节（优先从这些当前品类细节中选择：{detail_examples}），人物只允许手部、手臂、背影、越肩视角或生活痕迹。"""
 
 
@@ -2143,8 +2146,12 @@ def _has_rich_duration_structure(content: str, expected_duration) -> bool:
     body = _script_body_rows(df)
     if len(body) < min_segments:
         return False
+    if len(body) > MAX_SCRIPT_SEGMENTS:
+        return False
     durations = [_duration_seconds(value) for value in body["时长"].tolist()]
     if any(value <= 0 for value in durations):
+        return False
+    if expected > 12 and sum(1 for value in durations if value <= 2) > 0:
         return False
     if any(value > max_segment_seconds for value in durations):
         return False
@@ -2177,6 +2184,7 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
         return ["缺少可解析的 Markdown 表格，无法检查品类与卖点质量。"]
     body = _script_body_rows(df)
     full_text = "\n".join(table_lines)
+    expected, _, _ = _duration_structure_profile(req.expected_duration)
 
     agency_columns = [
         "镜头分段",
@@ -2187,6 +2195,11 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
         "镜头运动&运动轨迹",
     ]
     if not body.empty:
+        if len(body) > MAX_SCRIPT_SEGMENTS:
+            issues.append(f"分段过碎：正文镜头共有 {len(body)} 行，必须合并为不超过 {MAX_SCRIPT_SEGMENTS} 段。")
+        short_segments = sum(1 for value in body["时长"].tolist() if _duration_seconds(value) <= 2)
+        if short_segments and expected > 12:
+            issues.append(f"短碎片段过多：有 {short_segments} 行时长仅 1-2 秒，需合并为 4-8 秒左右的完整镜头段。")
         for column in agency_columns:
             blanks = sum(1 for value in body[column].tolist() if not str(value or "").strip())
             if blanks:
@@ -2263,7 +2276,6 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
         if not _content_contains_any(first_rows_text, microwave_opening_terms):
             issues.append("微波炉前两镜没有建立微波炉使用任务或食物加热场景。")
 
-    expected, _, _ = _duration_structure_profile(req.expected_duration)
     for target in _feature_focus_targets(req, features):
         aliases = target.get("aliases") or [target.get("name", "")]
         focus_seconds = 0
