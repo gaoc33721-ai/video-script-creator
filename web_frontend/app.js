@@ -27,7 +27,6 @@ const state = {
   productImageAssets: [],
   selectedProductImageId: "",
   productImageAsset: null,
-  jobsExpanded: false,
   competitorResearchTimer: null,
   lastDiscoveredAsins: [],
   lastDiscoveredVideoIds: [],
@@ -781,24 +780,11 @@ async function loadJobs() {
     const data = await api("/api/jobs");
     const jobs = data.jobs || [];
     if (!jobs.length) {
-      $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>暂无任务</strong><span>提交脚本后会显示最近一条。</span></div>';
+      $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>暂无任务</strong><span>提交脚本后会显示最近三条。</span></div>';
       return;
     }
-    const defaultVisible = 1;
-    const expanded = state.jobsExpanded || false;
-    const visible = expanded ? jobs : jobs.slice(0, defaultVisible);
-    let html = visible.map(renderJob).join("");
-    if (jobs.length > defaultVisible) {
-      const label = expanded ? "收起历史任务" : `展开历史任务（共 ${jobs.length} 条）`;
-      html += `<button class="jobs-toggle" type="button" id="toggleJobs">${escapeHtml(label)}</button>`;
-    }
-    $("jobs").innerHTML = html;
-    if (jobs.length > defaultVisible) {
-      $("toggleJobs").addEventListener("click", () => {
-        state.jobsExpanded = !state.jobsExpanded;
-        loadJobs();
-      });
-    }
+    const visible = jobs.slice(0, 3);
+    $("jobs").innerHTML = visible.map(renderJob).join("");
     await revealCompletedResult(jobs);
   } catch (error) {
     $("jobs").innerHTML = `<div class="empty-state"><strong>任务加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
