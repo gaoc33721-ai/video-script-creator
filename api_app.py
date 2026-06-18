@@ -110,6 +110,9 @@ SYSTEM_PROMPT = f"""##角色
 7. 每套方案必须明显不同：开场 hook、产品视角、物品状态、道具环境、镜头组织至少两处不同。避免三套都只是“产品特写 + 功能展示 + 品牌收尾”。
 8. 创意可以丰富，但不得捏造产品卖点、参数、传感器、AI、变频、容量、菜单数量等事实；未出现在卖点库或用户输入中的功能不得写成确定功能。
 9. 镜头分段必须像可拍摄分镜，而不是粗略目录：不允许只用“开场 / 产品切入 / 功能展示1 / 功能展示2 / 收尾”这种 5 段模板。需要按期望时长拆成足够多的短镜头，并按外部机构样例写成“时间段 + 生活场景任务 + 括号内阶段/卖点证据”，例如“0-4s 面板预约制冰（家中开场）”。
+10. 参考行业优秀短视频经验：前 2 秒必须有反差、结果预告、痛点瞬间或动作钩子；中段用“动作触发转场 + 可见证据”推进，不要只按卖点列表顺序介绍；结尾用结果画面或品牌记忆收束。
+11. 每套脚本至少包含 1 个有设计感的转场或镜头连接，例如动作匹配、遮挡转场、物体擦镜、声桥、前后对比切、推近接特写、俯拍切内腔；不得全程都是普通固定镜头。
+12. 画面要有生活质感和感官细节：声音、蒸汽、水汽、纹理、光影、屏幕反馈、食物/衣物/地面状态变化等任选其一写进画面示意，避免“干净棚拍参数展示”的同质化。
 
 ##格式与语言硬约束
 1. 第一输出必须是标准 Markdown 表格，绝对不要包裹在 ```markdown 或 ``` 代码块中。
@@ -2047,6 +2050,9 @@ def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
         "- 旁白（英文）可以更口语，但必须围绕卖点库里的专业词：Feature Name、Tagline、Feature Description 至少命中其一。",
         "- 画面示意&表现手法必须把 Feature Description 转成可拍动作，不允许只写“展示平板设计/展示均匀加热效果”这种抽象描述。",
         "- 镜头运动&运动轨迹必须写清运动方式和方向/主体关系，例如近景特写（CU）｜推进至面板、横移跟拍（左→右）、俯拍切到腔体、缓慢拉远；不能只写“俯拍/特写/全景”。",
+        "- 每套必须至少出现 1 个有设计感的转场或镜头连接：动作匹配、遮挡转场、物体擦镜、声桥、前后对比切、推近接特写、俯拍切细节等任选。",
+        "- 每套必须至少出现 1 个感官/状态细节：蒸汽、水汽、声音、纹理、屏幕数字反馈、食物质地、地面污渍变化、衣物/餐具状态变化等任选。",
+        "- 不要使用模板化分段名堆叠，例如“产品切入/功能展示/功能展示2/清洁效果展示1/清洁效果展示2”；要写成具体生活任务和画面动作。",
     ]
     if _is_microwave_request(req, features):
         lines.extend(
@@ -2213,6 +2219,19 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
                 generic_rows += 1
         if generic_rows:
             issues.append(f"画面示意&表现手法仍偏泛泛描述，有 {generic_rows} 行需要改成具体可拍画面/故事推进。")
+        body_text = "\n".join(_row_text(row) for _, row in body.iterrows())
+        transition_pattern = re.compile(
+            r"转场|匹配|遮挡|擦镜|声桥|对比切|快切|拉焦|推近接|切到|切细节|wipe|match\s*cut|sound\s*bridge|whip|rack\s*focus",
+            flags=re.IGNORECASE,
+        )
+        sensory_pattern = re.compile(
+            r"蒸汽|水汽|雾气|声音|咔哒|滴答|嗡鸣|纹理|质地|拉丝|冒气|屏幕|数字|灯光|反光|污渍|毛发|碎屑|状态变化|before|after|steam|texture|sizzle|beep|display",
+            flags=re.IGNORECASE,
+        )
+        if not transition_pattern.search(body_text):
+            issues.append("缺少有设计感的转场或镜头连接，需加入动作匹配、遮挡转场、声桥、前后对比切或推近接特写。")
+        if not sensory_pattern.search(body_text):
+            issues.append("缺少感官/状态细节，需加入蒸汽、水汽、声音、纹理、屏幕反馈、污渍/食材/物品状态变化等可见证据。")
         weak_motion = 0
         for value in body["镜头运动&运动轨迹"].tolist():
             text = str(value or "")
@@ -2498,6 +2517,43 @@ def _hotspot_context_prompt(hotspots: list[dict]) -> str:
     return "行业热点上下文（仅选择与产品和目标市场自然相关的热点使用）：\n" + "\n".join(lines)
 
 
+def _creative_playbook_for_variant(variant_index: int, req: GenerateRequest) -> str:
+    playbooks = [
+        {
+            "name": "生活痛点微剧情",
+            "hook": "从一个具体生活麻烦或尴尬瞬间切入，先让用户看到问题后果，再让产品自然进入解决。",
+            "structure": "痛点瞬间 → 产品介入 → 核心动作证据 → 结果反差 → 品牌收束",
+            "camera": "手持跟随、越肩视角、近景特写、动作匹配转场；镜头有生活现场感。",
+            "avoid": "避免开头就是产品正面棚拍，避免第一段就念完整产品名。",
+        },
+        {
+            "name": "结果先行反差证明",
+            "hook": "第一镜先给出理想结果或强反差画面，再倒回展示产品如何做到。",
+            "structure": "结果预告/Before-After → 操作触发 → 卖点证明特写 → 二次验证 → 结果定格",
+            "camera": "前后对比切、快速拉焦、遮挡转场、俯拍切细节；节奏更利落但不碎片化。",
+            "avoid": "避免平铺每个按钮和参数，避免所有镜头都停留在同一景别。",
+        },
+        {
+            "name": "社媒挑战/清单化爽点",
+            "hook": "用计时挑战、三步任务、一个小测试或连续状态变化制造观看驱动力。",
+            "structure": "挑战设定 → 连续任务推进 → 关键卖点放大 → 完成瞬间 → 品牌记忆",
+            "camera": "俯拍任务台、快慢结合、物体擦镜、声桥或节奏点切换；强调动作完成感。",
+            "avoid": "避免剧情过重或人物表演抢戏，避免只靠旁白解释卖点。",
+        },
+    ]
+    item = playbooks[variant_index % len(playbooks)]
+    return "\n".join(
+        [
+            f"本方案创意打法：{item['name']}",
+            f"- Hook 方式：{item['hook']}",
+            f"- 结构建议：{item['structure']}，最多 {MAX_SCRIPT_SEGMENTS} 段内完成。",
+            f"- 镜头语言：{item['camera']}",
+            f"- 本方案避雷：{item['avoid']}",
+            "- 必须让本方案与其他方案在开场物品、转场方式、证据镜头和结尾画面上至少两处不同。",
+        ]
+    )
+
+
 def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int, context_snapshot: dict | None = None) -> str:
     feature_lines = _feature_catalog_lines(features)
     direction = req.video_type[variant_index % len(req.video_type)] if req.video_type else "场景化/生活方式型"
@@ -2505,6 +2561,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
     context_snapshot = context_snapshot or {"competitor_assets": [], "hotspots": []}
     competitor_context = _competitor_context_prompt(context_snapshot.get("competitor_assets") or [])
     hotspot_context = _hotspot_context_prompt(context_snapshot.get("hotspots") or [])
+    creative_playbook = _creative_playbook_for_variant(variant_index, req)
     duration_guidance = _duration_structure_guidance(req.expected_duration, req, features)
     quality_guidance = _script_quality_guidance(req, features)
     return f"""
@@ -2529,6 +2586,8 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列必须以中文为主。
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
+
+{creative_playbook}
 
 {duration_guidance}
 
