@@ -2021,6 +2021,28 @@ function storyboardRowFromCells(row, index) {
       sellingPoint,
     };
   }
+  const isMarketingSchemaStoryboard = row.length === 7;
+  if (isMarketingSchemaStoryboard) {
+    const shotLabel = row[0] || `镜头 ${index + 1}`;
+    const feature = row[1] || "";
+    const method = row[2] || "";
+    const voiceover = row[3] || "";
+    const subtitle = row[4] || "";
+    const movement = row[5] || "";
+    const duration = row[6] || "";
+    return {
+      shotLabel,
+      segment: shotLabel,
+      feature,
+      method,
+      voiceover,
+      subtitle,
+      angle: movement,
+      movement,
+      duration,
+      sellingPoint: feature,
+    };
+  }
   const hasLegacyEffectColumns = row.length >= 12;
   const segment = row[0] || `镜头 ${index + 1}`;
   const feature = row[1] || "";
@@ -2085,7 +2107,7 @@ function renderStoryboardCards(content) {
           <dl>
             <div><dt>画面表现</dt><dd>${escapeHtml(method || "按脚本场景执行")}</dd></div>
             <div><dt>拍摄方式</dt><dd>${escapeHtml([angle, movement].filter(Boolean).join(" / ") || "稳定镜头")}</dd></div>
-            ${sellingPoint ? `<div><dt>对应卖点</dt><dd>${escapeHtml(sellingPoint)}</dd></div>` : ""}
+            ${sellingPoint ? `<div><dt>功能卖点</dt><dd>${escapeHtml(sellingPoint)}</dd></div>` : ""}
             <div><dt>旁白/字幕</dt><dd>${escapeHtml([voiceover, subtitle].filter(Boolean).join(" / "))}</dd></div>
           </dl>
           <div class="storyboard-actions">

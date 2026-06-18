@@ -86,18 +86,12 @@ ADMIN_JSON_CACHE_KEYS = {
 _json_cache: dict[str, dict] = {}
 _json_cache_lock = threading.Lock()
 TABLE_COLUMNS = [
-    "镜号/时间码",
-    "结构分段",
-    "分镜画面（AI示意图口令）",
-    "镜头运动轨迹",
-    "画面说明",
-    "故事情节解说",
-    "对应卖点",
-    "功能点",
+    "镜头分段",
+    "功能卖点（英文）",
+    "画面示意&表现手法",
     "旁白（英文）",
     "字幕-显示卖点名及描述（英文）",
-    "竞品链接",
-    "竞品盖帽",
+    "镜头运动&运动轨迹",
     "时长",
 ]
 TABLE_HEADER_LINE = "| " + " | ".join(TABLE_COLUMNS) + " |"
@@ -111,31 +105,28 @@ SYSTEM_PROMPT = f"""##角色
 3. 人物不是必需元素；如需出现，只写手部、手臂、背影、越肩视角或生活痕迹。人物动作必须服务于产品操作，如按键、开门、取放、倒入、擦拭、摆放，不让人物抢主视觉。
 4. 每个核心卖点都要变成“可看见的产品动作或物品状态变化”：例如食物状态变化、操作面板反馈、内部空间利用、收纳前后、清洁前后、传统方式 vs 本品方式、成品质感特写。
 5. 微波炉、烤箱、空气炸锅等厨房电器必须优先生成“产品 + 食材/餐具/台面/蒸汽/成品状态”的可拍摄场景；如果用户没有给出重点，请自动选择 1-2 个最适合的物品场景，如忙碌早餐食材入炉、电影夜爆米花膨胀、剩饭复热冒气、冷冻食品解冻、热饮加热、快速出餐摆盘。
-6. 分镜画面、画面说明和故事情节解说必须具体到镜头动作和画面内容：不要写“展示产品功能”这种空话，要写“披萨放入腔体，手指按下触控面板，屏幕数字跳动，切到拉丝芝士和产品门体反光特写”这类产品清晰露出的可拍画面。
+6. 画面示意&表现手法必须具体到镜头动作和画面内容：不要写“展示产品功能”这种空话，要写“披萨放入腔体，手指按下触控面板，屏幕数字跳动，切到拉丝芝士和产品门体反光特写”这类产品清晰露出的可拍画面。
 7. 每套方案必须明显不同：开场 hook、产品视角、物品状态、道具环境、镜头组织至少两处不同。避免三套都只是“产品特写 + 功能展示 + 品牌收尾”。
 8. 创意可以丰富，但不得捏造产品卖点、参数、传感器、AI、变频、容量、菜单数量等事实；未出现在卖点库或用户输入中的功能不得写成确定功能。
-9. 结构分段必须像可拍摄分镜，而不是粗略目录：不允许只用“开场 / 产品切入 / 功能展示1 / 功能展示2 / 收尾”这种 5 段模板。需要按期望时长拆成足够多的短镜头，并把结构分段写成“生活场景任务 + 卖点证据”的具体名称。
+9. 镜头分段必须像可拍摄分镜，而不是粗略目录：不允许只用“开场 / 产品切入 / 功能展示1 / 功能展示2 / 收尾”这种 5 段模板。需要按期望时长拆成足够多的短镜头，并按外部机构样例写成“时间段 + 生活场景任务 + 括号内阶段/卖点证据”，例如“0-4s 面板预约制冰（家中开场）”。
 
 ##格式与语言硬约束
 1. 第一输出必须是标准 Markdown 表格，绝对不要包裹在 ```markdown 或 ``` 代码块中。
-2. 表格必须统一使用以下 13 列，并逐字使用该表头：
+2. 表格必须统一使用以下 7 列，并逐字使用该表头：
 {TABLE_HEADER_LINE}
 {TABLE_SEPARATOR_LINE}
-3. 表格最后一行必须是“总时长”统计；“镜号/时间码”列写“总时长”，“时长”列写总秒数。
+3. 表格最后一行必须是“总时长”统计；“镜头分段”列写“总时长”，“时长”列写总秒数。
 4. “旁白（英文）”和“字幕-显示卖点名及描述（英文）”两列必须是纯英文句子，不得带字段名/标签/括号前缀。
 5. 其余列必须以中文为主，便于国内制作团队执行；允许少量 UI/LED/4K 等缩写。
-6. 竞品链接/竞品盖帽字段保留；没有可用竞品链接时留空，不要编造。
-7. 品牌收尾必须是产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
-8. 表格单元格内不要使用英文竖线“|”；镜号时间码和镜头轨迹里的分隔符统一使用中文全角“｜”，避免 Markdown 表格断列。
+6. 品牌收尾必须是产品静置全景特写 + Hisense Designed to Ease, Crafted to Cheer.
+7. 表格单元格内不要使用英文竖线“|”；镜头分段和镜头轨迹里的分隔符统一使用中文全角“｜”或中文箭头“→”，避免 Markdown 表格断列。
 
 ##外部机构口令稿参考结构
 你需要输出的表格要像专业 AI 视频机构的分镜口令，而不是普通脚本文案：
-- “镜号/时间码”必须连续，例如“镜头01｜0-4秒”“镜头02｜4-8秒”，时间码不得重叠或跳秒。
-- “分镜画面（AI示意图口令）”要能直接作为单帧画面生成提示词：写清前景/中景/背景、产品比例、产品位置、道具、被处理物品、光影和构图；不要写“见图”“参考图”。
-- “镜头运动轨迹”必须像机构稿一样具体，例如“固定慢推近｜中心点锁定”“横移跟拍（左→右）”“固定全景”“缓慢拉远”“俯拍切到门体内腔”；不要只写“特写/俯拍”。
-- “画面说明”必须列出画面上实际会出现的元素和动作，例如产品门体、腔体、控制面板、食物/衣物/餐具状态、手部操作、蒸汽/水汽/光影反馈。
-- “故事情节解说”不是旁白翻译，而是解释这个镜头如何推动故事、制造好奇、验证痛点或完成情绪收束。
-- “对应卖点”必须用①②③方式明确映射卖点；没有直接卖点的开场/收尾镜头写“无直接卖点，用于痛点铺垫/品牌记忆”，不得硬凑不存在功能。
+- “镜头分段”参考样例里的“镜头”字段：必须连续写出时间段、具体动作和阶段说明，例如“0-4s 面板预约制冰（家中开场）”“20-26s 回家开门 & 冰箱美学（Pureflat）”，不得只写“镜头01/功能展示/痛点开场”。
+- “画面示意&表现手法”要合并画面示意与执行方式：写清前景/中景/背景、产品比例、产品位置、道具、被处理物品、手部动作、光影和构图；不要写“见图”“参考图”。
+- “镜头运动&运动轨迹”参考样例里的“镜头运动/运镜轨迹”字段：必须像机构稿一样具体，例如“近景特写（CU）｜推进至面板｜手指按键特写”“快速切换（快剪）｜家门→换装→车内｜节奏上场”“俯视滑动 + 特写｜抽屉滑动轨迹｜取冰盒特写”；不要只写“特写/俯拍”。
+- “功能卖点（英文）”必须优先使用卖点库 Feature Name 原文；没有直接卖点的开场/收尾镜头写“Pain-point opening”“Brand closing”等非功能段，不得硬凑不存在功能。
 - 每个卖点证明镜头都必须能被画面看见，不能只靠旁白说服。
 
 ##输出边界
@@ -1949,9 +1940,9 @@ def _feature_catalog_lines(features: list[dict]) -> str:
         lines.append(
             "\n".join(
                 [
-                    f"{index}. Feature Name（功能点列必须逐字使用）：{name}",
+                    f"{index}. Feature Name（功能卖点（英文）列必须逐字使用）：{name}",
                     f"   Tagline（字幕列优先逐字引用）：{tagline or '无'}",
-                    f"   Feature Description（旁白/画面说明/故事情节解说必须吸收其专业表述）：{description or '无'}",
+                    f"   Feature Description（旁白/画面示意&表现手法/字幕必须吸收其专业表述）：{description or '无'}",
                 ]
             )
         )
@@ -2050,12 +2041,11 @@ def _feature_focus_targets(req: GenerateRequest, features: list[dict]) -> list[d
 def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
     lines = [
         "产品与卖点质量硬要求：",
-        "- 功能点列必须优先逐字使用下方 Feature Name，不要改写成泛泛的“痛点开场/功能展示”。痛点行如无功能点可留空，但卖点证明行必须写准确 Feature Name。",
-        "- 对应卖点列必须用①②③映射真实卖点，并说明画面中如何看见该卖点；开场或收尾没有直接卖点时写“无直接卖点，用于痛点铺垫/品牌记忆”。",
+        "- 功能卖点（英文）列必须优先逐字使用下方 Feature Name，不要改写成泛泛的“痛点开场/功能展示”。痛点行如无功能点可写 Pain-point opening，品牌收尾可写 Brand closing，但卖点证明行必须写准确 Feature Name。",
         "- 字幕-显示卖点名及描述（英文）列必须使用“Feature Name: Tagline”或从 Feature Description 摘取原文专业短句；不得写成 generic benefit。",
         "- 旁白（英文）可以更口语，但必须围绕卖点库里的专业词：Feature Name、Tagline、Feature Description 至少命中其一。",
-        "- 分镜画面（AI示意图口令）/画面说明/故事情节解说必须把 Feature Description 转成可拍动作，不允许只写“展示平板设计/展示均匀加热效果”这种抽象描述。",
-        "- 镜头运动轨迹必须写清运动方式和方向/主体关系，例如固定慢推近、横移跟拍（左→右）、俯拍切到腔体、缓慢拉远；不能只写“俯拍/特写/全景”。",
+        "- 画面示意&表现手法必须把 Feature Description 转成可拍动作，不允许只写“展示平板设计/展示均匀加热效果”这种抽象描述。",
+        "- 镜头运动&运动轨迹必须写清运动方式和方向/主体关系，例如近景特写（CU）｜推进至面板、横移跟拍（左→右）、俯拍切到腔体、缓慢拉远；不能只写“俯拍/特写/全景”。",
     ]
     if _is_microwave_request(req, features):
         lines.extend(
@@ -2067,7 +2057,7 @@ def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
     for target in _feature_focus_targets(req, features):
         lines.append(
             f"- 用户点名强调 {target['name']}：必须用总时长的 {round(target['low'] * 100)}%-{round(target['high'] * 100)}% 展开该卖点；"
-            f"至少 3 个正文镜头或至少 {round(int(req.expected_duration) * target['low'])} 秒直接围绕它，且结构分段/对应卖点/功能点/字幕中反复出现其专业表达。"
+            f"至少 3 个正文镜头或至少 {round(int(req.expected_duration) * target['low'])} 秒直接围绕它，且镜头分段/功能卖点（英文）/字幕中反复出现其专业表达。"
         )
         if "flatbed" in " ".join(target.get("aliases", [])).lower() or "平板" in " ".join(target.get("aliases", [])):
             lines.append(
@@ -2126,8 +2116,8 @@ def _duration_structure_guidance(expected_duration, req: GenerateRequest | None 
     return f"""分段密度硬要求：
 - 正文镜头行（不含表头、分隔行和“总时长”行）至少 {min_segments} 行，所有行时长相加必须精确等于 {expected} 秒，“总时长”行也必须写 {expected}秒。
 - 单行时长以 2-6 秒为主，最长不超过 {max_segment_seconds} 秒；不要把多个生活动作或多个卖点塞进一个长段。
-- “镜号/时间码”必须从 0 秒开始连续推进，例如“镜头01｜0-3秒”“镜头02｜3-6秒”；每行时间码必须与“时长”列一致，不能重叠、跳秒或只写镜头编号。
-- “结构分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“生活场景任务 + 卖点证据”的具体名称。适合当前产品的示例：{segment_examples}。
+- “镜头分段”必须从 0 秒开始连续推进，例如“0-3s 冷饭盒拿出（复热痛点开场）”“3-6s 餐盒放入平板腔体（Flatbed 证据）”；每行时间段必须与“时长”列一致，不能重叠、跳秒或只写镜头编号。
+- “镜头分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“时间段 + 生活场景任务 + 括号内阶段/卖点证据”的具体名称。适合当前产品的示例：{segment_examples}。
 - 结构顺序至少覆盖：生活化痛点开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；30 秒以上额外加入等待切换、前后对比或二次使用镜头。
 - 每套至少出现 {min_lifestyle_details} 个生活化物品/场景细节（优先从这些当前品类细节中选择：{detail_examples}），人物只允许手部、手臂、背影、越肩视角或生活痕迹。"""
 
@@ -2138,7 +2128,7 @@ def _duration_seconds(cell) -> int:
 
 
 def _script_body_rows(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or "结构分段" not in df.columns:
+    if df.empty or "镜头分段" not in df.columns:
         return df.iloc[0:0]
     mask = ~df.apply(lambda row: any("总时长" in str(value) or "total" in str(value).lower() for value in row), axis=1)
     return df[mask]
@@ -2189,12 +2179,12 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
     full_text = "\n".join(table_lines)
 
     agency_columns = [
-        "镜号/时间码",
-        "分镜画面（AI示意图口令）",
-        "镜头运动轨迹",
-        "画面说明",
-        "故事情节解说",
-        "对应卖点",
+        "镜头分段",
+        "功能卖点（英文）",
+        "画面示意&表现手法",
+        "旁白（英文）",
+        "字幕-显示卖点名及描述（英文）",
+        "镜头运动&运动轨迹",
     ]
     if not body.empty:
         for column in agency_columns:
@@ -2203,16 +2193,15 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
                 issues.append(f"机构稿字段不完整：{column} 有 {blanks} 行为空，必须逐镜头填写。")
         generic_pattern = re.compile(r"^(展示|突出|呈现)?\s*(产品|功能|卖点|效果)?\s*(特写|展示|介绍)?$", flags=re.IGNORECASE)
         generic_terms = re.compile(r"展示产品功能|展示功能|突出卖点|产品特写|功能展示|卖点展示")
-        for column in ["分镜画面（AI示意图口令）", "画面说明", "故事情节解说"]:
-            generic_rows = 0
-            for value in body[column].tolist():
-                text = str(value or "").strip()
-                if not text or generic_pattern.search(text) or generic_terms.search(text):
-                    generic_rows += 1
-            if generic_rows:
-                issues.append(f"{column} 仍偏泛泛描述，有 {generic_rows} 行需要改成具体可拍画面/故事推进。")
+        generic_rows = 0
+        for value in body["画面示意&表现手法"].tolist():
+            text = str(value or "").strip()
+            if not text or generic_pattern.search(text) or generic_terms.search(text):
+                generic_rows += 1
+        if generic_rows:
+            issues.append(f"画面示意&表现手法仍偏泛泛描述，有 {generic_rows} 行需要改成具体可拍画面/故事推进。")
         weak_motion = 0
-        for value in body["镜头运动轨迹"].tolist():
+        for value in body["镜头运动&运动轨迹"].tolist():
             text = str(value or "")
             if not re.search(
                 r"推|拉|横移|跟拍|固定|俯拍|摇|移|切|靠近|远离|左|右|上|下|zoom|pan|tilt|track|dolly|fixed|push|pull|slide|move|cut",
@@ -2221,10 +2210,10 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
             ):
                 weak_motion += 1
         if weak_motion:
-            issues.append(f"镜头运动轨迹有 {weak_motion} 行缺少运动路径或方向，需按机构稿写成可执行轨迹。")
-        first_timecode = str(body.iloc[0].get("镜号/时间码", "") or "")
-        if not re.search(r"0\s*[-~—–至到]\s*\d+|0\s*秒", first_timecode):
-            issues.append("镜号/时间码未从 0 秒开始连续标注，例如“镜头01｜0-3秒”。")
+            issues.append(f"镜头运动&运动轨迹有 {weak_motion} 行缺少运动路径或方向，需按机构稿写成可执行轨迹。")
+        first_timecode = str(body.iloc[0].get("镜头分段", "") or "")
+        if not re.search(r"0\s*[-~—–至到]\s*\d+|0\s*s|0\s*秒", first_timecode, flags=re.IGNORECASE):
+            issues.append("镜头分段未从 0 秒开始连续标注，例如“0-3s 冷饭盒拿出（复热痛点开场）”。")
 
     for item in (features or [])[:5]:
         name = _clean_prompt_value(item.get("name"))
@@ -2335,24 +2324,53 @@ def _parse_md_table_to_df(table_lines):
             row = row[: len(header)]
         normalized.append(row)
     df = pd.DataFrame(normalized, columns=header)
-    if "分镜画面（AI示意图口令）" not in df.columns and "表现手法" in df.columns:
-        df["分镜画面（AI示意图口令）"] = df["表现手法"]
-    if "画面说明" not in df.columns and "表现手法" in df.columns:
-        df["画面说明"] = df["表现手法"]
-    if "镜头运动轨迹" not in df.columns:
-        angle = df["拍摄角度"] if "拍摄角度" in df.columns else ""
-        movement = df["运镜方式"] if "运镜方式" in df.columns else ""
-        if hasattr(angle, "fillna") and hasattr(movement, "fillna"):
-            df["镜头运动轨迹"] = (angle.fillna("").astype(str) + "｜" + movement.fillna("").astype(str)).str.strip("｜")
-        elif "运镜方式" in df.columns:
-            df["镜头运动轨迹"] = df["运镜方式"]
-    if "对应卖点" not in df.columns and "功能点" in df.columns:
-        df["对应卖点"] = df["功能点"]
-    if "镜号/时间码" not in df.columns and "结构分段" in df.columns:
-        df["镜号/时间码"] = [
-            "总时长" if "总时长" in str(value) else f"镜头{index + 1:02d}"
-            for index, value in enumerate(df["结构分段"].tolist())
-        ]
+    row_count = len(df)
+
+    def _series(column: str) -> pd.Series:
+        if column in df.columns:
+            return df[column].fillna("").astype(str)
+        return pd.Series([""] * row_count, index=df.index, dtype=str)
+
+    def _combine_columns(*columns: str) -> pd.Series:
+        source = [_series(column) for column in columns]
+        values = []
+        for parts in zip(*source):
+            values.append("；".join(part.strip() for part in parts if part and part.strip()))
+        return pd.Series(values, index=df.index, dtype=str)
+
+    if "镜头分段" not in df.columns:
+        if "镜号/时间码" in df.columns or "结构分段" in df.columns:
+            timecodes = _series("镜号/时间码")
+            segments = _series("结构分段")
+            values = []
+            for index, (timecode, segment) in enumerate(zip(timecodes.tolist(), segments.tolist())):
+                raw = f"{timecode} {segment}".strip()
+                if "总时长" in raw or "total" in raw.lower():
+                    values.append("总时长")
+                    continue
+                time_part = re.sub(r"^镜头\s*\d+\s*[｜|:：-]*\s*", "", timecode or "").strip()
+                if not time_part:
+                    time_part = f"镜头{index + 1:02d}"
+                values.append(f"{time_part} {segment}".strip())
+            df["镜头分段"] = values
+        elif "结构分段" in df.columns:
+            df["镜头分段"] = df["结构分段"]
+
+    if "功能卖点（英文）" not in df.columns:
+        df["功能卖点（英文）"] = _combine_columns("功能点", "对应卖点").str.strip("；")
+
+    if "画面示意&表现手法" not in df.columns:
+        if any(column in df.columns for column in ["分镜画面（AI示意图口令）", "画面说明", "故事情节解说"]):
+            df["画面示意&表现手法"] = _combine_columns("分镜画面（AI示意图口令）", "画面说明", "故事情节解说")
+        elif "表现手法" in df.columns:
+            df["画面示意&表现手法"] = df["表现手法"]
+
+    if "镜头运动&运动轨迹" not in df.columns:
+        if "镜头运动轨迹" in df.columns:
+            df["镜头运动&运动轨迹"] = df["镜头运动轨迹"]
+        else:
+            df["镜头运动&运动轨迹"] = _combine_columns("拍摄角度", "运镜方式").str.strip("；")
+
     for column in TABLE_COLUMNS:
         if column not in df.columns:
             df[column] = ""
@@ -2432,7 +2450,7 @@ def _script_context_snapshot(req: GenerateRequest) -> dict:
 
 def _competitor_context_prompt(assets: list[dict]) -> str:
     if not assets:
-        return "竞品素材上下文：当前没有已审核可引用的竞品素材；竞品链接和竞品盖帽两列请留空，不要编造。"
+        return "竞品素材上下文：当前没有已审核可引用的竞品素材；不要编造竞品信息。"
     lines = []
     for index, asset in enumerate(assets[:3], start=1):
         media_types = "、".join(sorted(_asset_media_types(asset))) or "未知媒体"
@@ -2450,9 +2468,9 @@ def _competitor_context_prompt(assets: list[dict]) -> str:
             )
         )
     return (
-        "竞品素材上下文（只能引用下列链接；不得编造播放量、投放效果、竞品参数）：\n"
+        "竞品素材上下文（仅供内部参考创意节奏和画面组织，不要在表格中新增竞品字段；不得编造播放量、投放效果、竞品参数）：\n"
         + "\n".join(lines)
-        + "\n请在合适镜头的“竞品链接”列填写 1-3 条上述链接，并在“竞品盖帽”列基于本品卖点写对标表达。"
+        + "\n可吸收其开场节奏、镜头组织或素材类型，但输出表格只保留固定 7 列。"
     )
 
 
@@ -2479,24 +2497,23 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
     quality_guidance = _script_quality_guidance(req, features)
     return f"""
 请生成【方案{variant_no}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
-- 必须先输出一张符合系统要求的 Markdown 表格（13列，行内时长为秒，最后一行为总时长）。
+- 必须先输出一张符合系统要求的 Markdown 表格（7列，行内时长为秒，最后一行为总时长）。
 - 表格必须包含并使用如下表头（逐字一致）：
 {TABLE_HEADER_LINE}
-- 表格单元格内禁止使用英文竖线“|”；时间码和运动轨迹分隔统一使用中文全角“｜”。
+- 表格单元格内禁止使用英文竖线“|”；镜头分段和运动轨迹分隔统一使用中文全角“｜”或中文箭头“→”。
 - 表格后不要追加任何整段 AI 视频生成 Prompt、Negative Prompt、Recommended Settings 或解释文字。
 - 与其他方案保持明显差异：开场 hook、产品视角、物品状态、画面口令、镜头运动、故事推进至少两处不同。
-- 参考外部机构 AI 视频口令稿的结构：每一行都必须同时写清“镜号/时间码、可生成单帧示意图的画面口令、镜头运动轨迹、画面说明、故事情节解说、对应卖点”。这 6 个信息不能互相重复，也不能空泛。
+- 参考外部机构 AI 视频口令稿的结构：每一行都必须同时写清“镜头分段、可拍画面示意与表现手法、镜头运动&运动轨迹、功能卖点植入、英文旁白/字幕”。这些信息不能互相重复，也不能空泛。
 - 镜头设计必须先服务故事推进，再服务卖点露出：开场负责吸引注意，中段用产品动作证明卖点，后段用结果/品牌记忆收束。
-- 分镜画面（AI示意图口令）必须像给图像/视频模型的口令：包含主体比例、前景/中景/背景、产品位置、道具和光影；严禁只写“产品特写”“功能展示”“见示意图”。
-- 镜头运动轨迹必须写运动路径和方向，例如“固定慢推近｜产品居中”“横移跟拍（左→右）｜手部动作入画”“俯拍切到腔体｜红点锁定食物中心”。不得只写“特写/俯拍/全景”。
-- 画面说明必须是制作团队能拍的元素清单和动作，故事情节解说必须解释这一镜如何制造好奇、推进情绪、验证痛点或强化品牌记忆。
-- 对应卖点列必须用①②③列出真实卖点映射；没有直接卖点的镜头写“无直接卖点，用于痛点铺垫/品牌记忆”，不要硬凑功能。
+- 镜头分段必须参考上传样例的“镜头”字段：用“时间段 + 具体动作 + 括号内阶段/卖点证据”，例如“0-4s 冷饭盒拿出（复热痛点开场）”，不得只写镜头编号。
+- 画面示意&表现手法必须像制作口令：包含主体比例、前景/中景/背景、产品位置、道具、被处理物品、手部动作和光影；严禁只写“产品特写”“功能展示”“见示意图”。
+- 镜头运动&运动轨迹必须参考上传样例的“镜头运动/运镜轨迹”字段：写运动路径和方向，例如“近景特写（CU）｜推进至面板｜手指按键特写”“横移跟拍（左→右）｜手部动作入画”“俯拍切到腔体｜红点锁定食物中心”。不得只写“特写/俯拍/全景”。
+- 功能卖点（英文）列必须优先逐字使用卖点库 Feature Name；没有直接卖点的开场/收尾写 Pain-point opening 或 Brand closing。
 - 先在内部确定本方案的创意策略，但不要输出策略过程：方案1偏生活痛点开场，方案2偏社媒种草/情绪反差，方案3偏快节奏功能挑战；如果只生成1-2套，也必须让每套的产品切入角度、被处理物品状态和镜头组织不同。
 - 默认拍摄策略：产品/物品展示优先，淡化人物角色；除非补充要求明确需要人物剧情，不要设计专业模特、正脸表演或多人关系。
 - 人物处理：可用手部/手臂/背影/越肩视角完成开门、按键、取放、摆放、擦拭等操作；不要让人物成为画面主角。
 - 场景优先级：厨房电器优先写“产品 + 食材/餐具/台面/蒸汽/成品状态”的互动；冰箱/洗衣机/洗碗机等家电优先写“产品内部空间 + 被处理物品 + 使用前后结果”的可视化过程。
-- 分镜画面、画面说明和故事情节解说必须落到产品可见动作和物品状态变化，不要只写“展示功能/突出卖点/产品特写”；每行至少包含一个产品本体或被处理物品的可拍动作、一个道具或环境细节、一个镜头处理。
-- 竞品链接与竞品盖帽：只能基于“竞品素材上下文”引用真实链接；没有上下文时两列留空。
+- 画面示意&表现手法必须落到产品可见动作和物品状态变化，不要只写“展示功能/突出卖点/产品特写”；每行至少包含一个产品本体或被处理物品的可拍动作、一个道具或环境细节、一个镜头处理。
 - 语言强约束：除【旁白（英文）】与【字幕-显示卖点名及描述（英文）】两列外，其余列必须以中文为主。
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
@@ -3886,28 +3903,25 @@ def _storyboard_rows_from_variant(content: str) -> list[dict]:
     body = _script_body_rows(df)
     rows = []
     for index, row in body.reset_index(drop=True).iterrows():
-        segment = str(row.get("结构分段", "") or "").strip()
+        segment = str(row.get("镜头分段", "") or "").strip()
         if "总时长" in segment or "total" in segment.lower():
             continue
         if not any(str(row.get(column, "") or "").strip() for column in TABLE_COLUMNS[1:-1]):
             continue
         duration = _duration_seconds(row.get("时长", ""))
-        visual_prompt = str(row.get("分镜画面（AI示意图口令）", "") or "").strip()
-        scene_note = str(row.get("画面说明", "") or "").strip()
-        story_note = str(row.get("故事情节解说", "") or "").strip()
-        selling_point = str(row.get("对应卖点", "") or "").strip()
-        movement = str(row.get("镜头运动轨迹", "") or "").strip()
-        method = "；".join(item for item in (visual_prompt, scene_note, story_note) if item)
+        visual_prompt = str(row.get("画面示意&表现手法", "") or "").strip()
+        selling_point = str(row.get("功能卖点（英文）", "") or "").strip()
+        movement = str(row.get("镜头运动&运动轨迹", "") or "").strip()
         rows.append(
             {
                 "row_index": int(index),
-                "shot_label": str(row.get("镜号/时间码", "") or f"镜头{index + 1:02d}").strip(),
+                "shot_label": segment or f"镜头{index + 1:02d}",
                 "segment": segment,
-                "feature": str(row.get("功能点", "") or "").strip(),
+                "feature": selling_point,
                 "visual_prompt": visual_prompt,
-                "method": method,
-                "scene_note": scene_note,
-                "story_note": story_note,
+                "method": visual_prompt,
+                "scene_note": visual_prompt,
+                "story_note": "",
                 "selling_point": selling_point,
                 "subtitle": str(row.get("字幕-显示卖点名及描述（英文）", "") or "").strip(),
                 "angle": movement,
@@ -4158,14 +4172,14 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 {TABLE_SEPARATOR_LINE}
 3. 后续每一行都必须有且只有 {len(TABLE_COLUMNS)} 个字段，字段顺序不得变更、不得新增、不得删除。
 4. 字段必须保持为：{", ".join(TABLE_COLUMNS)}
-5. 最后一行必须是“总时长”统计；“镜号/时间码”列写“总时长”，“时长”列写总秒数。
+5. 最后一行必须是“总时长”统计；“镜头分段”列写“总时长”，“时长”列写总秒数。
 6. 只输出表格，不要输出整段 AI 视频生成 Prompt、Negative Prompt、Recommended Settings 或解释。
 7. 旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是英文，其余列以中文为主。
-8. 不要编造产品卖点；如没有竞品链接，竞品链接和竞品盖帽留空。
+8. 不要编造产品卖点；功能卖点（英文）列必须优先使用卖点库 Feature Name。
 9. 少人露出：只允许手部、手臂、背影、越肩视角或生活痕迹，产品和被处理物品必须是主视觉。
-10. 必须按外部机构 AI 视频口令稿风格修复：每行都要写清镜号/时间码、分镜画面（AI示意图口令）、镜头运动轨迹、画面说明、故事情节解说、对应卖点。
-11. 分镜画面（AI示意图口令）必须能直接用于单帧画面生成；镜头运动轨迹必须写运动方向/路径；故事情节解说必须说明这一镜如何推进故事或验证卖点。
-12. 表格单元格内禁止使用英文竖线“|”；时间码和运动轨迹分隔统一使用中文全角“｜”。
+10. 必须按外部机构 AI 视频口令稿风格修复：镜头分段参考样例“镜头”字段，写成“时间段 + 具体动作 + 括号内阶段/卖点证据”；画面示意&表现手法合并画面元素、动作、道具和故事推进；镜头运动&运动轨迹参考样例“镜头运动/运镜轨迹”字段，写清景别、运动路径和方向。
+11. 画面示意&表现手法必须能指导分段产品动图片段生成；镜头运动&运动轨迹必须写运动方向/路径；每行都要能通过产品图 + 分段脚本生成对应片段。
+12. 表格单元格内禁止使用英文竖线“|”；镜头分段和运动轨迹分隔统一使用中文全角“｜”或中文箭头“→”。
 
 {duration_guidance}
 
