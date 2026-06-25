@@ -211,6 +211,7 @@ async function initializeAuth() {
 
 function setMessage(id, text, kind = "") {
   const node = $(id);
+  if (!node) return;
   node.textContent = formatErrorDetail(text, "");
   node.className = `message ${kind}`.trim();
 }
@@ -1124,7 +1125,8 @@ function renderStoryboardCards(content) {
         subtitle,
       });
       state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, duration, prompt });
-      const isGenerating = state.canvasGenerating.has(index) || hasActiveCanvasJobForShot(index);
+      const videoJob = storyboardVideoJobForShot(index);
+      const isVideoGenerating = isActiveStoryboardVideoJob(videoJob);
       return `
         <article class="storyboard-card">
           <div class="storyboard-meta">
@@ -1140,10 +1142,14 @@ function renderStoryboardCards(content) {
             <div><dt>旁白/字幕</dt><dd>${escapeHtml([voiceover, subtitle].filter(Boolean).join(" / "))}</dd></div>
           </dl>
           <div class="storyboard-actions">
-            <button class="storyboard-generate" type="button" data-shot-index="${index}" ${isGenerating ? "disabled" : ""}>
-              ${isGenerating ? "正在生成片段参考图..." : currentProductImageId() ? "结合产品图生成片段参考图" : "生成片段参考图"}
+            <button class="storyboard-generate storyboard-video-generate" type="button" data-shot-index="${index}" ${isVideoGenerating ? "disabled" : ""}>
+              ${isVideoGenerating ? "正在生成视频..." : videoJob?.preview_url ? "重新生成视频" : "生成视频"}
+            </button>
+            <button class="storyboard-video-refresh secondary" type="button" data-shot-index="${index}">
+              刷新状态
             </button>
           </div>
+          ${renderStoryboardVideoForShot(index)}
           ${renderCanvasJobForShot(index)}
           <details>
             <summary>片段生成 Prompt</summary>
@@ -1308,7 +1314,7 @@ function renderCanvasJobForShot(shotIndex) {
   }
   const job = canvasJobForShot(shotIndex);
   if (!job) {
-    return '<div class="storyboard-image-slot empty">生成后会在这里显示 16:9 片段参考图。</div>';
+    return "";
   }
   if (isActiveCanvasJob(job)) {
     const attempt = Number(job.attempt || 0);
@@ -1329,6 +1335,57 @@ function renderCanvasJobForShot(shotIndex) {
         <span>${escapeHtml(storyboardImageModelLabel(job))}</span>
         <span>${escapeHtml(formatDateTime(job.updated_at || job.created_at))}</span>
       </div>
+    </div>
+  `;
+}
+
+function isActiveStoryboardVideoJob(job = {}) {
+  return ["pending", "queued", "running", "inprogress", "submitted"].includes(String(job.status || "").toLowerCase());
+}
+
+function storyboardVideoJobForShot(shotIndex) {
+  return (state.storyboardVideoJobs || []).find((item) => {
+    return Number(item.shot_index ?? -1) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
+  });
+}
+
+function renderStoryboardVideoForShot(shotIndex) {
+  const job = storyboardVideoJobForShot(shotIndex);
+  if (!job) {
+    return '<div class="storyboard-video-slot empty">点击生成视频后，会在这里显示预览和导出入口。</div>';
+  }
+  const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
+  const meta = `${escapeHtml(job.model_id || "Nova Reel")} · ${escapeHtml(job.duration_seconds || 6)} 秒`;
+  if (isActiveStoryboardVideoJob(job)) {
+    return `
+      <div class="storyboard-video-slot loading">
+        <strong>视频生成中</strong>
+        <span>${meta}</span>
+      </div>
+    `;
+  }
+  if (String(job.status || "").toLowerCase() === "failed") {
+    return `
+      <div class="storyboard-video-slot error">
+        <strong>视频生成失败</strong>
+        ${failure}
+      </div>
+    `;
+  }
+  const preview = job.preview_url
+    ? `
+      <video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video>
+      <a class="download-link" href="${escapeAttr(job.preview_url)}" download target="_blank" rel="noreferrer">导出视频</a>
+    `
+    : '<div class="message">视频已完成，导出链接正在生成，请刷新状态。</div>';
+  return `
+    <div class="storyboard-video-slot ready">
+      <div class="storyboard-image-meta">
+        <span>${meta}</span>
+        <span>${escapeHtml(formatDateTime(job.updated_at || job.created_at))}</span>
+      </div>
+      ${failure}
+      ${preview}
     </div>
   `;
 }
@@ -1697,6 +1754,9 @@ async function loadStoryboardVideoJobs(scriptJobId) {
         : "等待片段";
     }
     renderStoryboardVideoJobs(state.storyboardVideoJobs);
+    if (state.currentResultJob && state.currentResultJob.id === scriptJobId) {
+      rerenderStoryboardCards();
+    }
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
   }
@@ -1747,6 +1807,30 @@ async function submitStoryboardVideoGeneration() {
   }
 }
 
+async function submitStoryboardShotVideo(shotIndex) {
+  const job = state.currentResultJob;
+  if (!job) return;
+  const shot = state.storyboardShots[shotIndex];
+  if (!shot) return;
+  setMessage("productImageMessage", `正在提交第 ${shotIndex + 1} 个分镜视频...`);
+  try {
+    await api("/api/storyboard-video/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        script_job_id: job.id,
+        variant_index: state.activeVariantIndex,
+        shot_index: shotIndex,
+        product_image_id: currentProductImageId(),
+      }),
+    });
+    setMessage("productImageMessage", "视频任务已提交，可在分镜卡片中查看状态。", "ok");
+    await loadStoryboardVideoJobs(job.id);
+  } catch (error) {
+    setMessage("productImageMessage", error.message, "error");
+  }
+}
+
 async function refreshStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
@@ -1761,6 +1845,22 @@ async function refreshStoryboardVideoGeneration() {
     setMessage("storyboardVideoMessage", "视频状态已刷新。", "ok");
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
+  }
+}
+
+async function refreshStoryboardShotVideo(shotIndex) {
+  const job = state.currentResultJob;
+  if (!job) return;
+  setMessage("productImageMessage", `正在刷新第 ${shotIndex + 1} 个分镜视频状态...`);
+  try {
+    await api(
+      `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}&shot_index=${shotIndex}`,
+      { method: "POST" }
+    );
+    await loadStoryboardVideoJobs(job.id);
+    setMessage("productImageMessage", "视频状态已刷新。", "ok");
+  } catch (error) {
+    setMessage("productImageMessage", error.message, "error");
   }
 }
 
@@ -1918,9 +2018,9 @@ $("productImagePreviewWrap").addEventListener("click", (event) => {
   renderMediaPanel();
   rerenderStoryboardCards();
 });
-$("generateAllStoryboards").addEventListener("click", generateAllStoryboards);
-$("submitStoryboardVideo").addEventListener("click", submitStoryboardVideoGeneration);
-$("refreshStoryboardVideo").addEventListener("click", refreshStoryboardVideoGeneration);
+if ($("generateAllStoryboards")) $("generateAllStoryboards").addEventListener("click", generateAllStoryboards);
+if ($("submitStoryboardVideo")) $("submitStoryboardVideo").addEventListener("click", submitStoryboardVideoGeneration);
+if ($("refreshStoryboardVideo")) $("refreshStoryboardVideo").addEventListener("click", refreshStoryboardVideoGeneration);
 $("resultTabs").addEventListener("click", async (event) => {
   const tab = event.target.closest(".result-tab");
   if (!tab || !state.renderedJobId) return;
@@ -1931,6 +2031,16 @@ $("storyboardCards").addEventListener("click", (event) => {
   const image = event.target.closest("[data-storyboard-preview]");
   if (image) {
     openStoryboardImagePreview(image);
+    return;
+  }
+  const videoButton = event.target.closest(".storyboard-video-generate");
+  if (videoButton) {
+    submitStoryboardShotVideo(Number(videoButton.dataset.shotIndex || 0));
+    return;
+  }
+  const refreshButton = event.target.closest(".storyboard-video-refresh");
+  if (refreshButton) {
+    refreshStoryboardShotVideo(Number(refreshButton.dataset.shotIndex || 0));
     return;
   }
   const button = event.target.closest(".storyboard-generate");

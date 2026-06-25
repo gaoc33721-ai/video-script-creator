@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260625-video-type-single" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260625-storyboard-video" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -93,12 +93,12 @@
         <section id="storyboardSection" class="storyboard-section">
           <div class="storyboard-head">
             <div>
-              <h3>产品动图片段与成片</h3>
-              <p>系统会按脚本分段拆出镜头卡片，以上传产品图和分段脚本为依据生成产品动图片段，并通过智能转场剪辑串联为整段视频。</p>
+              <h3>分镜视频生成</h3>
+              <p>系统会按脚本拆出分镜卡片，可在每张分镜上直接生成视频，并在生成完成后导出。</p>
             </div>
           </div>
           <section id="mediaPanel" class="media-panel">
-            <div class="media-grid">
+            <div class="media-grid media-grid-single">
               <div class="product-image-tool">
                 <div class="tool-head">
                   <h3>产品图</h3>
@@ -113,19 +113,6 @@
                 </div>
                 <div id="productImageMessage" class="message"></div>
               </div>
-              <div class="media-actions-tool">
-                <div class="tool-head">
-                  <h3>片段与成片</h3>
-                  <span id="storyboardVideoCost"></span>
-                </div>
-                <div class="media-actions-row">
-                  <button id="generateAllStoryboards" type="button">预生成片段参考图</button>
-                  <button id="submitStoryboardVideo" type="button">生成产品动图片段并成片</button>
-                  <button id="refreshStoryboardVideo" type="button" class="secondary">刷新成片状态</button>
-                </div>
-                <div id="storyboardVideoMessage" class="message"></div>
-                <div id="storyboardVideoJobs" class="video-jobs"></div>
-              </div>
             </div>
           </section>
           <div id="storyboardCards" class="storyboard-cards"></div>
@@ -139,6 +126,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260625-video-type-single"></script>
+    <script src="/static/app.js?v=20260625-storyboard-video"></script>
   </body>
 </html>

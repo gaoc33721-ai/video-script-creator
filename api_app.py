@@ -493,6 +493,7 @@ class StoryboardVideoSubmitRequest(BaseModel):
     script_job_id: str
     variant_index: int = Field(default=0, ge=0)
     product_image_id: str = ""
+    shot_index: int = Field(default=-1, ge=-1)
 
 
 class RainforestDiscoverRequest(BaseModel):
@@ -4151,6 +4152,37 @@ def _build_storyboard_manual_shots(script_job: dict, variant_index: int, product
     return shots, rounded_duration, product_asset
 
 
+def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_index: int, product_image_id: str = "") -> tuple[list[dict], int, dict | None]:
+    variants = script_job.get("variants") or []
+    if variant_index >= len(variants):
+        raise HTTPException(status_code=400, detail="Script variant not found.")
+    request_payload = script_job.get("request") or {}
+    variant = variants[variant_index]
+    rows = _storyboard_rows_from_variant(variant.get("content", ""))
+    if not rows:
+        raise HTTPException(status_code=400, detail="当前方案未解析到分镜脚本表格，无法生成分镜视频。")
+    if shot_index < 0 or shot_index >= len(rows):
+        raise HTTPException(status_code=400, detail="分镜不存在，请刷新脚本结果后重试。")
+
+    row = rows[shot_index]
+    product_asset = _product_image_by_id(product_image_id, script_job_id=script_job.get("id", ""))
+    fallback_image_key = (product_asset or {}).get("normalized_key", "")
+    image_key = _latest_canvas_image_key_by_shot(script_job.get("id", ""), variant_index).get(shot_index) or fallback_image_key
+    shot = {
+        "text": _compose_manual_shot_prompt(
+            [row],
+            request_payload.get("category", ""),
+            request_payload.get("model", ""),
+            0,
+            1,
+        )
+    }
+    if image_key:
+        shot["image"] = _image_payload_from_storage_key(image_key)
+        shot["source_image_key"] = image_key
+    return [shot], 6, product_asset
+
+
 def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
     output_s3_uri = _nova_reel_job_output_uri(category, model)
     if not output_s3_uri:
@@ -5906,12 +5938,14 @@ def nova_reel_jobs(script_job_id: str = ""):
 
 
 @app.get("/api/storyboard-video/jobs", dependencies=[Depends(_verify_access)])
-def storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1):
+def storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1, shot_index: int = -1):
     jobs = _load_storyboard_video_jobs()
     if script_job_id:
         jobs = [item for item in jobs if item.get("script_job_id") == script_job_id]
     if variant_index >= 0:
         jobs = [item for item in jobs if int(item.get("variant_index", -1)) == int(variant_index)]
+    if shot_index >= 0:
+        jobs = [item for item in jobs if int(item.get("shot_index", -1)) == int(shot_index)]
     return {
         "jobs": [_public_nova_reel_job(item) for item in jobs[:30]],
         "model_id": NOVA_REEL_MODEL_ID,
@@ -6186,11 +6220,19 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
 
     request_payload = script_job.get("request") or {}
     variant = variants[req.variant_index]
-    manual_shots, duration_seconds, product_asset = _build_storyboard_manual_shots(
-        script_job,
-        req.variant_index,
-        product_image_id=req.product_image_id,
-    )
+    if req.shot_index >= 0:
+        manual_shots, duration_seconds, product_asset = _build_storyboard_single_shot(
+            script_job,
+            req.variant_index,
+            req.shot_index,
+            product_image_id=req.product_image_id,
+        )
+    else:
+        manual_shots, duration_seconds, product_asset = _build_storyboard_manual_shots(
+            script_job,
+            req.variant_index,
+            product_image_id=req.product_image_id,
+        )
     try:
         invocation_arn, output_s3_uri = _start_storyboard_video_job(
             request_payload.get("category", ""),
@@ -6212,6 +6254,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "variant_index": req.variant_index,
         "variant_name": variant.get("name", f"方案{req.variant_index + 1}"),
         "variant_label": variant.get("label", ""),
+        "shot_index": req.shot_index,
         "product_image_id": (product_asset or {}).get("id", ""),
         "duration_seconds": duration_seconds,
         "shot_count": len(manual_shots),
@@ -6238,13 +6281,15 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
 
 
 @app.post("/api/storyboard-video/refresh", dependencies=[Depends(_verify_access)])
-def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1):
+def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1, shot_index: int = -1):
     jobs = _load_storyboard_video_jobs()
     changed = False
     for item in jobs:
         if script_job_id and item.get("script_job_id") != script_job_id:
             continue
         if variant_index >= 0 and int(item.get("variant_index", -1)) != int(variant_index):
+            continue
+        if shot_index >= 0 and int(item.get("shot_index", -1)) != int(shot_index):
             continue
         if item.get("status") in {"Completed", "Failed"}:
             continue
@@ -6276,6 +6321,7 @@ def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = 
         for item in jobs
         if (not script_job_id or item.get("script_job_id") == script_job_id)
         and (variant_index < 0 or int(item.get("variant_index", -1)) == int(variant_index))
+        and (shot_index < 0 or int(item.get("shot_index", -1)) == int(shot_index))
     ]
     return {"jobs": [_public_nova_reel_job(item) for item in filtered[:30]]}
 
