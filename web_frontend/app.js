@@ -782,11 +782,10 @@ async function loadJobs() {
     const data = await api("/api/jobs");
     const jobs = data.jobs || [];
     if (!jobs.length) {
-      $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>暂无任务</strong><span>提交脚本后会显示最近三条。</span></div>';
+      $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>暂无任务</strong><span>提交脚本后会显示在这里。</span></div>';
       return;
     }
-    const visible = jobs.slice(0, 3);
-    $("jobs").innerHTML = visible.map(renderJob).join("");
+    $("jobs").innerHTML = jobs.map(renderJob).join("");
     await revealCompletedResult(jobs);
   } catch (error) {
     $("jobs").innerHTML = `<div class="empty-state"><strong>任务加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
@@ -794,11 +793,17 @@ async function loadJobs() {
 }
 
 function renderJob(job) {
+  const request = job.request || {};
+  const model = request.model || "未命名产品";
+  const category = request.category || "";
+  const title = category ? `${model} · ${category}` : model;
   const variants =
     job.status === "succeeded"
-      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button><button class="download-job download-link" type="button" data-job-id="${escapeAttr(job.id)}">下载 Excel</button>`
+      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button>`
       : "";
   const error = job.error_message ? `<div class="message error">${escapeHtml(job.error_message)}</div>` : "";
+  const step = job.status === "succeeded" ? "" : job.current_step || "";
+  const stepHtml = step ? `<div class="message">${escapeHtml(step)}</div>` : "";
   const finishedAt =
     job.status === "succeeded" || job.status === "failed"
       ? `<div class="job-time">完成时间：${escapeHtml(formatDateTime(job.completed_at || job.updated_at))}</div>`
@@ -806,11 +811,10 @@ function renderJob(job) {
   return `
     <article class="job">
       <div class="job-head">
-        <span>${escapeHtml((job.request || {}).model || "未命名产品")}</span>
-        <span>${escapeHtml(job.status)} ${Number(job.progress || 0)}%</span>
+        <span>${escapeHtml(title)}</span>
       </div>
       <div class="progress"><div style="width:${Number(job.progress || 0)}%"></div></div>
-      <div class="message">${escapeHtml(job.current_step || "")}</div>
+      ${stepHtml}
       ${finishedAt}
       ${error}
       ${variants}
@@ -1874,15 +1878,6 @@ $("generateForm").addEventListener("submit", submitGeneration);
 if ($("uploadInput")) $("uploadInput").addEventListener("change", uploadFile);
 $("refreshJobs").addEventListener("click", loadJobs);
 $("jobs").addEventListener("click", async (event) => {
-  const downloadButton = event.target.closest(".download-job");
-  if (downloadButton) {
-    try {
-      await downloadJob(downloadButton.dataset.jobId);
-    } catch (error) {
-      setMessage("formMessage", error.message, "error");
-    }
-    return;
-  }
   const button = event.target.closest(".load-result");
   if (!button) return;
   const job = await api(`/api/jobs/${encodeURIComponent(button.dataset.jobId)}`);
