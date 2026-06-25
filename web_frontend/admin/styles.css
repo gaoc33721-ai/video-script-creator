@@ -379,7 +379,7 @@ button,
 .check-list {
   display: grid;
   gap: 8px;
-  max-height: 192px;
+  max-height: 356px;
   overflow-y: auto;
   padding: 10px;
   border: 1px solid var(--border);
