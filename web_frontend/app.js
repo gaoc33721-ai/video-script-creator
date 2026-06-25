@@ -11,7 +11,7 @@ const state = {
   featuresRequestId: 0,
   selectedFeatures: [],
   videoTypes: ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
-  selectedVideoTypes: ["问题解决/痛点挖掘型", "场景化/生活方式型"],
+  selectedVideoTypes: ["问题解决/痛点挖掘型"],
   activeJobId: "",
   renderedJobId: "",
   activeVariantIndex: 0,
@@ -1871,7 +1871,7 @@ $("featurePicker").addEventListener("click", (event) => {
 $("videoTypePicker").addEventListener("click", (event) => {
   const item = event.target.closest(".check-item");
   if (!item) return;
-  state.selectedVideoTypes = toggleValue(state.selectedVideoTypes, item.dataset.value);
+  state.selectedVideoTypes = [item.dataset.value];
   renderVideoTypePicker();
 });
 $("generateForm").addEventListener("submit", submitGeneration);
