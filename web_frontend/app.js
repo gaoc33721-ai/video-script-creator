@@ -1,3 +1,5 @@
+const DEFAULT_FEATURE_COUNT = 6;
+
 const state = {
   authEnabled: true,
   authToken: "",
@@ -301,7 +303,7 @@ async function loadFeatures() {
   const data = await api(`/api/features?category=${encodeURIComponent(category)}&model=${encodeURIComponent(model)}`);
   if (requestId !== state.featuresRequestId) return;
   state.features = data.features;
-  state.selectedFeatures = data.features.slice(0, 3);
+  state.selectedFeatures = data.features.slice(0, DEFAULT_FEATURE_COUNT);
   renderFeaturePicker();
   updateSelectionSummary();
 }
@@ -753,7 +755,7 @@ function updateSelectionSummary() {
     <div><span>品类</span><strong>${escapeHtml(category)}</strong></div>
     <div><span>型号</span><strong>${escapeHtml(model)}</strong></div>
     <div><span>已选卖点</span><strong>${features.length}</strong></div>
-    <ul>${features.slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>暂无卖点</li>"}</ul>
+    <ul>${features.slice(0, DEFAULT_FEATURE_COUNT).map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>暂无卖点</li>"}</ul>
   `;
 }
 
