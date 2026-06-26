@@ -2220,6 +2220,103 @@ def _row_text(row) -> str:
     return " ".join(str(value or "") for value in values)
 
 
+def _ordered_stage_issue(text: str, stage_groups: list[list[str]], direction: str) -> str:
+    positions = []
+    missing = []
+    lower = str(text or "").lower()
+    for group in stage_groups:
+        found = []
+        for term in group:
+            term_text = str(term or "")
+            if not term_text:
+                continue
+            idx = lower.find(term_text.lower())
+            if idx >= 0:
+                found.append(idx)
+        if found:
+            positions.append(min(found))
+        else:
+            missing.append(group[0])
+            positions.append(None)
+    if missing:
+        return f"已选择“{direction}”，但缺少固定结构阶段证据：{', '.join(missing)}。"
+    ordered = [pos for pos in positions if pos is not None]
+    if ordered != sorted(ordered):
+        return f"已选择“{direction}”，但脚本阶段顺序与固定公式不一致，需要按业务公式重新组织。"
+    return ""
+
+
+def _script_formula_issues(body: pd.DataFrame, direction: str) -> list[str]:
+    if body.empty or not direction:
+        return []
+    text = "\n".join(_row_text(row) for _, row in body.iterrows())
+    first_rows = " ".join(_row_text(row) for _, row in body.head(2).iterrows())
+    issues = []
+    if direction == "问题解决/痛点挖掘型":
+        stage_issue = _ordered_stage_issue(
+            text,
+            [
+                ["痛点", "烦恼", "困扰", "麻烦", "崩溃", "为什么"],
+                ["浪费", "低效", "麻烦放大", "尴尬", "不稳定", "反复"],
+                ["发现", "换成", "试试", "这个时候", "产品切入", "解决方案"],
+                ["因为", "卖点", "功能", "解决", "改善", "省事"],
+                ["CTA", "可以试试", "值得参考", "建议", "别再"],
+            ],
+            direction,
+        )
+        if stage_issue:
+            issues.append(stage_issue)
+        if not _content_contains_any(first_rows, ["痛点", "烦恼", "困扰", "麻烦", "崩溃", "why", "problem"]):
+            issues.append("问题解决/痛点挖掘型必须开头即痛点，前两镜不能先讲产品参数或品牌。")
+    elif direction == "产品展示/功能介绍型":
+        stage_issue = _ordered_stage_issue(
+            text,
+            [
+                ["亮相", "全貌", "这是一", "产品", "定位", "适合"],
+                ["功能", "操作", "使用", "按下", "放入", "打开"],
+                ["补充", "第二", "另一个", "同时", "还可以"],
+                ["结果", "省时", "方便", "稳定", "适合", "价值"],
+                ["CTA", "参考", "适合", "了解", "想看"],
+            ],
+            direction,
+        )
+        if stage_issue:
+            issues.append(stage_issue)
+    elif direction == "场景化/生活方式型":
+        stage_issue = _ordered_stage_issue(
+            text,
+            [
+                ["清晨", "下班", "周末", "厨房", "场景", "家中", "生活"],
+                ["忙碌", "放松", "效率", "从容", "状态", "整理", "准备"],
+                ["顺手", "自然", "拿起", "打开", "放入", "产品进入", "融入"],
+                ["变化", "更轻松", "更省心", "更舒服", "更有秩序", "结果"],
+                ["情绪", "日常", "生活", "从容", "舒服", "收束"],
+            ],
+            direction,
+        )
+        if stage_issue:
+            issues.append(stage_issue)
+        if not _content_contains_any(first_rows, ["清晨", "下班", "周末", "厨房", "家中", "生活", "场景"]):
+            issues.append("场景化/生活方式型必须先建立生活场景，不能开头直接念功能。")
+    elif direction == "测评/对比型":
+        stage_issue = _ordered_stage_issue(
+            text,
+            [
+                ["对比", "vs", "VS", "旧款", "新款", "普通", "升级"],
+                ["维度", "外观", "操作", "效果", "噪音", "成本"],
+                ["测试", "同条件", "同机位", "逐项", "实测"],
+                ["结果", "总结", "差异", "更适合", "明显"],
+                ["建议", "如果你", "更看重", "选择", "风险"],
+            ],
+            direction,
+        )
+        if stage_issue:
+            issues.append(stage_issue)
+        if not _content_contains_any(text, ["维度", "同条件", "同机位", "测试", "对比"]):
+            issues.append("测评/对比型必须有对比对象、对比维度和同条件测试逻辑，不能直接下结论。")
+    return issues[:3]
+
+
 def _script_quality_issues(content: str, req: GenerateRequest, features: list[dict], script_direction: str = "") -> list[str]:
     issues = []
     table_lines, _ = _extract_first_md_table(content)
@@ -2369,6 +2466,8 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
             issues.append("微波炉前两镜没有建立微波炉使用任务或食物加热场景。")
 
     direction = script_direction or (_selected_script_directions(req)[0] if len(_selected_script_directions(req)) == 1 else "")
+    if direction and not body.empty:
+        issues.extend(_script_formula_issues(body, direction))
     if direction == "开箱体验型" and not body.empty:
         openbox_terms = [
             "开箱",
@@ -2535,6 +2634,64 @@ SCRIPT_DIRECTION_ALIASES = {
     "测评对比": "测评/对比型",
 }
 
+SCRIPT_DIRECTION_FORMULAS = {
+    "问题解决/痛点挖掘型": {
+        "formula": "痛点出现 → 麻烦放大 → 产品切入 → 对应卖点 → CTA",
+        "stages": ["痛点抛出", "问题放大", "解决方案引入", "卖点证明", "结尾行动引导"],
+        "must": [
+            "开头先让用户意识到“这就是我正在遇到的问题”，不要先讲参数或品牌。",
+            "痛点必须具体到真实场景、具体麻烦或具体损失，避免“体验不好/不方便”这类空话。",
+            "一个痛点对应一个解决逻辑，一个卖点对应一个结果逻辑；只讲最相关的 1-2 个卖点。",
+            "从痛点到产品必须有自然过渡，例如发现、替代方案、顺手换用，不得硬切广告。",
+        ],
+        "output": ["核心痛点", "痛点场景", "产品切入句", "对应卖点", "结尾 CTA"],
+    },
+    "产品展示/功能介绍型": {
+        "formula": "产品亮相 → 功能演示 → 补充功能 → 使用结果 → CTA",
+        "stages": ["产品亮相", "核心功能点1", "核心功能点2/3", "使用结果/价值总结", "结尾 CTA"],
+        "must": [
+            "第一段先让用户看懂这是什么产品、适合什么用途，不要先制造无关冲突。",
+            "1 条视频只讲 1-3 个核心功能；每个功能必须有功能名称、使用动作和结果画面。",
+            "功能点必须能被镜头证明，不能只用旁白说“很好/很方便”。",
+            "结尾回答“所以它对我有什么用”，用适合人群或使用结果收束。",
+        ],
+        "output": ["产品一句话定位", "3 个以内功能点", "每个功能的画面证明", "使用结果总结", "结尾引导语"],
+    },
+    "开箱体验型": {
+        "formula": "包装亮相 → 拆箱 → 配件 → 第一印象 → 初体验 → 总结",
+        "stages": ["收到/展示包装", "拆箱动作", "配件/内容物展示", "第一印象", "快速上手体验", "总结感受"],
+        "must": [
+            "核心不是完整讲透产品，而是带用户一起经历第一次打开、接触和上手。",
+            "必须保留包装、拆箱、取出、揭膜、配件/内容物或说明书等开箱痕迹。",
+            "第一印象要写质感、大小、颜色、细节或手感，不要直接跳到完整功能测评。",
+            "初体验只试一个第一时间最想试的核心动作，结尾给自然体验判断，弱推销。",
+        ],
+        "output": ["包装亮点", "配件重点", "第一印象句式", "初体验动作", "结尾体验判断"],
+    },
+    "场景化/生活方式型": {
+        "formula": "生活场景 → 人物状态 → 产品融入 → 变化发生 → 情绪收束",
+        "stages": ["场景建立", "人物状态/生活问题", "产品自然进入", "变化/感受", "情绪收束"],
+        "must": [
+            "重点是把产品放进真实生活，而不是像说明书一样讲功能。",
+            "先建立时间、地点、生活状态；人物只能服务场景，产品和被处理物品仍是主视觉。",
+            "产品出现必须自然，例如顺手拿起、日常使用、融入动作流，不得硬切广告。",
+            "中后段写生活变化和感受，结尾用情绪表达或弱 CTA 收束。",
+        ],
+        "output": ["场景名称", "人物身份/生活状态", "使用契机", "产品出现动作", "变化描述", "情绪收束句"],
+    },
+    "测评/对比型": {
+        "formula": "对比对象 → 对比维度 → 逐项测试 → 结果总结 → 决策建议",
+        "stages": ["对比对象说明", "维度列出", "逐项展示", "结果总结", "决策建议"],
+        "must": [
+            "先讲清谁和谁比、为什么比、对比场景是什么。",
+            "必须先列维度再测试，不能没有标准就直接下结论。",
+            "每个维度尽量同条件、同场景、同机位、同逻辑；没有证据时不要写绝对胜出。",
+            "结尾给条件化建议，例如更看重某点选 A，预算有限或日常效率需求不同则给不同建议。",
+        ],
+        "output": ["对比对象", "对比维度", "每项维度描述", "结果差异总结", "适合人群建议", "风险提示"],
+    },
+}
+
 
 def _normalize_script_direction(value: str) -> str:
     raw = str(value or "").strip()
@@ -2565,20 +2722,48 @@ def _script_direction_for_variant(req: GenerateRequest, variant_index: int) -> s
     return directions[variant_index % len(directions)]
 
 
+def _script_formula_guidance(direction: str) -> str:
+    formula = SCRIPT_DIRECTION_FORMULAS.get(direction)
+    if not formula:
+        return ""
+    stages = " → ".join(formula["stages"])
+    must = "\n".join(f"- {item}" for item in formula["must"])
+    output = "、".join(formula["output"])
+    return f"""
+脚本公式 Skill（平台内置，必须执行）：
+- 视频类型：{direction}
+- 固定结构公式：{formula["formula"]}
+- 分段顺序：{stages}
+- 正文镜头必须按上述顺序推进；可根据总时长把相邻阶段合并到同一镜头，但不得倒序、跳过核心阶段或改成其他视频类型。
+- 每段都要回答：这条视频到底在讲什么、为什么现在要讲、用户看完应记住什么。
+- 本类型必备信息：{output}
+{must}
+
+通用生成规则：
+- 真实性：只基于商品信息、核心卖点、目标市场、平台和已给场景生成，不得编造功能、参数、用户评价、销量、认证、实验数据或绝对化结果。
+- 逻辑一致性：开头提出的问题/场景/卖点，后文必须回应；段落之间必须有自然过渡，禁止开头讲 A、中段跳 B、结尾落 C。
+- 真人感：语言自然、有具体动作和场景细节，避免报告腔、模板腔、空泛夸赞；可有轻度主观体验感，但不得伪造明确个人经历。
+- 创意边界：创意只能体现在开头钩子、镜头组织、卖点表达和语言风格，不得偏离给定卖点、目标市场和产品真实用途。
+""".strip()
+
+
 def _direction_specific_guidance(direction: str) -> str:
+    formula_guidance = _script_formula_guidance(direction)
     if direction == "开箱体验型":
-        return """
+        specific = """
 脚本方向执行要求（开箱体验型）：
 - 本方案必须围绕“开箱体验”展开：外包装/拆箱动作/配件或内胆初见/摆放安装/首次使用/初次效果反馈形成完整链路。
 - 每个主要镜头都要有开箱或首次上手痕迹，例如包装封条、手部拆箱、取出产品、揭膜、检查细节、摆上台面、第一次放入食材或物品。
 - 不得把整体结构写成痛点转化、场景化种草或单纯功能罗列；可以出现使用前期待和初次体验反馈，但必须服务开箱主线。
 - 方案定位、方案标签、建议视频类型如需出现，只能逐字使用“开箱体验型”，不得改写为“偏痛点转化”“痛点转化”“场景化种草”“功能展示”等自造名称。
 """.strip()
-    return f"""
+        return f"{formula_guidance}\n\n{specific}".strip()
+    specific = f"""
 脚本方向执行要求：
 - 本方案必须且只能执行“{direction}”，不得切换为其他脚本方向。
 - 方案定位、方案标签、建议视频类型如需出现，只能逐字使用“{direction}”，不得改写为“偏痛点转化”“痛点转化”“场景化种草”“功能展示”等自造名称。
 """.strip()
+    return f"{formula_guidance}\n\n{specific}".strip()
 
 
 def _assets_by_ids(asset_ids: list[str]) -> list[dict]:
