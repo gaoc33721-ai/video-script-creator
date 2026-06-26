@@ -23,7 +23,7 @@ def main() -> int:
         return fail("boto3/botocore is not installed. Run `pip install -r requirements.txt`.")
 
     region = os.getenv("BEDROCK_AWS_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
-    model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-fable-5")
+    model_id = os.getenv("BEDROCK_MODEL_ID", "qwen.qwen3-235b-a22b-2507-v1:0")
     bucket = os.getenv("S3_BUCKET") or os.getenv("APP_S3_BUCKET")
 
     try:

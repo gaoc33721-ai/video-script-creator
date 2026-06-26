@@ -28,8 +28,8 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
       BEDROCK_AWS_REGION: ${{ vars.BEDROCK_AWS_REGION || 'eu-central-1' }}
-      BEDROCK_MODEL_ID: anthropic.claude-fable-5
-      BEDROCK_MODEL_FALLBACK_IDS: anthropic.claude-opus-4-8,eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+      BEDROCK_MODEL_ID: qwen.qwen3-235b-a22b-2507-v1:0
+      BEDROCK_MODEL_FALLBACK_IDS: openai.gpt-oss-120b-1:0,nvidia.nemotron-super-3-120b,mistral.devstral-2-123b,eu.amazon.nova-pro-v1:0
       BEDROCK_MAX_TOKENS: '16384'
       BEDROCK_FALLBACK_MAX_TOKENS: '8192'
       STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 's3' }}

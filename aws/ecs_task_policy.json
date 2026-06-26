@@ -13,9 +13,10 @@
       ],
       "Resource": [
         "arn:aws:bedrock:*::foundation-model/eu.amazon.nova-pro-v1:0",
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-fable-5",
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-8",
-        "arn:aws:bedrock:*::foundation-model/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:*::foundation-model/qwen.qwen3-235b-a22b-2507-v1:0",
+        "arn:aws:bedrock:*::foundation-model/openai.gpt-oss-120b-1:0",
+        "arn:aws:bedrock:*::foundation-model/nvidia.nemotron-super-3-120b",
+        "arn:aws:bedrock:*::foundation-model/mistral.devstral-2-123b",
         "arn:aws:bedrock:*::foundation-model/amazon.nova-reel-v1:1",
         "arn:aws:bedrock:*::foundation-model/amazon.nova-canvas-v1:0",
         "arn:aws:bedrock:*::foundation-model/amazon.titan-image-generator-v2:0",
@@ -23,9 +24,10 @@
         "arn:aws:bedrock:*::foundation-model/stability.stable-image-ultra-v1:1",
         "arn:aws:bedrock:*::foundation-model/stability.sd3-5-large-v1:0",
         "arn:aws:bedrock:*:*:inference-profile/eu.amazon.nova-pro-v1:0",
-        "arn:aws:bedrock:*:*:inference-profile/anthropic.claude-fable-5",
-        "arn:aws:bedrock:*:*:inference-profile/anthropic.claude-opus-4-8",
-        "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        "arn:aws:bedrock:*:*:inference-profile/qwen.qwen3-235b-a22b-2507-v1:0",
+        "arn:aws:bedrock:*:*:inference-profile/openai.gpt-oss-120b-1:0",
+        "arn:aws:bedrock:*:*:inference-profile/nvidia.nemotron-super-3-120b",
+        "arn:aws:bedrock:*:*:inference-profile/mistral.devstral-2-123b"
       ]
     },
     {

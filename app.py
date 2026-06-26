@@ -43,12 +43,12 @@ BEDROCK_AWS_REGION = (
     or os.getenv("AWS_DEFAULT_REGION")
     or "us-east-1"
 )
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-fable-5")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "qwen.qwen3-235b-a22b-2507-v1:0")
 BEDROCK_MODEL_FALLBACK_IDS = [
     model_id.strip()
     for model_id in os.getenv(
         "BEDROCK_MODEL_FALLBACK_IDS",
-        "anthropic.claude-opus-4-8,eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "openai.gpt-oss-120b-1:0,nvidia.nemotron-super-3-120b,mistral.devstral-2-123b,eu.amazon.nova-pro-v1:0",
     ).split(",")
     if model_id.strip() and model_id.strip() != BEDROCK_MODEL_ID
 ]
