@@ -821,6 +821,36 @@ button,
   white-space: nowrap;
 }
 
+.product-image-thumb-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.product-image-thumb span.product-image-thumb-actions {
+  overflow: visible;
+}
+
+.product-image-thumb-actions span {
+  min-width: 0;
+}
+
+.product-image-delete {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #c81e1e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.product-image-delete:hover,
+.product-image-delete:focus-visible {
+  background: rgba(200, 30, 30, 0.1);
+  outline: none;
+}
+
 .media-actions-row {
   display: flex;
   flex-wrap: wrap;

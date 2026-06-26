@@ -5473,6 +5473,23 @@ def product_images(script_job_id: str = "", variant_index: int = -1):
     return {"assets": [_public_product_image_asset(item) for item in assets[:30]]}
 
 
+@app.delete("/api/product-images/{image_id}", dependencies=[Depends(_verify_access)])
+def delete_product_image(image_id: str):
+    deleted = None
+    with job_lock:
+        assets = _load_product_image_assets()
+        remaining = []
+        for item in assets:
+            if str(item.get("id") or "") == str(image_id):
+                deleted = item
+            else:
+                remaining.append(item)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Product image not found.")
+        _save_product_image_assets(remaining)
+    return {"ok": True, "deleted_id": image_id}
+
+
 @app.get("/api/product-images/{image_id}", dependencies=[Depends(_verify_access)])
 def product_image_preview(image_id: str):
     asset = _product_image_by_id(image_id)

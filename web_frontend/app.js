@@ -964,6 +964,10 @@ function renderProductImageGallery(assets, selectedAsset) {
             <button class="product-image-thumb ${active ? "active" : ""}" type="button" data-product-image-id="${escapeAttr(asset.id)}" title="${escapeAttr(asset.filename || "产品图")}">
               ${asset.preview_url ? `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(asset.preview_url)}">图片正在加载。</div>` : "<span>无预览</span>"}
               <span>${escapeHtml(asset.filename || "产品图")}</span>
+              <span class="product-image-thumb-actions">
+                <span>${active ? "当前绑定" : "点击绑定"}</span>
+                <span class="product-image-delete" role="button" tabindex="0" data-delete-product-image-id="${escapeAttr(asset.id)}" aria-label="删除产品图">删除</span>
+              </span>
             </button>
           `;
         })
@@ -1020,6 +1024,30 @@ async function uploadProductImage(event) {
     setMessage("productImageMessage", error.message, "error");
   } finally {
     event.target.value = "";
+  }
+}
+
+async function deleteProductImage(imageId) {
+  if (!imageId || !state.currentResultJob) return;
+  const asset = (state.productImageAssets || []).find((item) => item.id === imageId);
+  if (!window.confirm(`确认删除产品图“${asset?.filename || "产品图"}”？删除后不会再用于当前方案的视频片段生成。`)) return;
+  setMessage("productImageMessage", "正在删除产品图...");
+  try {
+    await api(`/api/product-images/${encodeURIComponent(imageId)}`, { method: "DELETE" });
+    state.productImageAssets = (state.productImageAssets || []).filter((item) => item.id !== imageId);
+    if (state.selectedProductImageId === imageId) {
+      state.selectedProductImageId = state.productImageAssets[0]?.id || "";
+    }
+    state.productImageAsset = currentProductImageAsset();
+    renderMediaPanel();
+    rerenderStoryboardCards();
+    setMessage(
+      "productImageMessage",
+      state.productImageAssets.length ? "产品图已删除，已切换到剩余产品图。" : "产品图已删除，当前方案未绑定产品图。",
+      "ok"
+    );
+  } catch (error) {
+    setMessage("productImageMessage", error.message, "error");
   }
 }
 
@@ -2009,6 +2037,13 @@ $("toggleMediaPanel").addEventListener("click", () => {
 });
 $("productImageInput").addEventListener("change", uploadProductImage);
 $("productImagePreviewWrap").addEventListener("click", (event) => {
+  const deleteButton = event.target.closest("[data-delete-product-image-id]");
+  if (deleteButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    deleteProductImage(deleteButton.dataset.deleteProductImageId || "");
+    return;
+  }
   const image = event.target.closest("[data-storyboard-preview]");
   if (image) {
     const button = image.closest(".product-image-thumb");
@@ -2027,6 +2062,14 @@ $("productImagePreviewWrap").addEventListener("click", (event) => {
   state.productImageAsset = currentProductImageAsset();
   renderMediaPanel();
   rerenderStoryboardCards();
+});
+$("productImagePreviewWrap").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const deleteButton = event.target.closest("[data-delete-product-image-id]");
+  if (!deleteButton) return;
+  event.preventDefault();
+  event.stopPropagation();
+  deleteProductImage(deleteButton.dataset.deleteProductImageId || "");
 });
 if ($("generateAllStoryboards")) $("generateAllStoryboards").addEventListener("click", generateAllStoryboards);
 if ($("submitStoryboardVideo")) $("submitStoryboardVideo").addEventListener("click", submitStoryboardVideoGeneration);
