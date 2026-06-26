@@ -43,14 +43,17 @@ BEDROCK_AWS_REGION = (
     or os.getenv("AWS_DEFAULT_REGION")
     or "us-east-1"
 )
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-fable-5")
 BEDROCK_MODEL_FALLBACK_IDS = [
     model_id.strip()
-    for model_id in os.getenv("BEDROCK_MODEL_FALLBACK_IDS", "eu.amazon.nova-pro-v1:0").split(",")
+    for model_id in os.getenv(
+        "BEDROCK_MODEL_FALLBACK_IDS",
+        "anthropic.claude-opus-4-8,eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    ).split(",")
     if model_id.strip() and model_id.strip() != BEDROCK_MODEL_ID
 ]
-BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "8192"))
-BEDROCK_FALLBACK_MAX_TOKENS = int(os.getenv("BEDROCK_FALLBACK_MAX_TOKENS", "4096"))
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "16384"))
+BEDROCK_FALLBACK_MAX_TOKENS = int(os.getenv("BEDROCK_FALLBACK_MAX_TOKENS", "8192"))
 NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")

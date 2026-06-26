@@ -68,8 +68,8 @@ flowchart LR
 - 运行时数据统一写入 `APP_DATA_DIR`。
 - Bedrock 区域、模型和输出 token 上限可通过环境变量配置。
 - 存储适配层支持本地/S3 切换；产品卖点支持本地缓存/RDS PostgreSQL 切换。
-- 默认脚本生成模型：`eu.anthropic.claude-sonnet-4-5-20250929-v1:0`，fallback 为 `eu.amazon.nova-pro-v1:0`。
-  - 适合原因：Claude Sonnet 4.5 更适合多约束创意脚本、场景化分镜和中英混排表格；Nova Pro 作为已验证回退模型保障可用性。
+- 默认脚本生成模型：`anthropic.claude-fable-5`，fallback 为 `anthropic.claude-opus-4-8,eu.anthropic.claude-sonnet-4-5-20250929-v1:0`。
+  - 适合原因：Claude Fable 5 作为最高能力脚本主模型，优先承担多约束创意脚本、场景化分镜、中英混排表格和业务逻辑校验；Opus/Sonnet 作为高能力回退模型保障可用性，避免降级到弱创意模型。
   - 如果账号或区域未开通该 inference profile，直接通过 `BEDROCK_MODEL_ID` 或 `BEDROCK_MODEL_FALLBACK_IDS` 切到已授权的 profile 或模型。
 - 本地验证 Streamlit 可在容器中启动。
 

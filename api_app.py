@@ -144,14 +144,17 @@ BEDROCK_AWS_REGION = (
     or os.getenv("AWS_DEFAULT_REGION")
     or "us-east-1"
 )
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-fable-5")
 BEDROCK_MODEL_FALLBACK_IDS = [
     model_id.strip()
-    for model_id in os.getenv("BEDROCK_MODEL_FALLBACK_IDS", "eu.amazon.nova-pro-v1:0").split(",")
+    for model_id in os.getenv(
+        "BEDROCK_MODEL_FALLBACK_IDS",
+        "anthropic.claude-opus-4-8,eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    ).split(",")
     if model_id.strip() and model_id.strip() != BEDROCK_MODEL_ID
 ]
-BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "8192"))
-BEDROCK_FALLBACK_MAX_TOKENS = int(os.getenv("BEDROCK_FALLBACK_MAX_TOKENS", "4096"))
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "16384"))
+BEDROCK_FALLBACK_MAX_TOKENS = int(os.getenv("BEDROCK_FALLBACK_MAX_TOKENS", "8192"))
 NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
@@ -1974,6 +1977,30 @@ def _is_microwave_request(req: GenerateRequest, features: list[dict]) -> bool:
     return any(token in raw for token in ("microwave", "微波", "flatbed", "wave stirrer", "preset menus"))
 
 
+def _is_cooking_appliance_request(req: GenerateRequest, features: list[dict]) -> bool:
+    raw = _request_text_blob(req, features).lower()
+    return any(
+        token in raw
+        for token in (
+            "air fryer",
+            "airfryer",
+            "空气炸",
+            "microwave",
+            "微波",
+            "oven",
+            "烤箱",
+            "grill",
+            "preset menus",
+            "menu",
+            "cooking",
+            "cook",
+            "加热",
+            "烹饪",
+            "预设菜单",
+        )
+    )
+
+
 def _segment_examples_for_request(req: GenerateRequest | None, features: list[dict] | None = None) -> tuple[str, str]:
     raw = _request_text_blob(req, features or []).lower() if req else ""
     if any(token in raw for token in ("microwave", "微波", "flatbed", "wave stirrer", "preset menus")):
@@ -2062,6 +2089,14 @@ def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
             [
                 "- 当前产品按微波炉处理：开头必须是微波炉使用任务，例如冷饭/汤碗/便当盒/爆米花/早餐燕麦/咖啡加热；严禁使用洗碗机式的“水槽堆满餐具、洗碗、dirty dishes、dishwasher”开场。",
                 "- 微波炉镜头必须围绕微波炉门体、腔体、平板底部、控制面板、食物/餐盒入炉、蒸汽和加热后状态；餐具只能作为承载食物的盘碗，不能变成待清洗对象。",
+            ]
+        )
+    if _is_cooking_appliance_request(req, features):
+        lines.extend(
+            [
+                "- 厨房烹饪类脚本必须遵守真实使用时序：准备食材/放入产品 → 选择程序或预设菜单/启动 → 烹饪或加热过程 → 取出成品/口感结果 → 品牌收尾。",
+                "- 严禁出现“食物已经做熟/成品展示/结果验证”之后才去按预设菜单、选择程序、启动机器或展示控制面板的倒置逻辑；菜单/按键必须发生在烹饪结果之前。",
+                "- 如果展示 Preset Menus、Air Fry、Dual Heating 等操作型卖点，必须让该卖点在食物入炉后、成品出炉前承担因果作用，而不是成品之后再补拍面板。",
             ]
         )
     for target in _feature_focus_targets(req, features):
@@ -2247,6 +2282,29 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
             issues.append("缺少有设计感的转场或镜头连接，需加入动作匹配、遮挡转场、声桥、前后对比切或推近接特写。")
         if not sensory_pattern.search(body_text):
             issues.append("缺少感官/状态细节，需加入蒸汽、水汽、声音、纹理、屏幕反馈、污渍/食材/物品状态变化等可见证据。")
+        if _is_cooking_appliance_request(req, features):
+            result_row_index = None
+            operation_after_result = False
+            result_pattern = re.compile(
+                r"成品|做完|完成|出炉|取出|上桌|摆盘|结果|熟透|焦脆|金黄|酥脆|完美加热|cooked|finished|ready|serve|served|plated|crispy|golden|result",
+                flags=re.IGNORECASE,
+            )
+            operation_pattern = re.compile(
+                r"预设|菜单|程序|模式|启动|开始|按下|选择|控制面板|屏幕|数字跳动|preset|menu|programme|program|mode|start|press|select|control\s*panel|display",
+                flags=re.IGNORECASE,
+            )
+            for row_index, row in body.iterrows():
+                text = _row_text(row)
+                if result_row_index is None and result_pattern.search(text):
+                    result_row_index = row_index
+                    continue
+                if result_row_index is not None and operation_pattern.search(text):
+                    operation_after_result = True
+                    break
+            if operation_after_result:
+                issues.append(
+                    "烹饪时序倒置：已经出现成品/做熟/取出结果之后又去选择预设菜单、启动或展示控制面板；必须改为食材入炉后先操作菜单/启动，再展示烹饪过程和成品结果。"
+                )
         weak_motion = 0
         for value in body["镜头运动&运动轨迹"].tolist():
             text = str(value or "")

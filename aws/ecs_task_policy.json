@@ -13,13 +13,19 @@
       ],
       "Resource": [
         "arn:aws:bedrock:*::foundation-model/eu.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-fable-5",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-8",
+        "arn:aws:bedrock:*::foundation-model/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "arn:aws:bedrock:*::foundation-model/amazon.nova-reel-v1:1",
         "arn:aws:bedrock:*::foundation-model/amazon.nova-canvas-v1:0",
         "arn:aws:bedrock:*::foundation-model/amazon.titan-image-generator-v2:0",
         "arn:aws:bedrock:*::foundation-model/stability.stable-image-core-v1:1",
         "arn:aws:bedrock:*::foundation-model/stability.stable-image-ultra-v1:1",
         "arn:aws:bedrock:*::foundation-model/stability.sd3-5-large-v1:0",
-        "arn:aws:bedrock:*:*:inference-profile/eu.amazon.nova-pro-v1:0"
+        "arn:aws:bedrock:*:*:inference-profile/eu.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:*:*:inference-profile/anthropic.claude-fable-5",
+        "arn:aws:bedrock:*:*:inference-profile/anthropic.claude-opus-4-8",
+        "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
       ]
     },
     {
