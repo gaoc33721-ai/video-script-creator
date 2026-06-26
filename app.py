@@ -1801,7 +1801,7 @@ with st.expander("基础配置", expanded=False):
             help="用于匹配语言、节日节点和用户表达习惯。",
         )
     with cfg_col3:
-        variant_count = st.selectbox("生成方案数", [2, 3], index=0, help="一次生成几套不同脚本方向。")
+        variant_count = st.selectbox("生成方案数", [2, 3, 4, 5], index=0, help="一次生成几套不同脚本方向。")
     with st.expander("高级风格设置", expanded=False):
         style_col1, style_col2, style_col3, style_col4 = st.columns(4)
         with style_col1:

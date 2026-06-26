@@ -455,7 +455,7 @@ register_fridge_routes(app, STORAGE, _current_access_password, _clean_access_tok
 class GenerateRequest(BaseModel):
     platform: str = "TikTok / Reels / Shorts"
     target_market: str = "北美 (US/CA)"
-    variant_count: int = Field(default=2, ge=1, le=3)
+    variant_count: int = Field(default=2, ge=1, le=5)
     category: str
     model: str
     selected_features: list[str] = Field(default_factory=list)
