@@ -4915,7 +4915,7 @@ def _query_video_job(invocation_arn, provider: str = "", region: str = ""):
     return client.get_async_invoke(invocationArn=invocation_arn)
 
 
-def _video_uri_from_bedrock_job(job):
+def _video_uri_from_bedrock_job(job, invocation_arn: str = ""):
     output_uri = (
         ((job or {}).get("outputDataConfig") or {})
         .get("s3OutputDataConfig", {})
@@ -4923,7 +4923,34 @@ def _video_uri_from_bedrock_job(job):
     )
     if not output_uri:
         output_uri = (job or {}).get("output_s3_uri", "")
-    return f"{output_uri.rstrip('/')}/output.mp4" if output_uri else ""
+    if not output_uri:
+        return ""
+    output_uri = output_uri.rstrip("/")
+    invocation_id = str(invocation_arn or (job or {}).get("invocationArn") or (job or {}).get("invocation_arn") or "").rstrip("/").split("/")[-1]
+    if invocation_id and not output_uri.endswith(f"/{invocation_id}"):
+        return f"{output_uri}/{invocation_id}/output.mp4"
+    return f"{output_uri}/output.mp4"
+
+
+_S3_BUCKET_REGION_CACHE: dict[str, str] = {}
+
+
+def _s3_bucket_region(bucket: str) -> str:
+    bucket = str(bucket or "").strip()
+    if not bucket:
+        return os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+    if bucket in _S3_BUCKET_REGION_CACHE:
+        return _S3_BUCKET_REGION_CACHE[bucket]
+    try:
+        client = boto3.client("s3", region_name=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1")
+        response = client.get_bucket_location(Bucket=bucket)
+        region = response.get("LocationConstraint") or "us-east-1"
+        if region == "EU":
+            region = "eu-west-1"
+    except Exception:
+        region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+    _S3_BUCKET_REGION_CACHE[bucket] = region
+    return region
 
 
 def _presigned_url_for_s3_uri(s3_uri, expires_in=3600):
@@ -4935,7 +4962,7 @@ def _presigned_url_for_s3_uri(s3_uri, expires_in=3600):
     if not bucket or not key:
         return ""
     try:
-        client = boto3.client("s3", region_name=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"))
+        client = boto3.client("s3", region_name=_s3_bucket_region(bucket))
         return client.generate_presigned_url(
             "get_object",
             Params={"Bucket": bucket, "Key": key},
@@ -6920,7 +6947,7 @@ def refresh_nova_reel_jobs(script_job_id: str = ""):
             )
             item["output_s3_uri"] = output_s3_uri
             if status == "Completed":
-                item["video_s3_uri"] = _video_uri_from_bedrock_job(result)
+                item["video_s3_uri"] = _video_uri_from_bedrock_job(result, invocation_arn=invocation_arn)
             changed = True
         except Exception as exc:
             item["failure_message"] = str(exc)
@@ -7037,7 +7064,7 @@ def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = 
             )
             item["output_s3_uri"] = output_s3_uri
             if status == "Completed":
-                item["video_s3_uri"] = _video_uri_from_bedrock_job(result)
+                item["video_s3_uri"] = _video_uri_from_bedrock_job(result, invocation_arn=invocation_arn)
             changed = True
         except Exception as exc:
             item["failure_message"] = str(exc)
