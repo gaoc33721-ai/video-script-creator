@@ -5028,9 +5028,56 @@ def _presigned_url_for_s3_uri(s3_uri, expires_in=3600):
         return ""
 
 
+def _video_job_by_id(video_job_id: str) -> dict | None:
+    wanted = str(video_job_id or "")
+    if not wanted:
+        return None
+    for item in [*_load_storyboard_video_jobs(), *_load_nova_reel_jobs()]:
+        if str(item.get("id") or "") == wanted:
+            return item
+    return None
+
+
+def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
+    if not str(s3_uri or "").startswith("s3://"):
+        return "", ""
+    parsed = urllib.parse.urlparse(s3_uri)
+    return parsed.netloc, parsed.path.lstrip("/")
+
+
+def _parse_http_range(range_header: str, total_size: int) -> tuple[int, int] | None:
+    raw = str(range_header or "").strip()
+    if not raw or not raw.lower().startswith("bytes=") or total_size <= 0:
+        return None
+    spec = raw.split("=", 1)[1].split(",", 1)[0].strip()
+    if "-" not in spec:
+        return None
+    start_raw, end_raw = spec.split("-", 1)
+    try:
+        if start_raw == "":
+            suffix = int(end_raw)
+            if suffix <= 0:
+                return None
+            start = max(0, total_size - suffix)
+            end = total_size - 1
+        else:
+            start = int(start_raw)
+            end = int(end_raw) if end_raw else total_size - 1
+            end = min(end, total_size - 1)
+        if start < 0 or end < start or start >= total_size:
+            return None
+        return start, end
+    except Exception:
+        return None
+
+
 def _public_nova_reel_job(job):
     public = dict(job or {})
-    public["preview_url"] = _presigned_url_for_s3_uri(public.get("video_s3_uri", ""))
+    public["preview_url"] = (
+        f"/api/video-jobs/{urllib.parse.quote(str(public.get('id') or ''), safe='')}/video"
+        if public.get("id") and public.get("video_s3_uri")
+        else ""
+    )
     return public
 
 
@@ -6760,6 +6807,41 @@ def storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1, shot
         "region": _video_region(),
         "estimated_usd_per_second": _video_estimated_usd_per_second(),
     }
+
+
+@app.get("/api/video-jobs/{video_job_id}/video", dependencies=[Depends(_verify_access)])
+def video_job_video(video_job_id: str, request: Request):
+    job = _video_job_by_id(video_job_id)
+    if not job or not job.get("video_s3_uri"):
+        raise HTTPException(status_code=404, detail="Video not found.")
+    bucket, key = _parse_s3_uri(job.get("video_s3_uri", ""))
+    if not bucket or not key:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    try:
+        client = boto3.client("s3", region_name=_s3_bucket_region(bucket))
+        head = client.head_object(Bucket=bucket, Key=key)
+        total_size = int(head.get("ContentLength") or 0)
+        range_tuple = _parse_http_range(request.headers.get("range", ""), total_size)
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": f'inline; filename="{video_job_id}.mp4"',
+        }
+        if range_tuple:
+            start, end = range_tuple
+            response = client.get_object(Bucket=bucket, Key=key, Range=f"bytes={start}-{end}")
+            body = response["Body"].read()
+            headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+            headers["Content-Length"] = str(len(body))
+            return Response(body, status_code=206, media_type="video/mp4", headers=headers)
+        response = client.get_object(Bucket=bucket, Key=key)
+        body = response["Body"].read()
+        headers["Content-Length"] = str(len(body))
+        return Response(body, media_type="video/mp4", headers=headers)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Video not found: {exc}") from exc
 
 
 @app.get("/api/nova-canvas/jobs", dependencies=[Depends(_verify_access)])
