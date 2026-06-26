@@ -962,11 +962,11 @@ function renderProductImageGallery(assets, selectedAsset) {
           const active = selectedAsset?.id === asset.id;
           return `
             <button class="product-image-thumb ${active ? "active" : ""}" type="button" data-product-image-id="${escapeAttr(asset.id)}" title="${escapeAttr(asset.filename || "产品图")}">
+              <span class="product-image-delete" role="button" tabindex="0" data-delete-product-image-id="${escapeAttr(asset.id)}" aria-label="删除产品图" title="删除产品图">×</span>
               ${asset.preview_url ? `<div class="storyboard-image-placeholder" data-protected-image="${escapeAttr(asset.preview_url)}">图片正在加载。</div>` : "<span>无预览</span>"}
               <span>${escapeHtml(asset.filename || "产品图")}</span>
               <span class="product-image-thumb-actions">
                 <span>${active ? "当前绑定" : "点击绑定"}</span>
-                <span class="product-image-delete" role="button" tabindex="0" data-delete-product-image-id="${escapeAttr(asset.id)}" aria-label="删除产品图">删除</span>
               </span>
             </button>
           `;

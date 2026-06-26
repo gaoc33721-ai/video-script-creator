@@ -777,6 +777,7 @@ button,
 }
 
 .product-image-thumb {
+  position: relative;
   display: grid;
   gap: 8px;
   padding: 8px;
@@ -837,17 +838,26 @@ button,
 }
 
 .product-image-delete {
-  flex: 0 0 auto;
-  padding: 2px 6px;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
   border-radius: 999px;
-  color: #c81e1e;
-  font-size: 12px;
+  background: rgba(29, 29, 31, 0.72);
+  color: #fff;
+  font-size: 16px;
   font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 4px 12px rgba(29, 29, 31, 0.22);
 }
 
 .product-image-delete:hover,
 .product-image-delete:focus-visible {
-  background: rgba(200, 30, 30, 0.1);
+  background: #c81e1e;
   outline: none;
 }
 
