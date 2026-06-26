@@ -19,6 +19,13 @@ NOVA_REEL_MODEL_ID="${NOVA_REEL_MODEL_ID:-amazon.nova-reel-v1:1}"
 NOVA_REEL_OUTPUT_S3_URI="${NOVA_REEL_OUTPUT_S3_URI:-}"
 NOVA_REEL_ESTIMATED_USD_PER_SECOND="${NOVA_REEL_ESTIMATED_USD_PER_SECOND:-0.08}"
 NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK="${NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK:-2}"
+VIDEO_PROVIDER="${VIDEO_PROVIDER:-luma_ray2}"
+VIDEO_OUTPUT_S3_URI="${VIDEO_OUTPUT_S3_URI:-$NOVA_REEL_OUTPUT_S3_URI}"
+LUMA_RAY2_AWS_REGION="${LUMA_RAY2_AWS_REGION:-us-west-2}"
+LUMA_RAY2_MODEL_ID="${LUMA_RAY2_MODEL_ID:-luma.ray-v2:0}"
+LUMA_RAY2_RESOLUTION="${LUMA_RAY2_RESOLUTION:-720p}"
+LUMA_RAY2_ASPECT_RATIO="${LUMA_RAY2_ASPECT_RATIO:-16:9}"
+LUMA_RAY2_ESTIMATED_USD_PER_SECOND="${LUMA_RAY2_ESTIMATED_USD_PER_SECOND:-0.16}"
 NOVA_CANVAS_AWS_REGION="${NOVA_CANVAS_AWS_REGION:-us-west-2}"
 NOVA_CANVAS_MODEL_ID="${NOVA_CANVAS_MODEL_ID:-stability.sd3-5-large-v1:0}"
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE="${NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE:-0.08}"
@@ -580,6 +587,44 @@ json.dump(doc, open(path, "w"))
 PY
 fi
 
+VIDEO_OUTPUT_BUCKET=""
+if [[ "$VIDEO_OUTPUT_S3_URI" == s3://* ]]; then
+  VIDEO_OUTPUT_BUCKET="${VIDEO_OUTPUT_S3_URI#s3://}"
+  VIDEO_OUTPUT_BUCKET="${VIDEO_OUTPUT_BUCKET%%/*}"
+fi
+if [[ -n "$VIDEO_OUTPUT_BUCKET" && "$VIDEO_OUTPUT_BUCKET" != "$S3_BUCKET" ]]; then
+  if ! aws s3api head-bucket --bucket "$VIDEO_OUTPUT_BUCKET" >/dev/null 2>&1; then
+    if [[ "$LUMA_RAY2_AWS_REGION" == "us-east-1" ]]; then
+      aws s3api create-bucket \
+        --bucket "$VIDEO_OUTPUT_BUCKET" \
+        --region "$LUMA_RAY2_AWS_REGION" >/dev/null
+    else
+      aws s3api create-bucket \
+        --bucket "$VIDEO_OUTPUT_BUCKET" \
+        --region "$LUMA_RAY2_AWS_REGION" \
+        --create-bucket-configuration LocationConstraint="$LUMA_RAY2_AWS_REGION" >/dev/null
+    fi
+  fi
+  python3 - "$POLICY_DOC" "$VIDEO_OUTPUT_BUCKET" <<'PY'
+import json, sys
+path, bucket = sys.argv[1], sys.argv[2]
+doc = json.load(open(path))
+doc["Statement"].extend([
+    {
+        "Effect": "Allow",
+        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+        "Resource": f"arn:aws:s3:::{bucket}/*",
+    },
+    {
+        "Effect": "Allow",
+        "Action": ["s3:ListBucket"],
+        "Resource": f"arn:aws:s3:::{bucket}",
+    },
+])
+json.dump(doc, open(path, "w"))
+PY
+fi
+
 aws iam put-role-policy \
   --role-name "$TASK_ROLE" \
   --policy-name "${APP_NAME}-runtime-policy" \
@@ -654,6 +699,13 @@ env = [
     {"name": "NOVA_REEL_OUTPUT_S3_URI", "value": "${NOVA_REEL_OUTPUT_S3_URI}"},
     {"name": "NOVA_REEL_ESTIMATED_USD_PER_SECOND", "value": "${NOVA_REEL_ESTIMATED_USD_PER_SECOND}"},
     {"name": "NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK", "value": "${NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK}"},
+    {"name": "VIDEO_PROVIDER", "value": "${VIDEO_PROVIDER}"},
+    {"name": "VIDEO_OUTPUT_S3_URI", "value": "${VIDEO_OUTPUT_S3_URI}"},
+    {"name": "LUMA_RAY2_AWS_REGION", "value": "${LUMA_RAY2_AWS_REGION}"},
+    {"name": "LUMA_RAY2_MODEL_ID", "value": "${LUMA_RAY2_MODEL_ID}"},
+    {"name": "LUMA_RAY2_RESOLUTION", "value": "${LUMA_RAY2_RESOLUTION}"},
+    {"name": "LUMA_RAY2_ASPECT_RATIO", "value": "${LUMA_RAY2_ASPECT_RATIO}"},
+    {"name": "LUMA_RAY2_ESTIMATED_USD_PER_SECOND", "value": "${LUMA_RAY2_ESTIMATED_USD_PER_SECOND}"},
     {"name": "NOVA_CANVAS_AWS_REGION", "value": "${NOVA_CANVAS_AWS_REGION}"},
     {"name": "NOVA_CANVAS_MODEL_ID", "value": "${NOVA_CANVAS_MODEL_ID}"},
     {"name": "NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "value": "${NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE}"},

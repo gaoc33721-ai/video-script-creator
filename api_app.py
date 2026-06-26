@@ -159,6 +159,13 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
+VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", os.getenv("MEDIA_VIDEO_PROVIDER", "luma_ray2")).strip().lower().replace("-", "_")
+VIDEO_OUTPUT_S3_URI = os.getenv("VIDEO_OUTPUT_S3_URI", NOVA_REEL_OUTPUT_S3_URI).rstrip("/")
+LUMA_RAY2_AWS_REGION = os.getenv("LUMA_RAY2_AWS_REGION", "us-west-2")
+LUMA_RAY2_MODEL_ID = os.getenv("LUMA_RAY2_MODEL_ID", "luma.ray-v2:0")
+LUMA_RAY2_RESOLUTION = os.getenv("LUMA_RAY2_RESOLUTION", "720p")
+LUMA_RAY2_ASPECT_RATIO = os.getenv("LUMA_RAY2_ASPECT_RATIO", "16:9")
+LUMA_RAY2_ESTIMATED_USD_PER_SECOND = float(os.getenv("LUMA_RAY2_ESTIMATED_USD_PER_SECOND", "0.16"))
 NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-west-2")
 NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.sd3-5-large-v1:0")
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
@@ -4430,6 +4437,8 @@ def _safe_ascii_slug(text):
 
 
 def _s3_output_base_uri():
+    if VIDEO_OUTPUT_S3_URI:
+        return VIDEO_OUTPUT_S3_URI
     if NOVA_REEL_OUTPUT_S3_URI:
         return NOVA_REEL_OUTPUT_S3_URI
     bucket = os.getenv("S3_BUCKET") or os.getenv("APP_S3_BUCKET")
@@ -4441,6 +4450,25 @@ def _s3_output_base_uri():
         parts.append(prefix)
     parts.append("nova-reel-poc")
     return "/".join(parts)
+
+
+def _video_provider_name() -> str:
+    provider = str(VIDEO_PROVIDER or "nova_reel").strip().lower().replace("-", "_")
+    if provider in {"luma", "luma_ray", "ray2", "luma_ray2"}:
+        return "luma_ray2"
+    return "nova_reel"
+
+
+def _video_model_id() -> str:
+    return LUMA_RAY2_MODEL_ID if _video_provider_name() == "luma_ray2" else NOVA_REEL_MODEL_ID
+
+
+def _video_region() -> str:
+    return LUMA_RAY2_AWS_REGION if _video_provider_name() == "luma_ray2" else NOVA_REEL_AWS_REGION
+
+
+def _video_estimated_usd_per_second() -> float:
+    return LUMA_RAY2_ESTIMATED_USD_PER_SECOND if _video_provider_name() == "luma_ray2" else NOVA_REEL_ESTIMATED_USD_PER_SECOND
 
 
 def _category_en(category):
@@ -4488,16 +4516,84 @@ def _build_variant_nova_reel_prompt(variant, category, model, selected_features)
     )[:500]
 
 
-def _nova_reel_job_output_uri(category, model):
+def _video_job_output_uri(category, model):
     base_uri = _s3_output_base_uri()
     if not base_uri:
         return ""
     stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    return f"{base_uri.rstrip('/')}/{stamp}_{_safe_ascii_slug(category)}_{_safe_ascii_slug(model)}_{uuid.uuid4().hex[:8]}/"
+    return (
+        f"{base_uri.rstrip('/')}/{_video_provider_name()}/"
+        f"{stamp}_{_safe_ascii_slug(category)}_{_safe_ascii_slug(model)}_{uuid.uuid4().hex[:8]}/"
+    )
+
+
+def _nova_reel_job_output_uri(category, model):
+    return _video_job_output_uri(category, model)
+
+
+def _ray2_duration_seconds(duration_seconds=6) -> int:
+    requested = int(duration_seconds or 5)
+    return 9 if requested > 5 else 5
+
+
+def _ray2_image_payload_from_shot(shot: dict | None) -> dict | None:
+    image = (shot or {}).get("image") or {}
+    source = image.get("source") or {}
+    encoded = source.get("bytes")
+    if not encoded:
+        return None
+    image_format = str(image.get("format") or "png").lower()
+    media_type = "image/jpeg" if image_format in {"jpg", "jpeg"} else "image/png"
+    try:
+        from PIL import Image, ImageOps
+
+        raw_bytes = base64.b64decode(encoded)
+        source_image = Image.open(io.BytesIO(raw_bytes))
+        source_image = ImageOps.exif_transpose(source_image)
+        width, height = source_image.size
+        max_side = max(width, height)
+        if max_side > 1552:
+            scale = 1552 / float(max_side)
+            resized = source_image.resize(
+                (max(1, int(width * scale)), max(1, int(height * scale))),
+                Image.LANCZOS,
+            )
+            output = io.BytesIO()
+            if image_format in {"jpg", "jpeg"}:
+                resized = resized.convert("RGB")
+                resized.save(output, format="JPEG", quality=92, optimize=True)
+                media_type = "image/jpeg"
+            else:
+                resized.save(output, format="PNG", optimize=True)
+                media_type = "image/png"
+            encoded = base64.b64encode(output.getvalue()).decode("utf-8")
+    except Exception:
+        pass
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "data": encoded,
+            "media_type": media_type,
+        },
+    }
+
+
+def _build_luma_ray2_model_input(prompt: str, duration_seconds=6, image_payload: dict | None = None) -> dict:
+    model_input = {
+        "prompt": str(prompt or "premium product video").strip()[:4000],
+        "aspect_ratio": LUMA_RAY2_ASPECT_RATIO,
+        "duration": f"{_ray2_duration_seconds(duration_seconds)}s",
+        "resolution": LUMA_RAY2_RESOLUTION,
+        "loop": False,
+    }
+    if image_payload:
+        model_input["keyframes"] = {"frame0": image_payload}
+    return model_input
 
 
 def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
-    output_s3_uri = _nova_reel_job_output_uri(category, model)
+    output_s3_uri = _video_job_output_uri(category, model)
     if not output_s3_uri:
         raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 STORAGE_BACKEND=s3/S3_BUCKET，或设置 NOVA_REEL_OUTPUT_S3_URI。")
     from botocore.config import Config
@@ -4523,6 +4619,32 @@ def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
         clientRequestToken=str(uuid.uuid4()),
     )
     return response["invocationArn"], output_s3_uri
+
+
+def _start_luma_ray2_job(category, model, prompt, duration_seconds=6, image_payload: dict | None = None):
+    output_s3_uri = _video_job_output_uri(category, model)
+    if not output_s3_uri:
+        raise RuntimeError("未配置 Ray2 输出 S3。请设置 VIDEO_OUTPUT_S3_URI，且 bucket 需位于 us-west-2。")
+    from botocore.config import Config
+
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=LUMA_RAY2_AWS_REGION,
+        config=Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2}),
+    )
+    response = client.start_async_invoke(
+        modelId=LUMA_RAY2_MODEL_ID,
+        modelInput=_build_luma_ray2_model_input(prompt, duration_seconds=duration_seconds, image_payload=image_payload),
+        outputDataConfig={"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
+        clientRequestToken=str(uuid.uuid4()),
+    )
+    return response["invocationArn"], output_s3_uri
+
+
+def _start_video_job(category, model, prompt, duration_seconds=6, image_payload: dict | None = None):
+    if _video_provider_name() == "luma_ray2":
+        return _start_luma_ray2_job(category, model, prompt, duration_seconds=duration_seconds, image_payload=image_payload)
+    return _start_nova_reel_job(category, model, prompt, duration_seconds=duration_seconds)
 
 
 def _storyboard_rows_from_variant(content: str) -> list[dict]:
@@ -4727,7 +4849,25 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
 
 
 def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
-    output_s3_uri = _nova_reel_job_output_uri(category, model)
+    if _video_provider_name() == "luma_ray2":
+        detail = " | ".join(str(shot.get("text") or "") for shot in manual_shots if shot.get("text"))
+        prompt = (
+            f"Premium Ray2 image-to-video product clip for Hisense {_category_en(category)} model {model}. "
+            "Create one coherent high-quality e-commerce video from the storyboard beats. Keep the appliance identity, "
+            "shape, finish, control panel, proportions, and realistic product motion. Smooth cinematic camera movement, "
+            "natural hand interaction if described, commercial soft daylight, no text overlay, no watermark, no competitor brands. "
+            f"Storyboard beats: {detail or 'product-focused lifestyle proof shot'}"
+        )
+        first_image = next((_ray2_image_payload_from_shot(shot) for shot in manual_shots if _ray2_image_payload_from_shot(shot)), None)
+        return _start_luma_ray2_job(
+            category,
+            model,
+            re.sub(r"\s+", " ", prompt).strip()[:4000],
+            duration_seconds=9 if len(manual_shots) > 1 else 5,
+            image_payload=first_image,
+        )
+
+    output_s3_uri = _video_job_output_uri(category, model)
     if not output_s3_uri:
         raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 STORAGE_BACKEND=s3/S3_BUCKET，或设置 NOVA_REEL_OUTPUT_S3_URI。")
     from botocore.config import Config
@@ -4761,11 +4901,15 @@ def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
 
 
 def _query_nova_reel_job(invocation_arn):
+    return _query_video_job(invocation_arn)
+
+
+def _query_video_job(invocation_arn, provider: str = "", region: str = ""):
     from botocore.config import Config
 
     client = boto3.client(
         "bedrock-runtime",
-        region_name=NOVA_REEL_AWS_REGION,
+        region_name=region or (LUMA_RAY2_AWS_REGION if str(provider or _video_provider_name()) == "luma_ray2" else NOVA_REEL_AWS_REGION),
         config=Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2}),
     )
     return client.get_async_invoke(invocationArn=invocation_arn)
@@ -6510,9 +6654,10 @@ def nova_reel_jobs(script_job_id: str = ""):
         jobs = [item for item in jobs if item.get("script_job_id") == script_job_id]
     return {
         "jobs": [_public_nova_reel_job(item) for item in jobs[:30]],
-        "model_id": NOVA_REEL_MODEL_ID,
-        "region": NOVA_REEL_AWS_REGION,
-        "estimated_usd_per_second": NOVA_REEL_ESTIMATED_USD_PER_SECOND,
+        "provider": _video_provider_name(),
+        "model_id": _video_model_id(),
+        "region": _video_region(),
+        "estimated_usd_per_second": _video_estimated_usd_per_second(),
     }
 
 
@@ -6527,9 +6672,10 @@ def storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1, shot
         jobs = [item for item in jobs if int(item.get("shot_index", -1)) == int(shot_index)]
     return {
         "jobs": [_public_nova_reel_job(item) for item in jobs[:30]],
-        "model_id": NOVA_REEL_MODEL_ID,
-        "region": NOVA_REEL_AWS_REGION,
-        "estimated_usd_per_second": NOVA_REEL_ESTIMATED_USD_PER_SECOND,
+        "provider": _video_provider_name(),
+        "model_id": _video_model_id(),
+        "region": _video_region(),
+        "estimated_usd_per_second": _video_estimated_usd_per_second(),
     }
 
 
@@ -6712,12 +6858,13 @@ def submit_nova_reel(req: NovaReelSubmitRequest):
         request_payload.get("model", ""),
         request_payload.get("selected_features", []),
     )
+    duration_seconds = 5 if _video_provider_name() == "luma_ray2" else 6
     try:
-        invocation_arn, output_s3_uri = _start_nova_reel_job(
+        invocation_arn, output_s3_uri = _start_video_job(
             request_payload.get("category", ""),
             request_payload.get("model", ""),
             prompt,
-            duration_seconds=6,
+            duration_seconds=duration_seconds,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -6733,14 +6880,15 @@ def submit_nova_reel(req: NovaReelSubmitRequest):
         "variant_name": variant.get("name", f"方案{req.variant_index + 1}"),
         "variant_label": variant.get("label", ""),
         "prompt": prompt,
-        "duration_seconds": 6,
+        "duration_seconds": duration_seconds,
         "status": "InProgress",
         "failure_message": "",
         "invocation_arn": invocation_arn,
         "output_s3_uri": output_s3_uri,
         "video_s3_uri": "",
-        "model_id": NOVA_REEL_MODEL_ID,
-        "region": NOVA_REEL_AWS_REGION,
+        "provider": _video_provider_name(),
+        "model_id": _video_model_id(),
+        "region": _video_region(),
     }
     jobs = _load_nova_reel_jobs()
     jobs.insert(0, video_job)
@@ -6761,7 +6909,7 @@ def refresh_nova_reel_jobs(script_job_id: str = ""):
         if not invocation_arn:
             continue
         try:
-            result = _query_nova_reel_job(invocation_arn)
+            result = _query_video_job(invocation_arn, provider=item.get("provider", "nova_reel"), region=item.get("region", ""))
             status = result.get("status") or item.get("status", "")
             item["status"] = status
             item["updated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
@@ -6812,6 +6960,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
             req.variant_index,
             product_image_id=req.product_image_id,
         )
+    actual_duration_seconds = _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if _video_provider_name() == "luma_ray2" else duration_seconds
     try:
         invocation_arn, output_s3_uri = _start_storyboard_video_job(
             request_payload.get("category", ""),
@@ -6835,7 +6984,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "variant_label": variant.get("label", ""),
         "shot_index": req.shot_index,
         "product_image_id": (product_asset or {}).get("id", ""),
-        "duration_seconds": duration_seconds,
+        "duration_seconds": actual_duration_seconds,
         "shot_count": len(manual_shots),
         "shots": [
             {
@@ -6850,8 +6999,9 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "invocation_arn": invocation_arn,
         "output_s3_uri": output_s3_uri,
         "video_s3_uri": "",
-        "model_id": NOVA_REEL_MODEL_ID,
-        "region": NOVA_REEL_AWS_REGION,
+        "provider": _video_provider_name(),
+        "model_id": _video_model_id(),
+        "region": _video_region(),
     }
     jobs = _load_storyboard_video_jobs()
     jobs.insert(0, video_job)
@@ -6876,7 +7026,7 @@ def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = 
         if not invocation_arn:
             continue
         try:
-            result = _query_nova_reel_job(invocation_arn)
+            result = _query_video_job(invocation_arn, provider=item.get("provider", "nova_reel"), region=item.get("region", ""))
             status = result.get("status") or item.get("status", "")
             item["status"] = status
             item["updated_at"] = _utc_now()
