@@ -166,6 +166,7 @@ LUMA_RAY2_MODEL_ID = os.getenv("LUMA_RAY2_MODEL_ID", "luma.ray-v2:0")
 LUMA_RAY2_RESOLUTION = os.getenv("LUMA_RAY2_RESOLUTION", "720p")
 LUMA_RAY2_ASPECT_RATIO = os.getenv("LUMA_RAY2_ASPECT_RATIO", "16:9")
 LUMA_RAY2_ESTIMATED_USD_PER_SECOND = float(os.getenv("LUMA_RAY2_ESTIMATED_USD_PER_SECOND", "0.16"))
+VIDEO_SUBMISSION_MIN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SUBMISSION_MIN_INTERVAL_SECONDS", "90"))
 NOVA_CANVAS_AWS_REGION = os.getenv("NOVA_CANVAS_AWS_REGION", "us-west-2")
 NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.sd3-5-large-v1:0")
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
@@ -3280,6 +3281,61 @@ def _is_transient_storyboard_image_error(message: str) -> bool:
 
 def _is_active_storyboard_image_status(status: str) -> bool:
     return str(status or "").lower() in {"pending", "queued", "running", "inprogress", "submitted"}
+
+
+def _is_active_video_status(status: str) -> bool:
+    return str(status or "").lower() in {"pending", "queued", "running", "inprogress", "in_progress", "submitted"}
+
+
+def _parse_utc_iso(value: str) -> dt.datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _friendly_video_submit_error(exc: Exception) -> str:
+    raw = str(exc or "")
+    lowered = raw.lower()
+    if "throttlingexception" in lowered or "too many requests" in lowered or "rate exceeded" in lowered:
+        return "Ray2 当前请求过多，视频任务已被云端限流。请等待约 1-2 分钟后刷新状态或再次提交。"
+    return raw
+
+
+def _active_storyboard_video_job(script_job_id: str, variant_index: int, shot_index: int) -> dict | None:
+    for item in _load_storyboard_video_jobs():
+        if str(item.get("script_job_id") or "") != str(script_job_id):
+            continue
+        if int(item.get("variant_index", -1)) != int(variant_index):
+            continue
+        if int(item.get("shot_index", -1)) != int(shot_index):
+            continue
+        if _is_active_video_status(item.get("status", "")):
+            return item
+    return None
+
+
+def _video_submit_wait_seconds(jobs: list[dict]) -> int:
+    if _video_provider_name() != "luma_ray2":
+        return 0
+    now = dt.datetime.utcnow()
+    wait_seconds = 0
+    for item in jobs:
+        if str(item.get("provider") or "") != "luma_ray2":
+            continue
+        if not _is_active_video_status(item.get("status", "")):
+            continue
+        created = _parse_utc_iso(item.get("created_at", ""))
+        if not created:
+            continue
+        age = max(0, int((now - created).total_seconds()))
+        if age < VIDEO_SUBMISSION_MIN_INTERVAL_SECONDS:
+            remaining = VIDEO_SUBMISSION_MIN_INTERVAL_SECONDS - age
+            wait_seconds = max(wait_seconds, remaining)
+    return wait_seconds
 
 
 def _friendly_storyboard_image_error(message: str) -> str:
@@ -6877,6 +6933,28 @@ def submit_nova_reel(req: NovaReelSubmitRequest):
     if req.variant_index >= len(variants):
         raise HTTPException(status_code=400, detail="Script variant not found.")
 
+    with job_lock:
+        existing_jobs = _load_nova_reel_jobs()
+        existing_active = next(
+            (
+                item
+                for item in existing_jobs
+                if item.get("script_job_id") == script_job.get("id")
+                and int(item.get("variant_index", -1)) == int(req.variant_index)
+                and _is_active_video_status(item.get("status", ""))
+            ),
+            None,
+        )
+        wait_seconds = _video_submit_wait_seconds(existing_jobs)
+    if existing_active:
+        return {"job": _public_nova_reel_job(existing_active)}
+    if wait_seconds:
+        wait_seconds = max(10, wait_seconds)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Ray2 当前只允许排队提交 1 个视频任务。已有视频正在生成，请约 {wait_seconds} 秒后刷新状态或再提交。",
+        )
+
     request_payload = script_job.get("request") or {}
     variant = variants[req.variant_index]
     prompt = _build_variant_nova_reel_prompt(
@@ -6894,7 +6972,7 @@ def submit_nova_reel(req: NovaReelSubmitRequest):
             duration_seconds=duration_seconds,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=429 if "throttling" in str(exc).lower() else 400, detail=_friendly_video_submit_error(exc)) from exc
 
     video_job = {
         "id": uuid.uuid4().hex[:12],
@@ -6917,9 +6995,10 @@ def submit_nova_reel(req: NovaReelSubmitRequest):
         "model_id": _video_model_id(),
         "region": _video_region(),
     }
-    jobs = _load_nova_reel_jobs()
-    jobs.insert(0, video_job)
-    _save_nova_reel_jobs(jobs)
+    with job_lock:
+        jobs = _load_nova_reel_jobs()
+        jobs.insert(0, video_job)
+        _save_nova_reel_jobs(jobs)
     return {"job": _public_nova_reel_job(video_job)}
 
 
@@ -6972,6 +7051,20 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
     if req.product_image_id and not _product_image_by_id(req.product_image_id, script_job_id=req.script_job_id):
         raise HTTPException(status_code=404, detail="Product image not found.")
 
+    existing_active = _active_storyboard_video_job(script_job.get("id", ""), req.variant_index, req.shot_index)
+    if existing_active:
+        return {"job": _public_nova_reel_job(existing_active)}
+
+    with job_lock:
+        existing_video_jobs = _load_storyboard_video_jobs()
+        wait_seconds = _video_submit_wait_seconds(existing_video_jobs)
+    if wait_seconds:
+        wait_seconds = max(10, wait_seconds)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Ray2 当前只允许排队提交 1 个视频任务。已有视频正在生成，请约 {wait_seconds} 秒后刷新状态或再提交下一个分镜。",
+        )
+
     request_payload = script_job.get("request") or {}
     variant = variants[req.variant_index]
     if req.shot_index >= 0:
@@ -6995,7 +7088,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
             manual_shots,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=429 if "throttling" in str(exc).lower() else 400, detail=_friendly_video_submit_error(exc)) from exc
 
     now = _utc_now()
     video_job = {
@@ -7030,9 +7123,10 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "model_id": _video_model_id(),
         "region": _video_region(),
     }
-    jobs = _load_storyboard_video_jobs()
-    jobs.insert(0, video_job)
-    _save_storyboard_video_jobs(jobs)
+    with job_lock:
+        jobs = _load_storyboard_video_jobs()
+        jobs.insert(0, video_job)
+        _save_storyboard_video_jobs(jobs)
     return {"job": _public_nova_reel_job(video_job)}
 
 
