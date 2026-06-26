@@ -1403,7 +1403,7 @@ function renderStoryboardVideoForShot(shotIndex) {
   const preview = job.preview_url
     ? `
       <video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video>
-      <a class="download-link" href="${escapeAttr(job.preview_url)}" download target="_blank" rel="noreferrer">导出视频</a>
+      <a class="download-link" href="${escapeAttr(job.download_url || `${job.preview_url}${job.preview_url.includes("?") ? "&" : "?"}download=1`)}" download target="_blank" rel="noreferrer">导出视频</a>
     `
     : '<div class="message">视频已完成，导出链接正在生成，请刷新状态。</div>';
   return `
@@ -1880,6 +1880,7 @@ async function refreshStoryboardVideoGeneration() {
     );
     state.storyboardVideoJobs = data.jobs || [];
     renderStoryboardVideoJobs(state.storyboardVideoJobs);
+    rerenderStoryboardCards();
     setMessage("storyboardVideoMessage", "视频状态已刷新。", "ok");
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");

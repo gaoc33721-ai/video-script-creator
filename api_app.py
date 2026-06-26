@@ -5045,6 +5045,75 @@ def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
+def _s3_uri_from_bucket_key(bucket: str, key: str) -> str:
+    if not bucket or not key:
+        return ""
+    return f"s3://{bucket}/{key.lstrip('/')}"
+
+
+def _candidate_video_s3_uris(s3_uri: str) -> list[str]:
+    bucket, key = _parse_s3_uri(s3_uri)
+    if not bucket or not key:
+        return []
+    candidates = [_s3_uri_from_bucket_key(bucket, key)]
+    lower_key = key.lower()
+    if lower_key.endswith("/video.json") or lower_key.endswith("/manifest.json"):
+        base = key.rsplit("/", 1)[0]
+        candidates.append(_s3_uri_from_bucket_key(bucket, f"{base}/output.mp4"))
+    elif not lower_key.endswith(".mp4"):
+        base = key.rstrip("/")
+        candidates.append(_s3_uri_from_bucket_key(bucket, f"{base}/output.mp4"))
+    if lower_key.endswith("/output.mp4"):
+        base = key.rsplit("/", 1)[0]
+        candidates.extend(
+            [
+                _s3_uri_from_bucket_key(bucket, f"{base}/video.mp4"),
+                _s3_uri_from_bucket_key(bucket, f"{base}/manifest.json"),
+            ]
+        )
+    seen = set()
+    return [item for item in candidates if item and not (item in seen or seen.add(item))]
+
+
+def _resolve_video_s3_uri(job: dict) -> str:
+    for candidate in _candidate_video_s3_uris((job or {}).get("video_s3_uri", "")):
+        bucket, key = _parse_s3_uri(candidate)
+        if not bucket or not key:
+            continue
+        try:
+            client = boto3.client("s3", region_name=_s3_bucket_region(bucket))
+            client.head_object(Bucket=bucket, Key=key)
+            if key.lower().endswith(".mp4"):
+                return candidate
+            if key.lower().endswith(".json"):
+                payload = json.loads(client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8"))
+                for value in _collect_json_string_values(payload):
+                    if value.startswith("s3://") and value.lower().endswith(".mp4"):
+                        return value
+                    if value.lower().endswith(".mp4"):
+                        base = key.rsplit("/", 1)[0]
+                        return _s3_uri_from_bucket_key(bucket, f"{base}/{value.lstrip('/')}")
+        except Exception:
+            continue
+    return ""
+
+
+def _collect_json_string_values(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        result = []
+        for item in value:
+            result.extend(_collect_json_string_values(item))
+        return result
+    if isinstance(value, dict):
+        result = []
+        for item in value.values():
+            result.extend(_collect_json_string_values(item))
+        return result
+    return []
+
+
 def _parse_http_range(range_header: str, total_size: int) -> tuple[int, int] | None:
     raw = str(range_header or "").strip()
     if not raw or not raw.lower().startswith("bytes=") or total_size <= 0:
@@ -5073,11 +5142,15 @@ def _parse_http_range(range_header: str, total_size: int) -> tuple[int, int] | N
 
 def _public_nova_reel_job(job):
     public = dict(job or {})
-    public["preview_url"] = (
-        f"/api/video-jobs/{urllib.parse.quote(str(public.get('id') or ''), safe='')}/video"
-        if public.get("id") and public.get("video_s3_uri")
-        else ""
-    )
+    if public.get("id") and public.get("video_s3_uri"):
+        video_id = urllib.parse.quote(str(public.get("id") or ""), safe="")
+        version = urllib.parse.quote(str(public.get("updated_at") or public.get("created_at") or ""), safe="")
+        suffix = f"?v={version}" if version else ""
+        public["preview_url"] = f"/api/video-jobs/{video_id}/video{suffix}"
+        public["download_url"] = f"/api/video-jobs/{video_id}/video?download=1" + (f"&v={version}" if version else "")
+    else:
+        public["preview_url"] = ""
+        public["download_url"] = ""
     return public
 
 
@@ -6810,11 +6883,12 @@ def storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1, shot
 
 
 @app.get("/api/video-jobs/{video_job_id}/video", dependencies=[Depends(_verify_access)])
-def video_job_video(video_job_id: str, request: Request):
+def video_job_video(video_job_id: str, request: Request, download: bool = False):
     job = _video_job_by_id(video_job_id)
     if not job or not job.get("video_s3_uri"):
         raise HTTPException(status_code=404, detail="Video not found.")
-    bucket, key = _parse_s3_uri(job.get("video_s3_uri", ""))
+    resolved_s3_uri = _resolve_video_s3_uri(job)
+    bucket, key = _parse_s3_uri(resolved_s3_uri)
     if not bucket or not key:
         raise HTTPException(status_code=404, detail="Video not found.")
     try:
@@ -6822,10 +6896,12 @@ def video_job_video(video_job_id: str, request: Request):
         head = client.head_object(Bucket=bucket, Key=key)
         total_size = int(head.get("ContentLength") or 0)
         range_tuple = _parse_http_range(request.headers.get("range", ""), total_size)
+        filename = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{video_job_id}.mp4").strip("-") or "generated-video.mp4"
+        disposition = "attachment" if download else "inline"
         headers = {
             "Accept-Ranges": "bytes",
-            "Cache-Control": "private, max-age=300",
-            "Content-Disposition": f'inline; filename="{video_job_id}.mp4"',
+            "Cache-Control": "private, max-age=60",
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
         }
         if range_tuple:
             start, end = range_tuple
