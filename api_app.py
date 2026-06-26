@@ -2212,6 +2212,34 @@ def _content_contains_any(text: str, terms: list[str]) -> bool:
     return any(str(term or "").lower() in lower for term in terms if str(term or "").strip())
 
 
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _latin_letter_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z]", str(text or "")))
+
+
+def _cjk_count(text: str) -> int:
+    return len(re.findall(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _mostly_english(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    latin = _latin_letter_count(value)
+    cjk = _cjk_count(value)
+    return latin >= 18 and latin > cjk * 2
+
+
+def _banned_structure_label_pattern():
+    return re.compile(
+        r"\b(?:pain[-\s]?point\s+opening|brand\s+closing|opening|closing|hook|intro|outro)\b\s*[:：-]?|^(?:开头|结尾|字幕|卖点)\s*[:：]",
+        flags=re.IGNORECASE,
+    )
+
+
 def _row_text(row) -> str:
     if hasattr(row, "to_dict"):
         values = row.to_dict().values()
@@ -2336,10 +2364,7 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
         "镜头运动&运动轨迹",
     ]
     if not body.empty:
-        banned_label_pattern = re.compile(
-            r"\b(?:pain[-\s]?point\s+opening|brand\s+closing)\b|^(?:opening|closing|hook|intro|outro)\b\s*[:：-]?|^(?:开头|结尾|字幕|卖点)\s*[:：]",
-            flags=re.IGNORECASE,
-        )
+        banned_label_pattern = _banned_structure_label_pattern()
         label_leaks = 0
         for _, row in body.iterrows():
             if any(banned_label_pattern.search(str(value or "").strip()) for value in row.tolist()):
@@ -2357,6 +2382,33 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
             blanks = sum(1 for value in body[column].tolist() if not str(value or "").strip())
             if blanks:
                 issues.append(f"机构稿字段不完整：{column} 有 {blanks} 行为空，必须逐镜头填写。")
+        english_only_columns = ["功能卖点（英文）", "旁白（英文）", "字幕-显示卖点名及描述（英文）"]
+        for column in english_only_columns:
+            cjk_rows = sum(1 for value in body[column].tolist() if _contains_cjk(value))
+            if cjk_rows:
+                issues.append(f"英文字段违规：{column} 有 {cjk_rows} 行包含中文或中文制作说明，必须改成纯英文。")
+        chinese_execution_columns = ["画面示意&表现手法", "镜头运动&运动轨迹"]
+        for column in chinese_execution_columns:
+            english_rows = sum(1 for value in body[column].tolist() if _mostly_english(value))
+            if english_rows:
+                issues.append(f"字段错位：{column} 有 {english_rows} 行主要是英文文案，必须改回中文制作执行说明。")
+        feature_names = [_clean_prompt_value(item.get("name")) for item in (features or []) if _clean_prompt_value(item.get("name"))]
+        feature_name_lowers = [name.lower() for name in feature_names]
+        invalid_feature_rows = 0
+        for value in body["功能卖点（英文）"].tolist():
+            text = str(value or "").strip()
+            if not text:
+                continue
+            if _contains_cjk(text) or len(text) > 80 or banned_label_pattern.search(text):
+                invalid_feature_rows += 1
+                continue
+            lower = text.lower()
+            if feature_name_lowers and not any(name in lower or lower in name for name in feature_name_lowers):
+                invalid_feature_rows += 1
+        if invalid_feature_rows:
+            issues.append(
+                f"功能卖点（英文）字段不合规：{invalid_feature_rows} 行不是卖点库 Feature Name 原文或真实英文短语，疑似把画面说明/结构标签写进了卖点列。"
+            )
         generic_pattern = re.compile(r"^(展示|突出|呈现)?\s*(产品|功能|卖点|效果)?\s*(特写|展示|介绍)?$", flags=re.IGNORECASE)
         generic_terms = re.compile(r"展示产品功能|展示功能|突出卖点|产品特写|功能展示|卖点展示")
         generic_rows = 0
@@ -2554,6 +2606,31 @@ def _parse_md_table_to_df(table_lines):
     body = rows[2:] if len(rows) >= 3 else []
     normalized = []
     for row in body:
+        if header == TABLE_COLUMNS and len(row) > len(header):
+            segment = row[0]
+            duration = row[-1]
+            middle = row[1:-1]
+            feature_parts = [middle.pop(0)] if middle else [""]
+            def _looks_like_feature_pipe_part(value: str) -> bool:
+                text = str(value or "").strip()
+                if not text or _contains_cjk(text) or len(text) > 80:
+                    return False
+                words = re.findall(r"[A-Za-z0-9-]+", text)
+                if not words or len(words) > 6:
+                    return False
+                if re.search(r"\b(Function|Capacity|Technology|Coating|Menu|Menus|Glass|Power|Defrost|Combo|Air|Ceramic|Dimmed|Heating|Grill|Preset)\b", text):
+                    return True
+                if re.search(r"\d", text):
+                    return True
+                return sum(1 for word in words if word[:1].isupper()) >= max(1, len(words) - 1)
+
+            while len(middle) > 4 and _looks_like_feature_pipe_part(middle[0]):
+                feature_parts.append(middle.pop(0))
+            if len(middle) > 4:
+                middle = middle[:3] + ["｜".join(part.strip() for part in middle[3:] if part.strip())]
+            while len(middle) < 4:
+                middle.append("")
+            row = [segment, "｜".join(part.strip() for part in feature_parts if part.strip()), *middle[:4], duration]
         if len(row) < len(header):
             row = row + [""] * (len(header) - len(row))
         if len(row) > len(header):
@@ -2611,6 +2688,118 @@ def _parse_md_table_to_df(table_lines):
         if column not in df.columns:
             df[column] = ""
     return df[TABLE_COLUMNS]
+
+
+def _markdown_escape_cell(value) -> str:
+    text = str(value or "").replace("\n", " ").replace("\r", " ").strip()
+    return re.sub(r"\s+", " ", text).replace("|", "｜")
+
+
+def _df_to_script_markdown(df: pd.DataFrame) -> str:
+    rows = [TABLE_HEADER_LINE, TABLE_SEPARATOR_LINE]
+    if df.empty:
+        return "\n".join(rows)
+    for _, row in df.iterrows():
+        rows.append("| " + " | ".join(_markdown_escape_cell(row.get(column, "")) for column in TABLE_COLUMNS) + " |")
+    return "\n".join(rows)
+
+
+def _feature_match_for_row(row_text: str, features: list[dict]) -> dict | None:
+    text = str(row_text or "").lower()
+    best = None
+    best_score = 0
+    for feature in features or []:
+        name = _clean_prompt_value(feature.get("name"))
+        tagline = _clean_prompt_value(feature.get("tagline"))
+        description = _clean_prompt_value(feature.get("description"))
+        candidates = [name, tagline]
+        candidates.extend(word for word in re.split(r"[^A-Za-z0-9-]+", description) if len(word) >= 5)
+        score = sum(1 for item in candidates if item and item.lower() in text)
+        if name and name.lower() in text:
+            score += 4
+        if score > best_score:
+            best = feature
+            best_score = score
+    return best if best_score else None
+
+
+def _english_sentence_from_feature(feature: dict | None, *, subtitle: bool = False, closing: bool = False) -> str:
+    if closing:
+        return "Hisense Designed to Ease, Crafted to Cheer."
+    if not feature:
+        return "Make everyday cooking easier with Hisense."
+    name = _clean_prompt_value(feature.get("name"))
+    tagline = _clean_prompt_value(feature.get("tagline"))
+    description = _clean_prompt_value(feature.get("description"))
+    if subtitle:
+        if name and tagline:
+            return f"{name}: {tagline}"
+        return tagline or name or "Hisense Designed to Ease, Crafted to Cheer."
+    if description:
+        first = re.split(r"(?<=[.!?])\s+", description.strip())[0].strip()
+        if first:
+            return first
+    return tagline or (f"With {name}, everyday use feels simpler." if name else "Make everyday cooking easier with Hisense.")
+
+
+def _normalize_script_table_content(content: str, req: GenerateRequest, features: list[dict]) -> str:
+    table_lines, _ = _extract_first_md_table(_strip_overall_video_prompt_sections(content))
+    df = _parse_md_table_to_df(table_lines)
+    if df.empty:
+        return content.strip()
+    body = _script_body_rows(df)
+    total_index = None
+    if len(body) < len(df):
+        total_index = df.drop(body.index, errors="ignore").index[-1]
+    banned = _banned_structure_label_pattern()
+    feature_names = [_clean_prompt_value(item.get("name")) for item in features or [] if _clean_prompt_value(item.get("name"))]
+    valid_feature_lowers = [name.lower() for name in feature_names]
+
+    for index, row in body.iterrows():
+        row_text_value = _row_text(row)
+        matched_feature = _feature_match_for_row(row_text_value, features)
+        matched_name = _clean_prompt_value((matched_feature or {}).get("name"))
+        is_closing = index == body.index[-1] or "收尾" in str(row.get("镜头分段", "")) or "品牌" in row_text_value
+
+        feature_cell = str(row.get("功能卖点（英文）", "") or "").strip()
+        feature_lower = feature_cell.lower()
+        feature_invalid = (
+            _contains_cjk(feature_cell)
+            or len(feature_cell) > 80
+            or bool(banned.search(feature_cell))
+            or (valid_feature_lowers and feature_cell and not any(name in feature_lower or feature_lower in name for name in valid_feature_lowers))
+        )
+        if feature_invalid:
+            df.at[index, "功能卖点（英文）"] = matched_name if matched_name else (str(req.model or "").strip() if is_closing else "")
+
+        for column, subtitle in [("旁白（英文）", False), ("字幕-显示卖点名及描述（英文）", True)]:
+            value = str(row.get(column, "") or "").strip()
+            if _contains_cjk(value) or banned.search(value) or not _latin_letter_count(value):
+                df.at[index, column] = _english_sentence_from_feature(matched_feature, subtitle=subtitle, closing=is_closing)
+            else:
+                df.at[index, column] = banned.sub("", value).strip(" ：:-")
+
+        visual = str(row.get("画面示意&表现手法", "") or "").strip()
+        if _mostly_english(visual) or not visual:
+            object_hint = matched_name or str(req.model or "产品")
+            df.at[index, "画面示意&表现手法"] = (
+                f"产品居中可见，手部完成{object_hint}相关操作，台面、食材或容器细节清晰，屏幕反馈与结果状态同步呈现"
+            )
+        movement = str(row.get("镜头运动&运动轨迹", "") or "").strip()
+        if _mostly_english(movement) or not movement:
+            df.at[index, "镜头运动&运动轨迹"] = "近景特写（CU）｜推进至产品操作区域｜切到结果细节"
+
+    if total_index is None:
+        expected = int(req.expected_duration or 0)
+        df.loc[len(df)] = ["总时长", "", "", "", "", "", f"{expected}秒" if expected else ""]
+    else:
+        df.at[total_index, "镜头分段"] = "总时长"
+        if not _duration_seconds(df.at[total_index, "时长"]):
+            df.at[total_index, "时长"] = f"{int(req.expected_duration or 0)}秒"
+        for column in TABLE_COLUMNS[1:-1]:
+            df.at[total_index, column] = ""
+
+    return _df_to_script_markdown(df[TABLE_COLUMNS])
 
 
 SCRIPT_DIRECTIONS = (
@@ -4654,13 +4843,14 @@ def _repair_to_expected_table(
 4. 字段必须保持为：{", ".join(TABLE_COLUMNS)}
 5. 最后一行必须是“总时长”统计；“镜头分段”列写“总时长”，“时长”列写总秒数。
 6. 只输出表格，不要输出整段 AI 视频生成 Prompt、Negative Prompt、Recommended Settings 或解释。
-7. 旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是英文，其余列以中文为主。
-8. 不要编造产品卖点；功能卖点（英文）列必须优先使用卖点库 Feature Name；没有直接功能卖点的开场/收尾行该列留空或写真实产品/场景短语。
+7. 旁白（英文）和字幕-显示卖点名及描述（英文）两列必须是纯英文句子，不能出现中文、字段名、括号前缀或制作说明；画面示意&表现手法、镜头运动&运动轨迹必须是中文制作执行说明，不能写成英文旁白/字幕。
+8. 功能卖点（英文）列只能写卖点库 Feature Name 原文、多个 Feature Name 的英文组合，或开场/收尾所需的真实英文产品/场景短语；严禁写中文、长段画面描述、Pain-point opening、Brand closing、Opening、Closing 等结构标签。
 9. 少人露出：只允许手部、手臂、背影、越肩视角或生活痕迹，产品和被处理物品必须是主视觉。
 10. 必须按外部机构 AI 视频口令稿风格修复：镜头分段参考样例“镜头”字段，写成“时间段 + 具体动作 + 括号内阶段/卖点证据”；画面示意&表现手法合并画面元素、动作、道具和故事推进；镜头运动&运动轨迹参考样例“镜头运动/运镜轨迹”字段，写清景别、运动路径和方向。
 11. 画面示意&表现手法必须能指导分段产品动图片段生成；镜头运动&运动轨迹必须写运动方向/路径；每行都要能通过产品图 + 分段脚本生成对应片段。
 12. 表格单元格内禁止使用英文竖线“|”；镜头分段和运动轨迹分隔统一使用中文全角“｜”或中文箭头“→”。
 13. 严禁在任何表格单元格中输出 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro、“开头：”“结尾：”“字幕：”“卖点：”等制作结构标签；发现原文里有这些词必须改写成自然成片文案或留空。
+14. 必须逐行校对列语义：功能卖点列不能承载画面说明；画面示意列不能承载英文旁白；字幕列不能承载镜头运动；同一批多方案必须使用完全一致的 7 列格式和字段语义。
 
 {direction_guidance}
 
@@ -4779,6 +4969,13 @@ def _run_generation(job_id: str):
                     repaired = _repair_to_expected_table(content, req, features, quality_issues=quality_issues, script_direction=script_direction)
                     if _has_expected_table(repaired):
                         content = _strip_overall_video_prompt_sections(repaired)
+                quality_issues = _script_quality_issues(content, req, features, script_direction=script_direction)
+                if quality_issues:
+                    _update_job(job_id, progress=int((i / total) * 80) + 26, current_step=f"校准方案 {i + 1} 的字段格式和语言边界")
+                    repaired = _repair_to_expected_table(content, req, features, quality_issues=quality_issues, script_direction=script_direction)
+                    if _has_expected_table(repaired):
+                        content = _strip_overall_video_prompt_sections(repaired)
+                content = _normalize_script_table_content(content, req, features)
             variants.append({"name": f"方案{i + 1}", "label": script_direction, "content": content.strip()})
         _update_job(
             job_id,
