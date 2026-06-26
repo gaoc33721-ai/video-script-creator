@@ -2220,7 +2220,7 @@ def _row_text(row) -> str:
     return " ".join(str(value or "") for value in values)
 
 
-def _script_quality_issues(content: str, req: GenerateRequest, features: list[dict]) -> list[str]:
+def _script_quality_issues(content: str, req: GenerateRequest, features: list[dict], script_direction: str = "") -> list[str]:
     issues = []
     table_lines, _ = _extract_first_md_table(content)
     df = _parse_md_table_to_df(table_lines)
@@ -2368,6 +2368,39 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
         if not _content_contains_any(first_rows_text, microwave_opening_terms):
             issues.append("微波炉前两镜没有建立微波炉使用任务或食物加热场景。")
 
+    direction = script_direction or (_selected_script_directions(req)[0] if len(_selected_script_directions(req)) == 1 else "")
+    if direction == "开箱体验型" and not body.empty:
+        openbox_terms = [
+            "开箱",
+            "拆箱",
+            "包装",
+            "外箱",
+            "纸箱",
+            "封条",
+            "胶带",
+            "取出",
+            "揭膜",
+            "保护膜",
+            "泡沫",
+            "配件",
+            "说明书",
+            "摆放",
+            "安装",
+            "首次",
+            "第一次",
+            "unbox",
+            "unboxing",
+            "package",
+            "packaging",
+            "first use",
+            "setup",
+        ]
+        first_rows_text = " ".join(_row_text(row) for _, row in body.head(3).iterrows())
+        if not _content_contains_any(full_text, openbox_terms):
+            issues.append("已选择“开箱体验型”，但脚本缺少包装、拆箱、取出、揭膜、摆放安装或首次上手等开箱主线。")
+        elif not _content_contains_any(first_rows_text, openbox_terms[:14]):
+            issues.append("已选择“开箱体验型”，但前几镜没有建立包装、拆箱或取出产品的开箱开场。")
+
     for target in _feature_focus_targets(req, features):
         aliases = target.get("aliases") or [target.get("name", "")]
         focus_seconds = 0
@@ -2481,15 +2514,71 @@ def _parse_md_table_to_df(table_lines):
     return df[TABLE_COLUMNS]
 
 
-def _infer_variant_label(content: str) -> str:
-    text = str(content or "")
-    if re.search(r"痛点|烦恼|麻烦|困扰|对比|前后", text, flags=re.IGNORECASE):
-        return "偏痛点转化"
-    if re.search(r"场景|生活|家庭|厨房|日常", text, flags=re.IGNORECASE):
-        return "场景化种草"
-    if re.search(r"功能|展示|介绍|演示|操作", text, flags=re.IGNORECASE):
-        return "功能展示"
-    return "通用脚本"
+SCRIPT_DIRECTIONS = (
+    "问题解决/痛点挖掘型",
+    "产品展示/功能介绍型",
+    "开箱体验型",
+    "场景化/生活方式型",
+    "测评/对比型",
+)
+
+SCRIPT_DIRECTION_ALIASES = {
+    "偏痛点转化": "问题解决/痛点挖掘型",
+    "痛点转化": "问题解决/痛点挖掘型",
+    "痛点挖掘": "问题解决/痛点挖掘型",
+    "功能展示": "产品展示/功能介绍型",
+    "产品介绍": "产品展示/功能介绍型",
+    "开箱": "开箱体验型",
+    "开箱体验": "开箱体验型",
+    "场景化种草": "场景化/生活方式型",
+    "生活方式": "场景化/生活方式型",
+    "测评对比": "测评/对比型",
+}
+
+
+def _normalize_script_direction(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw in SCRIPT_DIRECTIONS:
+        return raw
+    compact = re.sub(r"[\s/｜|、（）()_-]+", "", raw)
+    for direction in SCRIPT_DIRECTIONS:
+        if compact == re.sub(r"[\s/｜|、（）()_-]+", "", direction):
+            return direction
+    return SCRIPT_DIRECTION_ALIASES.get(raw) or SCRIPT_DIRECTION_ALIASES.get(compact, "")
+
+
+def _selected_script_directions(req: GenerateRequest) -> list[str]:
+    directions = []
+    seen = set()
+    for item in req.video_type or []:
+        direction = _normalize_script_direction(item)
+        if direction and direction not in seen:
+            directions.append(direction)
+            seen.add(direction)
+    return directions or ["场景化/生活方式型"]
+
+
+def _script_direction_for_variant(req: GenerateRequest, variant_index: int) -> str:
+    directions = _selected_script_directions(req)
+    return directions[variant_index % len(directions)]
+
+
+def _direction_specific_guidance(direction: str) -> str:
+    if direction == "开箱体验型":
+        return """
+脚本方向执行要求（开箱体验型）：
+- 本方案必须围绕“开箱体验”展开：外包装/拆箱动作/配件或内胆初见/摆放安装/首次使用/初次效果反馈形成完整链路。
+- 每个主要镜头都要有开箱或首次上手痕迹，例如包装封条、手部拆箱、取出产品、揭膜、检查细节、摆上台面、第一次放入食材或物品。
+- 不得把整体结构写成痛点转化、场景化种草或单纯功能罗列；可以出现使用前期待和初次体验反馈，但必须服务开箱主线。
+- 方案定位、方案标签、建议视频类型如需出现，只能逐字使用“开箱体验型”，不得改写为“偏痛点转化”“痛点转化”“场景化种草”“功能展示”等自造名称。
+""".strip()
+    return f"""
+脚本方向执行要求：
+- 本方案必须且只能执行“{direction}”，不得切换为其他脚本方向。
+- 方案定位、方案标签、建议视频类型如需出现，只能逐字使用“{direction}”，不得改写为“偏痛点转化”“痛点转化”“场景化种草”“功能展示”等自造名称。
+""".strip()
 
 
 def _assets_by_ids(asset_ids: list[str]) -> list[dict]:
@@ -2590,34 +2679,60 @@ def _hotspot_context_prompt(hotspots: list[dict]) -> str:
     return "行业热点上下文（仅选择与产品和目标市场自然相关的热点使用）：\n" + "\n".join(lines)
 
 
-def _creative_playbook_for_variant(variant_index: int, req: GenerateRequest) -> str:
-    playbooks = [
-        {
-            "name": "生活痛点微剧情",
-            "hook": "从一个具体生活麻烦或尴尬瞬间切入，先让用户看到问题后果，再让产品自然进入解决。",
-            "structure": "痛点瞬间 → 产品介入 → 核心动作证据 → 结果反差 → 品牌收束",
-            "camera": "手持跟随、越肩视角、近景特写、动作匹配转场；镜头有生活现场感。",
-            "avoid": "避免开头就是产品正面棚拍，避免第一段就念完整产品名。",
-        },
-        {
-            "name": "结果先行反差证明",
-            "hook": "第一镜先给出理想结果或强反差画面，再倒回展示产品如何做到。",
-            "structure": "结果预告/Before-After → 操作触发 → 卖点证明特写 → 二次验证 → 结果定格",
-            "camera": "前后对比切、快速拉焦、遮挡转场、俯拍切细节；节奏更利落但不碎片化。",
-            "avoid": "避免平铺每个按钮和参数，避免所有镜头都停留在同一景别。",
-        },
-        {
-            "name": "社媒挑战/清单化爽点",
-            "hook": "用计时挑战、三步任务、一个小测试或连续状态变化制造观看驱动力。",
-            "structure": "挑战设定 → 连续任务推进 → 关键卖点放大 → 完成瞬间 → 品牌记忆",
-            "camera": "俯拍任务台、快慢结合、物体擦镜、声桥或节奏点切换；强调动作完成感。",
-            "avoid": "避免剧情过重或人物表演抢戏，避免只靠旁白解释卖点。",
-        },
-    ]
+def _creative_playbook_for_variant(variant_index: int, req: GenerateRequest, script_direction: str = "") -> str:
+    if script_direction == "开箱体验型":
+        playbooks = [
+            {
+                "name": "开箱初见",
+                "hook": "从包装到达、封条细节或手部拆箱动作切入，让观众先看到真实开箱过程。",
+                "structure": "外包装到达 → 拆封取出 → 配件/内胆初见 → 摆放安装 → 首次使用 → 初次效果反馈",
+                "camera": "俯拍拆箱、手部取出、推近产品细节、揭膜动作匹配转场；保持产品和包装痕迹同框。",
+                "avoid": "避免写成纯痛点解决、生活种草或功能罗列，避免第一段跳过包装和取出动作。",
+            },
+            {
+                "name": "细节检查",
+                "hook": "用揭膜、检查质感、查看内胆/接口/配件等动作建立第一次上手的可信感。",
+                "structure": "拆封细节 → 取出产品 → 关键部件检查 → 台面摆放 → 首次操作 → 效果确认",
+                "camera": "近景特写、手部跟拍、局部拉焦、包装到产品的遮挡转场；突出新机状态和首次触摸。",
+                "avoid": "避免把镜头主线改成家庭痛点、情绪反差或社媒挑战。",
+            },
+            {
+                "name": "首次使用",
+                "hook": "从刚开箱后的第一次放入食材/物品或第一次通电操作开始，呈现上手过程。",
+                "structure": "拆箱完成 → 产品就位 → 首次放入物品 → 第一次操作 → 结果验证 → 品牌收束",
+                "camera": "越肩手部视角、产品居中慢推、操作面板特写、结果前后动作匹配；保留包装/说明书作背景细节。",
+                "avoid": "避免只写成参数演示或普通厨房日常，必须能看出这是第一次开箱上手。",
+            },
+        ]
+    else:
+        playbooks = [
+            {
+                "name": "同方向生活切入",
+                "hook": "在所选脚本方向内，从一个具体生活任务或使用情境切入，让产品自然进入画面。",
+                "structure": "情境建立 → 产品介入 → 核心动作证据 → 结果确认 → 品牌收束",
+                "camera": "手持跟随、越肩视角、近景特写、动作匹配转场；镜头有生活现场感。",
+                "avoid": "避免切换成未选择的脚本方向，避免第一段就念完整产品名。",
+            },
+            {
+                "name": "同方向证据强化",
+                "hook": "第一镜先给出与所选方向一致的结果或细节悬念，再展示产品如何做到。",
+                "structure": "结果/细节预告 → 操作触发 → 卖点证明特写 → 二次验证 → 结果定格",
+                "camera": "前后对比切、快速拉焦、遮挡转场、俯拍切细节；节奏更利落但不碎片化。",
+                "avoid": "避免平铺每个按钮和参数，避免所有镜头都停留在同一景别。",
+            },
+            {
+                "name": "同方向任务推进",
+                "hook": "用三步任务、一个小测试或连续状态变化制造观看驱动力，但不改变所选方向。",
+                "structure": "任务设定 → 连续动作推进 → 关键卖点放大 → 完成瞬间 → 品牌记忆",
+                "camera": "俯拍任务台、快慢结合、物体擦镜、声桥或节奏点切换；强调动作完成感。",
+                "avoid": "避免剧情过重或人物表演抢戏，避免只靠旁白解释卖点。",
+            },
+        ]
     item = playbooks[variant_index % len(playbooks)]
     return "\n".join(
         [
             f"本方案创意打法：{item['name']}",
+            f"- 所属脚本方向：{script_direction or '按输入参数执行'}，不得改名或切换方向。",
             f"- Hook 方式：{item['hook']}",
             f"- 结构建议：{item['structure']}，最多 {MAX_SCRIPT_SEGMENTS} 段内完成。",
             f"- 镜头语言：{item['camera']}",
@@ -2629,14 +2744,15 @@ def _creative_playbook_for_variant(variant_index: int, req: GenerateRequest) -> 
 
 def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int, context_snapshot: dict | None = None) -> str:
     feature_lines = _feature_catalog_lines(features)
-    direction = req.video_type[variant_index % len(req.video_type)] if req.video_type else "场景化/生活方式型"
+    direction = _script_direction_for_variant(req, variant_index)
     variant_no = variant_index + 1
     context_snapshot = context_snapshot or {"competitor_assets": [], "hotspots": []}
     competitor_context = _competitor_context_prompt(context_snapshot.get("competitor_assets") or [])
     hotspot_context = _hotspot_context_prompt(context_snapshot.get("hotspots") or [])
-    creative_playbook = _creative_playbook_for_variant(variant_index, req)
+    creative_playbook = _creative_playbook_for_variant(variant_index, req, direction)
     duration_guidance = _duration_structure_guidance(req.expected_duration, req, features)
     quality_guidance = _script_quality_guidance(req, features)
+    direction_guidance = _direction_specific_guidance(direction)
     return f"""
 请生成【方案{variant_no}】海外电商短视频脚本（只输出这一套，不要输出其他方案标题）。
 - 必须先输出一张符合系统要求的 Markdown 表格（7列，行内时长为秒，最后一行为总时长）。
@@ -2651,7 +2767,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 画面示意&表现手法必须像制作口令：包含主体比例、前景/中景/背景、产品位置、道具、被处理物品、手部动作和光影；严禁只写“产品特写”“功能展示”“见示意图”。
 - 镜头运动&运动轨迹必须参考上传样例的“镜头运动/运镜轨迹”字段：写运动路径和方向，例如“近景特写（CU）｜推进至面板｜手指按键特写”“横移跟拍（左→右）｜手部动作入画”“俯拍切到腔体｜红点锁定食物中心”。不得只写“特写/俯拍/全景”。
 - 功能卖点（英文）列必须优先逐字使用卖点库 Feature Name；没有直接卖点的开场/收尾行该列留空，或写真实产品/场景短语，严禁写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。
-- 先在内部确定本方案的创意策略，但不要输出策略过程：方案1偏生活痛点开场，方案2偏社媒种草/情绪反差，方案3偏快节奏功能挑战；如果只生成1-2套，也必须让每套的产品切入角度、被处理物品状态和镜头组织不同。
+- 先在内部确定本方案的创意策略，但不要输出策略过程；多方案只允许在所选脚本方向内改变开场 hook、产品切入角度、被处理物品状态和镜头组织，不得切换成未选择的脚本方向。
 - 默认拍摄策略：产品/物品展示优先，淡化人物角色；除非补充要求明确需要人物剧情，不要设计专业模特、正脸表演或多人关系。
 - 人物处理：可用手部/手臂/背影/越肩视角完成开门、按键、取放、摆放、擦拭等操作；不要让人物成为画面主角。
 - 场景优先级：厨房电器优先写“产品 + 食材/餐具/台面/蒸汽/成品状态”的互动；冰箱/洗衣机/洗碗机等家电优先写“产品内部空间 + 被处理物品 + 使用前后结果”的可视化过程。
@@ -2660,6 +2776,8 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 标签泄漏强约束：任何表格单元格都不得出现 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro、“开头：”“结尾：”“字幕：”“卖点：”等制作结构标签；这些只用于内部构思，不能进入成片文案。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
+
+{direction_guidance}
 
 {creative_playbook}
 
@@ -4318,10 +4436,18 @@ def _public_nova_canvas_job(job):
     return public
 
 
-def _repair_to_expected_table(original_content: str, req: GenerateRequest, features: list[dict], quality_issues: list[str] | None = None) -> str:
+def _repair_to_expected_table(
+    original_content: str,
+    req: GenerateRequest,
+    features: list[dict],
+    quality_issues: list[str] | None = None,
+    script_direction: str = "",
+) -> str:
     feature_lines = _feature_catalog_lines(features)
     duration_guidance = _duration_structure_guidance(req.expected_duration, req, features)
     quality_guidance = _script_quality_guidance(req, features)
+    direction = script_direction or (_selected_script_directions(req)[0] if len(_selected_script_directions(req)) == 1 else "场景化/生活方式型")
+    direction_guidance = _direction_specific_guidance(direction)
     issue_block = ""
     if quality_issues:
         issue_block = "本次必须修复的质量问题：\n" + "\n".join(f"- {item}" for item in quality_issues)
@@ -4345,6 +4471,8 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 12. 表格单元格内禁止使用英文竖线“|”；镜头分段和运动轨迹分隔统一使用中文全角“｜”或中文箭头“→”。
 13. 严禁在任何表格单元格中输出 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro、“开头：”“结尾：”“字幕：”“卖点：”等制作结构标签；发现原文里有这些词必须改写成自然成片文案或留空。
 
+{direction_guidance}
+
 {duration_guidance}
 
 {quality_guidance}
@@ -4355,7 +4483,7 @@ def _repair_to_expected_table(original_content: str, req: GenerateRequest, featu
 - 产品品类：{req.category}
 - 产品型号：{req.model}
 - 期望时长：{req.expected_duration} 秒
-- 脚本方向：{" / ".join(req.video_type or [])}
+- 脚本方向：{direction}
 - 核心卖点：
 {feature_lines}
 
@@ -4432,6 +4560,7 @@ def _run_generation(job_id: str):
         _update_job(job_id, status="running", progress=8, current_step="已读取产品卖点")
         total = max(1, req.variant_count)
         for i in range(total):
+            script_direction = _script_direction_for_variant(req, i)
             prompt = _build_prompt(req, features, i, context_snapshot=context_snapshot)
             _update_job(job_id, progress=int((i / total) * 80) + 10, current_step=f"生成方案 {i + 1}/{total}")
             content = _strip_overall_video_prompt_sections(_strip_code_fences(_call_bedrock(prompt)))
@@ -4444,22 +4573,22 @@ def _run_generation(job_id: str):
                     content = retry_content
             if not _has_expected_table(content):
                 _update_job(job_id, progress=int((i / total) * 80) + 15, current_step=f"修复方案 {i + 1} 为表格格式")
-                repaired = _repair_to_expected_table(content, req, features)
+                repaired = _repair_to_expected_table(content, req, features, script_direction=script_direction)
                 if _has_expected_table(repaired):
                     content = _strip_overall_video_prompt_sections(repaired)
             if _has_expected_table(content) and not _has_rich_duration_structure(content, req.expected_duration):
                 _update_job(job_id, progress=int((i / total) * 80) + 18, current_step=f"细化方案 {i + 1} 的分段和时长")
-                repaired = _repair_to_expected_table(content, req, features)
+                repaired = _repair_to_expected_table(content, req, features, script_direction=script_direction)
                 if _has_expected_table(repaired):
                     content = _strip_overall_video_prompt_sections(repaired)
             if _has_expected_table(content):
-                quality_issues = _script_quality_issues(content, req, features)
+                quality_issues = _script_quality_issues(content, req, features, script_direction=script_direction)
                 if quality_issues:
                     _update_job(job_id, progress=int((i / total) * 80) + 22, current_step=f"优化方案 {i + 1} 的品类场景和卖点表达")
-                    repaired = _repair_to_expected_table(content, req, features, quality_issues=quality_issues)
+                    repaired = _repair_to_expected_table(content, req, features, quality_issues=quality_issues, script_direction=script_direction)
                     if _has_expected_table(repaired):
                         content = _strip_overall_video_prompt_sections(repaired)
-            variants.append({"name": f"方案{i + 1}", "label": _infer_variant_label(content), "content": content.strip()})
+            variants.append({"name": f"方案{i + 1}", "label": script_direction, "content": content.strip()})
         _update_job(
             job_id,
             status="succeeded",
