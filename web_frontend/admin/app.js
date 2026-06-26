@@ -2435,31 +2435,41 @@ function parseFirstMarkdownTable(markdown) {
 
 function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
   const categoryHint = storyboardCategoryHint(category, feature, method, subtitle);
-  return [
-    "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
-    "Follow the storyboard exactly; do not invent another product category, room, or action.",
-    "Single-product rule: show exactly one physical Hisense appliance unit; no duplicate product, no second unit, no side-by-side appliances, no showroom lineup, and no background appliance of the same category.",
-    "Brand text rule: any readable logo or brand text must be exactly 'Hisense' with complete, sharp Latin letters; no misspelled, partial, garbled, or fake brand text.",
-    "Action/result priority: if the shot mentions hands, taking items out, clean clothes, fluffy laundry, food results, racks, steam, or completion results, those objects/actions must be the dominant visual subject; the appliance may be secondary or partial.",
-    "Never output an appliance-only front product shot unless the shot specifically asks for exterior, control-panel, display, button, or product-detail close-up.",
-    "Reference image rule: use the uploaded product image only for product identity, color, finish, door outline, handle, buttons, display/control-panel layout, logo position, and proportions.",
-    "Scene rewrite rule: create a new storyboard scene from the prompt; do not copy the uploaded image's room, closet, cabinet layout, lighting, crop, or camera angle.",
-    category ? `Product category from brief: ${category}.` : "",
-    categoryHint ? `Product category in English: ${categoryHint.subject}.` : "",
-    categoryHint ? `Required setting: ${categoryHint.setting}.` : "",
-    categoryHint ? `Must include: ${categoryHint.must}.` : "",
-    categoryHint ? `Avoid: ${categoryHint.negative}.` : "",
-    model ? `Product model from brief: Hisense ${model}.` : "",
-    `Shot: ${segment}.`,
-    feature ? `Product benefit: ${feature}.` : "",
-    method ? `Visual action: ${method}.` : "",
-    angle ? `Camera angle: ${angle}.` : "",
-    movement ? `Camera movement: ${movement}.` : "",
-    subtitle ? `Keep the product message aligned with: ${subtitle}.` : "",
-    "The selected product must be the main subject with realistic product proportions, straight handles, sharp buttons, plausible panel geometry, soft commercial lighting, no competitor brands, no distorted logo, no misspelled Hisense logo, no text overlay unless required by the script.",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const subjectParts = [
+    "Subject: exactly one physical Hisense appliance as the core subject",
+    model ? `model Hisense ${model}` : "Hisense product model from the brief",
+    categoryHint ? categoryHint.subject : (category ? `product category: ${category}` : "the selected product category"),
+    "preserve the uploaded product image only for identity, color, finish, door outline, handle, buttons, display/control-panel layout, logo position, and proportions",
+    "no duplicate unit, no side-by-side appliances, no showroom lineup, no same-category background appliance",
+  ];
+  const actionParts = [
+    `Action/Pose: ${segment}`,
+    feature ? `highlight product benefit: ${feature}` : "",
+    method ? `visible action/result: ${method}` : "",
+    angle ? `camera angle: ${angle}` : "",
+    movement ? `camera movement: ${movement}` : "",
+    subtitle ? `message cue: ${subtitle}` : "",
+    "make hands, food, steam, racks, clothes, controls, door/cavity interaction, or completion result dominant when the storyboard mentions them",
+  ];
+  const backgroundParts = [
+    "Background: create a new real-life storyboard scene from the row",
+    categoryHint ? categoryHint.setting : "a clean home environment suitable for the product category",
+    categoryHint ? `must include: ${categoryHint.must}` : "",
+    "do not copy the uploaded image's room, closet, cabinet layout, lighting, crop, or camera angle",
+  ];
+  const lightingParts = [
+    "Lighting/Color: clean commercial soft daylight, realistic natural color, product contours clearly readable",
+    "balanced e-commerce lighting with subtle rim light and no harsh glare",
+  ];
+  const styleParts = [
+    "Style/Rendering: premium 16:9 photorealistic e-commerce storyboard reference image, high detail, sharp physically plausible appliance geometry",
+    "complete sharp Latin 'Hisense' logo only when readable; no misspelled, partial, garbled, or fake brand text",
+    "no text overlay, no watermark, no discount badge, no competitor brands, no wrong product category",
+    categoryHint ? `avoid: ${categoryHint.negative}` : "",
+  ];
+  return [subjectParts, actionParts, backgroundParts, lightingParts, styleParts]
+    .map((parts) => parts.filter(Boolean).join("; ") + ".")
+    .join("\n");
 }
 
 function storyboardCategoryHint(category, feature, method, subtitle) {

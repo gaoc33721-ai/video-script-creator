@@ -3333,40 +3333,41 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
     focus = _storyboard_visual_focus(raw_prompt, category=category, model=model)
     action_constraints = _storyboard_action_constraints(raw_prompt)
     scene_instruction = focus["constraint"] if str(reference_policy or "").startswith("skip-") else context["must"]
-    lines = [
-        "Create one premium 16:9 photorealistic e-commerce storyboard still.",
-        "Hard requirement: depict the exact storyboard row below; do not substitute another product, room, or action.",
-        f"Critical visual target: {focus['primary']}.",
-        f"Required composition: {focus['composition']}",
-        f"Product context: {context['subject']} in {context['setting']}.",
-        f"Shot number: {int(shot_index) + 1}.",
-        f"Mandatory primary scene: {scene_instruction}",
-        f"Camera and action constraints: {action_constraints}" if action_constraints else "",
-        _SINGLE_PRODUCT_RULE,
-        _HISENSE_BRAND_RULE,
-        (
-            "If a product reference image is supplied, use it only as a loose reference for product identity, "
-            "silhouette, color, finish, door outline, handle/buttons, logo placement, and control-panel layout. "
-            "Do not copy the reference image's white background, catalog packshot angle, room, closet, cabinet "
-            "layout, lighting, crop, sticker/badge, or composition."
-        )
+    reference_text = (
+        "preserve the supplied reference only for product identity, silhouette, color, finish, door outline, "
+        "handle/buttons, logo placement, control-panel layout, cavity/drum shape, and proportions"
         if not str(reference_policy or "").startswith("skip-")
-        else "No product reference image is used for this action/result shot; obey the storyboard row instead of making a product packshot.",
+        else "no product reference image is used; obey the storyboard action/result instead of making a product packshot"
+    )
+    lines = [
         (
-            "Scene priority: the storyboard action, environment, props, food/container, hands, door/cavity/control "
-            "interaction, and camera angle from the row must override the reference image composition."
+            "Subject: exactly one physical Hisense appliance as the core object; "
+            f"{context['subject']}; model Hisense {model or 'from brief'}; {reference_text}; "
+            "no duplicate product, no second unit, no side-by-side appliances, no showroom lineup, "
+            "no same-category background appliance."
         ),
         (
-            "Product-detail priority: keep handles, buttons, knobs, display area, door seams, drum/cavity shape, "
-            "and panel geometry straight, sharp, and physically plausible; do not invent extra controls."
+            "Action/Pose: depict the exact storyboard row before any generic product pose; "
+            f"shot {int(shot_index) + 1}; critical visual target: {focus['primary']}; "
+            f"required composition: {focus['composition']}; primary scene: {scene_instruction}; "
+            f"camera/action constraints: {action_constraints or 'follow the storyboard camera and action cues'}; "
+            f"storyboard details: {raw_prompt}."
         ),
-        "The selected product must remain recognizable inside a new real-life scene, not as an isolated product cutout.",
-        f"Storyboard details to preserve: {raw_prompt}",
-        f"Do not show: {context['negative']}; {focus['negative']}.",
         (
-            "Visual style: clean commercial lighting, realistic product proportions, storyboard-action-focused composition, "
-            "natural colors, no UI mockups, no text overlay, no watermarks, no discount badges, no round stickers, "
-            "no competitor brands, no wrong product category."
+            "Background: build a new real-life scene from the storyboard row; "
+            f"setting: {context['setting']}; do not copy the reference image room, closet, cabinet layout, "
+            "white background, catalog packshot angle, crop, sticker/badge, lighting, or camera angle."
+        ),
+        (
+            "Lighting/Color: clean commercial soft daylight, realistic natural colors, readable product contours, "
+            "subtle rim light, balanced exposure, no harsh glare, no UI mockups."
+        ),
+        (
+            "Style/Rendering: premium 16:9 photorealistic e-commerce storyboard still, high detail, sharp and "
+            "physically plausible handles, buttons, knobs, display area, door seams, drum/cavity shape, and panel geometry; "
+            "readable logo text must be exactly 'Hisense' with complete sharp letters; no text overlay, no watermark, "
+            "no discount badge, no round sticker, no competitor brands, no wrong product category; "
+            f"negative: {context['negative']}; {focus['negative']}; {_SINGLE_PRODUCT_NEGATIVE}; {_HISENSE_BRAND_NEGATIVE}."
         ),
     ]
     return "\n".join(line for line in lines if line).strip()[:3000]
@@ -3555,41 +3556,27 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
     detail = re.sub(r"\s+", " ", str(raw_prompt or "")).strip()
     for boilerplate in (
         "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
+        "Premium photorealistic 16:9 e-commerce storyboard still.",
         "Follow the storyboard exactly; do not invent another product category, room, or action.",
     ):
         detail = detail.replace(boilerplate, "").strip()
-    detail = re.sub(r"\bSingle-product rule:.*?(?=(?:Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
-    detail = re.sub(r"\bBrand text rule:.*?(?=(?:Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
+    detail = re.sub(r"\b(?:Single-product|One-product) rule:.*?(?=(?:Subject:|Action/Pose:|Background:|Lighting/Color:|Style/Rendering:|Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
+    detail = re.sub(r"\bBrand (?:text )?rule:.*?(?=(?:Subject:|Action/Pose:|Background:|Lighting/Color:|Style/Rendering:|Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
     detail = re.sub(r"\bThe selected product must be the main subject.*$", "", detail).strip()
-    detail = detail[:500].strip()
+    detail = detail[:520].strip()
+    reference_text = (
+        "preserve reference only for appliance identity, color, finish, door outline, handle/control-panel, buttons, knobs, display, cavity/drum shape, logo position, and proportions"
+        if not str(reference_policy or "").startswith("skip-")
+        else "no product reference image is used; obey the storyboard action/result instead of making a packshot"
+    )
     lines = [
-        "Premium photorealistic 16:9 e-commerce storyboard still.",
-        f"Critical visual target: {focus['primary']}.",
-        f"Composition: {focus['composition']}",
-        f"Product context: {context['subject']}.",
-        f"Setting: {context['setting']}.",
-        f"Shot {int(shot_index) + 1}: follow storyboard exactly.",
-        f"Scene: {scene_instruction}",
-        f"Camera constraints: {action_constraints}" if action_constraints else "",
-        f"Storyboard details: {detail}" if detail else "",
-        "One-product rule: exactly one physical Hisense appliance; no duplicate, second unit, side-by-side appliance, product lineup, or background same-category appliance.",
-        "Brand rule: readable logo text must be exactly 'Hisense' with complete sharp letters; no misspelled, partial, garbled, or fake brand text. If unsure, leave the appliance badge blank.",
-        (
-            "Reference image: preserve appliance identity, color, finish, door outline, handle/control-panel, buttons, knobs, display, cavity/drum shape, logo position, and proportions."
-            if not str(reference_policy or "").startswith("skip-")
-            else "No product reference image is used for this action/result shot; obey the storyboard row instead of making a product packshot."
-        ),
-        (
-            "Use the reference only for product design, not for the final scene. Build a new scene from the storyboard row; do not copy the reference room, closet, cabinet layout, lighting, crop, or camera angle."
-            if not str(reference_policy or "").startswith("skip-")
-            else ""
-        ),
-        "Product details must stay straight, sharp, and physically plausible; no warped handles, melted buttons, extra knobs, or distorted display panels.",
-        "Do not change black appliances into white or silver; do not replace the referenced design.",
-        "Commercial soft daylight, realistic proportions, clean home scene, storyboard-action-focused composition.",
-        f"Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, {focus['negative']}, text overlay, watermark, discount badge, competitor brands, distorted logo, wrong product category.",
+        f"Subject: exactly one physical Hisense appliance; {context['subject']}; model Hisense {model or 'from brief'}; {reference_text}; no duplicate, second unit, side-by-side appliance, product lineup, or background same-category appliance.",
+        f"Action/Pose: shot {int(shot_index) + 1}; critical visual target: {focus['primary']}; composition: {focus['composition']}; scene action/result: {scene_instruction}; camera/action constraints: {action_constraints or 'follow storyboard cues'}; storyboard details: {detail}.",
+        f"Background: {context['setting']}; create a new real-life scene from the storyboard row; do not copy the reference room, closet, cabinet layout, white background, lighting, crop, or camera angle.",
+        "Lighting/Color: clean commercial soft daylight, realistic natural colors, readable contours, subtle rim light, balanced exposure, no harsh glare.",
+        f"Style/Rendering: premium 16:9 photorealistic e-commerce storyboard still, high detail, sharp physically plausible appliance geometry, complete sharp 'Hisense' logo only if readable, no text overlay, no watermark, no discount badge, no competitor brands, no wrong product category. Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, {focus['negative']}.",
     ]
-    prompt = " ".join(line for line in lines if line)
+    prompt = "\n".join(line for line in lines if line)
     return prompt[:LIBLIBAI_MAX_PROMPT_LENGTH].strip()
 
 
