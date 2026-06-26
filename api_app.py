@@ -439,7 +439,7 @@ async def _verify_access(request: Request, authorization: str = Header(default="
     """Dependency that gates platform APIs behind the shared access password."""
     if not _access_control_active():
         return
-    token = authorization
+    token = authorization or request.cookies.get(_API_ACCESS_COOKIE_NAME, "")
     if not _is_valid_access_token(token):
         raise HTTPException(status_code=401, detail="访问密码不正确或已过期。")
 # --- Security: upload size limit ---
@@ -5140,14 +5140,44 @@ def _parse_http_range(range_header: str, total_size: int) -> tuple[int, int] | N
         return None
 
 
+def _media_access_token(video_job_id: str, expires: int) -> str:
+    secret = _current_access_password()
+    if not secret:
+        return ""
+    message = f"{video_job_id}:{int(expires)}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _has_valid_media_access(request: Request, video_job_id: str, token: str = "", expires: int = 0) -> bool:
+    if not _access_control_active():
+        return True
+    authorization = request.headers.get("authorization", "")
+    cookie_token = request.cookies.get(_API_ACCESS_COOKIE_NAME, "")
+    if _is_valid_access_token(authorization) or _is_valid_access_token(cookie_token):
+        return True
+    try:
+        expiry = int(expires or 0)
+    except Exception:
+        expiry = 0
+    if expiry < int(time.time()):
+        return False
+    expected = _media_access_token(video_job_id, expiry)
+    return bool(expected and token and hmac.compare_digest(str(token), expected))
+
+
 def _public_nova_reel_job(job):
     public = dict(job or {})
     if public.get("id") and public.get("video_s3_uri"):
         video_id = urllib.parse.quote(str(public.get("id") or ""), safe="")
         version = urllib.parse.quote(str(public.get("updated_at") or public.get("created_at") or ""), safe="")
-        suffix = f"?v={version}" if version else ""
+        expires = int(time.time()) + 60 * 60 * 12
+        media_token = _media_access_token(str(public.get("id") or ""), expires)
+        token_suffix = f"expires={expires}&token={urllib.parse.quote(media_token, safe='')}" if media_token else ""
+        suffix_parts = [item for item in (f"v={version}" if version else "", token_suffix) if item]
+        suffix = f"?{'&'.join(suffix_parts)}" if suffix_parts else ""
         public["preview_url"] = f"/api/video-jobs/{video_id}/video{suffix}"
-        public["download_url"] = f"/api/video-jobs/{video_id}/video?download=1" + (f"&v={version}" if version else "")
+        download_parts = ["download=1", *suffix_parts]
+        public["download_url"] = f"/api/video-jobs/{video_id}/video?{'&'.join(download_parts)}"
     else:
         public["preview_url"] = ""
         public["download_url"] = ""
@@ -5876,7 +5906,14 @@ def auth_login(req: AuthLoginRequest):
     if not _is_valid_access_token(req.password):
         raise HTTPException(status_code=401, detail="访问密码不正确。")
     response = JSONResponse({"ok": True})
-    response.delete_cookie(key=_API_ACCESS_COOKIE_NAME, samesite="lax")
+    response.set_cookie(
+        key=_API_ACCESS_COOKIE_NAME,
+        value=_clean_access_token(req.password),
+        max_age=60 * 60 * 12,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
     return response
 
 
@@ -6882,8 +6919,10 @@ def storyboard_video_jobs(script_job_id: str = "", variant_index: int = -1, shot
     }
 
 
-@app.get("/api/video-jobs/{video_job_id}/video", dependencies=[Depends(_verify_access)])
-def video_job_video(video_job_id: str, request: Request, download: bool = False):
+@app.get("/api/video-jobs/{video_job_id}/video")
+def video_job_video(video_job_id: str, request: Request, download: bool = False, token: str = "", expires: int = 0):
+    if not _has_valid_media_access(request, video_job_id, token=token, expires=expires):
+        raise HTTPException(status_code=401, detail="访问密码不正确或已过期。")
     job = _video_job_by_id(video_job_id)
     if not job or not job.get("video_s3_uri"):
         raise HTTPException(status_code=404, detail="Video not found.")
