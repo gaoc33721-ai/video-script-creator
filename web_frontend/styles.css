@@ -265,7 +265,7 @@ button,
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 520px;
+  max-height: 650px;
   overflow-y: auto;
   padding-right: 4px;
 }
