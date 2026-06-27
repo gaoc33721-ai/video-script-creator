@@ -4652,7 +4652,7 @@ def _run_storyboard_image_job(
                 remote_image_url=str((provider_meta or {}).get("image_url") or ""),
                 reference_image_url=str((provider_meta or {}).get("reference_image_url") or ""),
                 image_generation_mode=str((provider_meta or {}).get("mode") or ""),
-                reference_control_type=str((provider_meta or {}).get("control_type") or ""),
+                reference_control_type=str((provider_meta or {}).get("control_type") or (provider_meta or {}).get("reference_control_type") or ""),
                 provider_warning=str((provider_meta or {}).get("fallback_error") or ""),
             )
             return
@@ -7197,7 +7197,7 @@ def nova_canvas_jobs(script_job_id: str = "", variant_index: int = -1):
         "jobs": [_public_nova_canvas_job(item) for item in jobs[:80]],
         "provider": _image_provider_name(),
         "model_id": _image_provider_model_id(),
-        "region": "" if use_local_ninegrid else NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
+        "region": NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
         "estimated_usd_per_image": NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE,
     }
 
@@ -7302,7 +7302,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "image_uri": "",
         "provider": image_provider,
         "model_id": image_model_id,
-        "region": NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
+        "region": "" if use_local_ninegrid else NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
         "external_job_id": "",
         "remote_image_url": "",
         "reference_image_url": "",
