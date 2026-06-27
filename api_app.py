@@ -9,6 +9,9 @@ import json
 import os
 import random
 import re
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -4913,6 +4916,11 @@ def _ray2_image_payload_from_shot(shot: dict | None) -> dict | None:
         raw_bytes = base64.b64decode(encoded)
         source_image = Image.open(io.BytesIO(raw_bytes))
         source_image = ImageOps.exif_transpose(source_image)
+        source_key = str((shot or {}).get("source_image_key") or "")
+        if _source_image_is_ninegrid(source_key, source_image):
+            source_image = _single_frame_from_ninegrid_image(source_image)
+            media_type = "image/jpeg"
+            image_format = "jpeg"
         width, height = source_image.size
         max_side = max(width, height)
         if max_side > 1552:
@@ -4921,15 +4929,16 @@ def _ray2_image_payload_from_shot(shot: dict | None) -> dict | None:
                 (max(1, int(width * scale)), max(1, int(height * scale))),
                 Image.LANCZOS,
             )
-            output = io.BytesIO()
-            if image_format in {"jpg", "jpeg"}:
-                resized = resized.convert("RGB")
-                resized.save(output, format="JPEG", quality=92, optimize=True)
-                media_type = "image/jpeg"
-            else:
-                resized.save(output, format="PNG", optimize=True)
-                media_type = "image/png"
-            encoded = base64.b64encode(output.getvalue()).decode("utf-8")
+            source_image = resized
+        output = io.BytesIO()
+        if image_format in {"jpg", "jpeg"}:
+            source_image = source_image.convert("RGB")
+            source_image.save(output, format="JPEG", quality=92, optimize=True)
+            media_type = "image/jpeg"
+        else:
+            source_image.save(output, format="PNG", optimize=True)
+            media_type = "image/png"
+        encoded = base64.b64encode(output.getvalue()).decode("utf-8")
     except Exception:
         pass
     return {
@@ -4940,6 +4949,51 @@ def _ray2_image_payload_from_shot(shot: dict | None) -> dict | None:
             "media_type": media_type,
         },
     }
+
+
+def _storyboard_image_job_by_key(image_key: str) -> dict | None:
+    wanted = str(image_key or "")
+    if not wanted:
+        return None
+    for item in _load_nova_canvas_jobs():
+        if str(item.get("image_key") or "") == wanted:
+            return item
+    return None
+
+
+def _source_image_is_ninegrid(source_image_key: str, image=None) -> bool:
+    job = _storyboard_image_job_by_key(source_image_key)
+    if str((job or {}).get("model_id") or "") == "local-product-ninegrid":
+        return True
+    if str((job or {}).get("reference_control_type") or "") == "pixel-composite":
+        return True
+    return False
+
+
+def _single_frame_from_ninegrid_image(image):
+    from PIL import ImageOps
+
+    image = ImageOps.exif_transpose(image).convert("RGB")
+    width, height = image.size
+    margin_x = max(0, int(width * 0.014))
+    margin_y = max(0, int(height * 0.025))
+    gap_x = max(0, int(width * 0.008))
+    gap_y = max(0, int(height * 0.014))
+    cell_w = max(1, int((width - margin_x * 2 - gap_x * 2) / 3))
+    cell_h = max(1, int((height - margin_y * 2 - gap_y * 2) / 3))
+    crop = image.crop((margin_x, margin_y, min(width, margin_x + cell_w), min(height, margin_y + cell_h)))
+    target_w, target_h = 1280, 720
+    crop_ratio = crop.width / max(1, crop.height)
+    target_ratio = target_w / target_h
+    if crop_ratio > target_ratio:
+        new_w = int(crop.height * target_ratio)
+        left = max(0, (crop.width - new_w) // 2)
+        crop = crop.crop((left, 0, left + new_w, crop.height))
+    else:
+        new_h = int(crop.width / target_ratio)
+        top = max(0, (crop.height - new_h) // 2)
+        crop = crop.crop((0, top, crop.width, top + new_h))
+    return crop.resize((target_w, target_h))
 
 
 def _build_luma_ray2_model_input(prompt: str, duration_seconds=6, image_payload: dict | None = None) -> dict:
@@ -5294,6 +5348,24 @@ def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
     return response["invocationArn"], output_s3_uri
 
 
+def _first_video_source_image_key(manual_shots: list[dict]) -> str:
+    for shot in manual_shots or []:
+        key = str((shot or {}).get("source_image_key") or "")
+        if key:
+            return key
+    return ""
+
+
+def _storyboard_video_generation_mode(manual_shots: list[dict]) -> str:
+    if _video_provider_name() == "luma_ray2":
+        return "luma-keyframes-frame0"
+    return "multi-shot-manual"
+
+
+def _storyboard_video_frame0_kind(source_image_key: str) -> str:
+    return "single-frame-from-ninegrid" if _source_image_is_ninegrid(source_image_key) else "single-frame"
+
+
 def _query_nova_reel_job(invocation_arn):
     return _query_video_job(invocation_arn)
 
@@ -5434,6 +5506,123 @@ def _resolve_video_s3_uri(job: dict) -> str:
         except Exception:
             continue
     return ""
+
+
+def _read_s3_uri_bytes(s3_uri: str) -> bytes:
+    bucket, key = _parse_s3_uri(s3_uri)
+    if not bucket or not key:
+        return b""
+    client = boto3.client("s3", region_name=_s3_bucket_region(bucket))
+    return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+
+def _reference_frame0_bytes(source_image_key: str) -> bytes:
+    if not source_image_key:
+        return b""
+    data = STORAGE.read_file_bytes(source_image_key)
+    if not data:
+        return b""
+    if not _source_image_is_ninegrid(source_image_key):
+        return data
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(data))
+    output = io.BytesIO()
+    _single_frame_from_ninegrid_image(image).save(output, format="JPEG", quality=92, optimize=True)
+    return output.getvalue()
+
+
+def _pil_average_hash(image_bytes: bytes) -> int:
+    from PIL import Image, ImageOps
+
+    image = Image.open(io.BytesIO(image_bytes))
+    image = ImageOps.exif_transpose(image).convert("L").resize((8, 8))
+    values = list(image.getdata())
+    avg = sum(values) / max(1, len(values))
+    bits = 0
+    for value in values:
+        bits = (bits << 1) | (1 if value >= avg else 0)
+    return bits
+
+
+def _hash_similarity(left: int, right: int, bits: int = 64) -> float:
+    distance = int(left ^ right).bit_count()
+    return max(0.0, min(1.0, 1.0 - distance / float(bits)))
+
+
+def _extract_video_frame_bytes(video_s3_uri: str, when: str) -> bytes:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return b""
+    video_bytes = _read_s3_uri_bytes(video_s3_uri)
+    if not video_bytes:
+        return b""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = os.path.join(tmpdir, "video.mp4")
+        frame_path = os.path.join(tmpdir, f"{when}.jpg")
+        with open(video_path, "wb") as handle:
+            handle.write(video_bytes)
+        seek_args = ["-ss", "0.1"] if when == "first" else ["-ss", "2.5"]
+        command = [
+            ffmpeg,
+            "-y",
+            *seek_args,
+            "-i",
+            video_path,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "3",
+            frame_path,
+        ]
+        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
+        if not os.path.exists(frame_path):
+            return b""
+        with open(frame_path, "rb") as handle:
+            return handle.read()
+
+
+def _qa_storyboard_video_job(job: dict) -> dict:
+    if not job or job.get("status") != "Completed":
+        return job
+    if job.get("qa_status") in {"passed", "warning", "manual_review"} and job.get("qa_checked_at"):
+        return job
+    source_key = str(job.get("frame0_source_image_key") or "")
+    video_uri = str(job.get("video_s3_uri") or "")
+    if not source_key or not video_uri:
+        job["qa_status"] = "manual_review"
+        job["qa_score"] = None
+        job["qa_message"] = "缺少首帧参考图或视频文件，需人工复核产品外观一致性。"
+        job["qa_checked_at"] = _utc_now()
+        return job
+    try:
+        reference_bytes = _reference_frame0_bytes(source_key)
+        first_bytes = _extract_video_frame_bytes(video_uri, "first")
+        mid_bytes = _extract_video_frame_bytes(video_uri, "middle")
+        if not reference_bytes or not first_bytes:
+            job["qa_status"] = "manual_review"
+            job["qa_score"] = None
+            job["qa_message"] = "当前运行环境无法自动抽取视频帧，需人工复核首帧/中帧与参考图的一致性。"
+            job["qa_checked_at"] = _utc_now()
+            return job
+        ref_hash = _pil_average_hash(reference_bytes)
+        first_score = _hash_similarity(ref_hash, _pil_average_hash(first_bytes))
+        mid_score = _hash_similarity(ref_hash, _pil_average_hash(mid_bytes)) if mid_bytes else first_score
+        score = round(min(first_score, mid_score) * 100)
+        job["qa_score"] = score
+        job["qa_status"] = "passed" if score >= 78 else "warning"
+        job["qa_message"] = (
+            f"自动质检：首帧/中帧与参考首帧相似度约 {score}%。"
+            if score >= 78
+            else f"自动质检：相似度约 {score}%，建议人工复核产品外观是否变形。"
+        )
+        job["qa_checked_at"] = _utc_now()
+    except Exception as exc:
+        job["qa_status"] = "manual_review"
+        job["qa_score"] = None
+        job["qa_message"] = f"自动质检未完成：{exc}；需人工复核产品外观一致性。"
+        job["qa_checked_at"] = _utc_now()
+    return job
 
 
 def _collect_json_string_values(value) -> list[str]:
@@ -7567,6 +7756,7 @@ def refresh_nova_reel_jobs(script_job_id: str = ""):
             item["output_s3_uri"] = output_s3_uri
             if status == "Completed":
                 item["video_s3_uri"] = _video_uri_from_bedrock_job(result, invocation_arn=invocation_arn)
+                item = _qa_storyboard_video_job(item)
             changed = True
         except Exception as exc:
             item["failure_message"] = str(exc)
@@ -7621,6 +7811,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
             product_image_id=req.product_image_id,
         )
     actual_duration_seconds = _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if _video_provider_name() == "luma_ray2" else duration_seconds
+    frame0_source_image_key = _first_video_source_image_key(manual_shots)
     try:
         invocation_arn, output_s3_uri = _start_storyboard_video_job(
             request_payload.get("category", ""),
@@ -7662,6 +7853,12 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "provider": _video_provider_name(),
         "model_id": _video_model_id(),
         "region": _video_region(),
+        "generation_mode": _storyboard_video_generation_mode(manual_shots),
+        "frame0_source_image_key": frame0_source_image_key,
+        "frame0_reference_kind": _storyboard_video_frame0_kind(frame0_source_image_key) if frame0_source_image_key else "",
+        "qa_status": "pending",
+        "qa_score": None,
+        "qa_message": "生成完成后将进行首帧/中帧一致性质检；若环境无法自动抽帧，将标记为人工复核。",
     }
     with job_lock:
         jobs = _load_storyboard_video_jobs()
@@ -7699,6 +7896,7 @@ def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = 
             item["output_s3_uri"] = output_s3_uri
             if status == "Completed":
                 item["video_s3_uri"] = _video_uri_from_bedrock_job(result, invocation_arn=invocation_arn)
+                item = _qa_storyboard_video_job(item)
             changed = True
         except Exception as exc:
             item["failure_message"] = str(exc)

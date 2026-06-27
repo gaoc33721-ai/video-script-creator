@@ -1848,7 +1848,14 @@ function renderStoryboardVideoJobs(jobs) {
         ? `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
         : "";
       const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
-      const summary = `${escapeHtml(job.model_id || "Nova Reel")} · ${escapeHtml(job.duration_seconds || "-")} 秒 · ${escapeHtml(job.shot_count || "-")} 段 · 智能转场`;
+      const modeLabel =
+        job.generation_mode === "luma-keyframes-frame0"
+          ? `首帧驱动 · ${job.frame0_reference_kind === "single-frame-from-ninegrid" ? "九宫图裁单帧" : "单张首帧"}`
+          : "智能转场";
+      const qa = job.qa_message
+        ? `<div class="message ${job.qa_status === "warning" || job.qa_status === "manual_review" ? "error" : "ok"}">${escapeHtml(job.qa_message)}</div>`
+        : "";
+      const summary = `${escapeHtml(job.model_id || "Nova Reel")} · ${escapeHtml(job.duration_seconds || "-")} 秒 · ${escapeHtml(job.shot_count || "-")} 段 · ${escapeHtml(modeLabel)}`;
       return `
         <article class="video-job">
           <div class="job-head">
@@ -1856,6 +1863,7 @@ function renderStoryboardVideoJobs(jobs) {
             <span>${escapeHtml(job.status || "")}</span>
           </div>
           <div class="message">${summary}</div>
+          ${qa}
           ${failure}
           ${preview}
         </article>
@@ -1866,7 +1874,7 @@ function renderStoryboardVideoJobs(jobs) {
 async function submitStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在提交片段串联与智能转场成片任务...");
+  setMessage("storyboardVideoMessage", "正在提交首帧驱动视频任务：使用单张关键帧锁定产品外观，不再把九宫图整图作为弱参考。");
   try {
     await api("/api/storyboard-video/submit", {
       method: "POST",
@@ -1877,7 +1885,7 @@ async function submitStoryboardVideoGeneration() {
         product_image_id: currentProductImageId(),
       }),
     });
-    setMessage("storyboardVideoMessage", "智能转场成片任务已提交，稍后点击刷新查看状态。", "ok");
+    setMessage("storyboardVideoMessage", "首帧驱动视频任务已提交，完成后会标记自动质检或人工复核结果。", "ok");
     await loadStoryboardVideoJobs(job.id);
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
@@ -1892,7 +1900,7 @@ async function submitStoryboardShotVideo(shotIndex) {
   setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜视频...`);
   try {
     await ensureCanvasImageForShot(shotIndex);
-    setMessage("productImageMessage", `九宫格参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜视频...`);
+    setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜视频：将裁取单张首帧驱动 Ray2，不再使用九宫图整图弱参考。`);
     await api("/api/storyboard-video/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1903,7 +1911,7 @@ async function submitStoryboardShotVideo(shotIndex) {
         product_image_id: currentProductImageId(),
       }),
     });
-    setMessage("productImageMessage", "视频任务已提交，可在分镜卡片中查看状态。", "ok");
+    setMessage("productImageMessage", "首帧驱动视频任务已提交，完成后会显示自动质检或人工复核标记。", "ok");
     await loadStoryboardVideoJobs(job.id);
   } catch (error) {
     setMessage("productImageMessage", error.message, "error");
