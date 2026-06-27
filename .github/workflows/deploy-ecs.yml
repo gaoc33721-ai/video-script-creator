@@ -40,7 +40,7 @@ jobs:
       NOVA_REEL_OUTPUT_S3_URI: ${{ vars.NOVA_REEL_OUTPUT_S3_URI || 's3://video-script-creator-prod-assets-625093290485/runtime/nova-reel-poc' }}
       NOVA_REEL_ESTIMATED_USD_PER_SECOND: ${{ vars.NOVA_REEL_ESTIMATED_USD_PER_SECOND || '0.08' }}
       NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK: ${{ vars.NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK || '2' }}
-      VIDEO_PROVIDER: ${{ vars.VIDEO_PROVIDER || 'luma_ray2' }}
+      VIDEO_PROVIDER: ${{ vars.VIDEO_PROVIDER || 'liblibai_star3' }}
       VIDEO_OUTPUT_S3_URI: ${{ vars.VIDEO_OUTPUT_S3_URI || 's3://video-script-creator-prod-video-usw2-625093290485/runtime/bedrock-video' }}
       LUMA_RAY2_AWS_REGION: ${{ vars.LUMA_RAY2_AWS_REGION || 'us-west-2' }}
       LUMA_RAY2_MODEL_ID: ${{ vars.LUMA_RAY2_MODEL_ID || 'luma.ray-v2:0' }}

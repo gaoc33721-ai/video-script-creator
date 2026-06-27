@@ -1844,12 +1844,17 @@ function renderStoryboardVideoJobs(jobs) {
   if (!target) return;
   target.innerHTML =
     (jobs || []).map((job) => {
+      const isImagePreview = job.preview_media_type === "image" || job.generation_mode === "liblibai-star3-keyframe";
       const preview = job.preview_url
-        ? `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
+        ? isImagePreview
+          ? `<img class="video-preview" src="${escapeAttr(job.preview_url)}" alt="LibLibAI Star-3 高保真产品关键帧" /><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开关键帧</a>`
+          : `<video class="video-preview" controls src="${escapeAttr(job.preview_url)}"></video><a class="download-link" href="${escapeAttr(job.preview_url)}" target="_blank" rel="noreferrer">打开视频</a>`
         : "";
       const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
       const modeLabel =
-        job.generation_mode === "luma-keyframes-frame0"
+        job.generation_mode === "liblibai-star3-keyframe"
+          ? "LibLibAI Star-3 · 高保真产品关键帧"
+          : job.generation_mode === "luma-keyframes-frame0"
           ? `首帧驱动 · ${job.frame0_reference_kind === "single-frame-from-ninegrid" ? "九宫图裁单帧" : "单张首帧"}`
           : "智能转场";
       const qa = job.qa_message
@@ -1868,13 +1873,13 @@ function renderStoryboardVideoJobs(jobs) {
           ${preview}
         </article>
       `;
-    }).join("") || '<div class="empty-state"><strong>暂无成片任务</strong><span>上传产品图并确认片段后，可提交智能转场合成整段视频。</span></div>';
+    }).join("") || '<div class="empty-state"><strong>暂无生成任务</strong><span>上传产品图并确认片段后，可提交 LibLibAI Star-3 高保真产品关键帧任务。</span></div>';
 }
 
 async function submitStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在提交首帧驱动视频任务：使用单张关键帧锁定产品外观，不再把九宫图整图作为弱参考。");
+  setMessage("storyboardVideoMessage", "正在提交 LibLibAI Star-3 高保真产品关键帧任务：先验证产品外观一致性，不再使用 Luma Ray2 生成变形视频。");
   try {
     await api("/api/storyboard-video/submit", {
       method: "POST",
@@ -1885,7 +1890,7 @@ async function submitStoryboardVideoGeneration() {
         product_image_id: currentProductImageId(),
       }),
     });
-    setMessage("storyboardVideoMessage", "首帧驱动视频任务已提交，完成后会标记自动质检或人工复核结果。", "ok");
+    setMessage("storyboardVideoMessage", "LibLibAI Star-3 关键帧任务已提交，完成后请刷新查看并人工复核产品一致性。", "ok");
     await loadStoryboardVideoJobs(job.id);
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
@@ -1897,10 +1902,10 @@ async function submitStoryboardShotVideo(shotIndex) {
   if (!job) return;
   const shot = state.storyboardShots[shotIndex];
   if (!shot) return;
-  setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜视频...`);
+  setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜的 Star-3 高保真关键帧...`);
   try {
     await ensureCanvasImageForShot(shotIndex);
-    setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜视频：将裁取单张首帧驱动 Ray2，不再使用九宫图整图弱参考。`);
+    setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜的 LibLibAI Star-3 高保真产品关键帧任务。`);
     await api("/api/storyboard-video/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1911,7 +1916,7 @@ async function submitStoryboardShotVideo(shotIndex) {
         product_image_id: currentProductImageId(),
       }),
     });
-    setMessage("productImageMessage", "首帧驱动视频任务已提交，完成后会显示自动质检或人工复核标记。", "ok");
+    setMessage("productImageMessage", "LibLibAI Star-3 关键帧任务已提交，完成后会显示人工复核标记。", "ok");
     await loadStoryboardVideoJobs(job.id);
   } catch (error) {
     setMessage("productImageMessage", error.message, "error");
@@ -1920,7 +1925,7 @@ async function submitStoryboardShotVideo(shotIndex) {
 async function refreshStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在刷新智能转场成片状态...");
+  setMessage("storyboardVideoMessage", "正在刷新 Star-3 高保真生成状态...");
   try {
     const data = await api(
       `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}`,
@@ -1929,7 +1934,7 @@ async function refreshStoryboardVideoGeneration() {
     state.storyboardVideoJobs = data.jobs || [];
     renderStoryboardVideoJobs(state.storyboardVideoJobs);
     rerenderStoryboardCards();
-    setMessage("storyboardVideoMessage", "视频状态已刷新。", "ok");
+    setMessage("storyboardVideoMessage", "生成状态已刷新。", "ok");
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
   }
@@ -1938,14 +1943,14 @@ async function refreshStoryboardVideoGeneration() {
 async function refreshStoryboardShotVideo(shotIndex) {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("productImageMessage", `正在刷新第 ${shotIndex + 1} 个分镜视频状态...`);
+  setMessage("productImageMessage", `正在刷新第 ${shotIndex + 1} 个分镜 Star-3 关键帧状态...`);
   try {
     await api(
       `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}&shot_index=${shotIndex}`,
       { method: "POST" }
     );
     await loadStoryboardVideoJobs(job.id);
-    setMessage("productImageMessage", "视频状态已刷新。", "ok");
+    setMessage("productImageMessage", "生成状态已刷新。", "ok");
   } catch (error) {
     setMessage("productImageMessage", error.message, "error");
   }

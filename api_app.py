@@ -162,7 +162,7 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
-VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", os.getenv("MEDIA_VIDEO_PROVIDER", "luma_ray2")).strip().lower().replace("-", "_")
+VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", os.getenv("MEDIA_VIDEO_PROVIDER", "liblibai_star3")).strip().lower().replace("-", "_")
 VIDEO_OUTPUT_S3_URI = os.getenv("VIDEO_OUTPUT_S3_URI", NOVA_REEL_OUTPUT_S3_URI).rstrip("/")
 LUMA_RAY2_AWS_REGION = os.getenv("LUMA_RAY2_AWS_REGION", "us-west-2")
 LUMA_RAY2_MODEL_ID = os.getenv("LUMA_RAY2_MODEL_ID", "luma.ray-v2:0")
@@ -182,6 +182,7 @@ LIBLIBAI_BASE_URL = os.getenv("LIBLIBAI_BASE_URL", "https://openapi.liblibai.clo
 LIBLIBAI_TEMPLATE_UUID = os.getenv("LIBLIBAI_TEMPLATE_UUID", "5d7e67009b344550bc1aa6ccbfa1d7f4")
 LIBLIBAI_IMG2IMG_TEMPLATE_UUID = os.getenv("LIBLIBAI_IMG2IMG_TEMPLATE_UUID", "07e00af4fc464c7ab55ff906f8acf1b7")
 LIBLIBAI_IMAGE_MODEL_LABEL = os.getenv("LIBLIBAI_IMAGE_MODEL_LABEL", "liblibai:star-3-alpha")
+LIBLIBAI_VIDEO_MODEL_LABEL = os.getenv("LIBLIBAI_VIDEO_MODEL_LABEL", "liblibai:star-3-keyframe")
 LIBLIBAI_IMAGE_ASPECT_RATIO = os.getenv("LIBLIBAI_IMAGE_ASPECT_RATIO", "landscape")
 LIBLIBAI_IMAGE_WIDTH = int(os.getenv("LIBLIBAI_IMAGE_WIDTH", "1280"))
 LIBLIBAI_IMAGE_HEIGHT = int(os.getenv("LIBLIBAI_IMAGE_HEIGHT", "720"))
@@ -4822,19 +4823,36 @@ def _video_provider_name() -> str:
     provider = str(VIDEO_PROVIDER or "nova_reel").strip().lower().replace("-", "_")
     if provider in {"luma", "luma_ray", "ray2", "luma_ray2"}:
         return "luma_ray2"
+    if provider in {"liblib", "liblibai", "liblibai_star3", "star3", "star_3"}:
+        return "liblibai_star3"
     return "nova_reel"
 
 
 def _video_model_id() -> str:
-    return LUMA_RAY2_MODEL_ID if _video_provider_name() == "luma_ray2" else NOVA_REEL_MODEL_ID
+    provider = _video_provider_name()
+    if provider == "luma_ray2":
+        return LUMA_RAY2_MODEL_ID
+    if provider == "liblibai_star3":
+        return LIBLIBAI_VIDEO_MODEL_LABEL
+    return NOVA_REEL_MODEL_ID
 
 
 def _video_region() -> str:
-    return LUMA_RAY2_AWS_REGION if _video_provider_name() == "luma_ray2" else NOVA_REEL_AWS_REGION
+    provider = _video_provider_name()
+    if provider == "luma_ray2":
+        return LUMA_RAY2_AWS_REGION
+    if provider == "liblibai_star3":
+        return ""
+    return NOVA_REEL_AWS_REGION
 
 
 def _video_estimated_usd_per_second() -> float:
-    return LUMA_RAY2_ESTIMATED_USD_PER_SECOND if _video_provider_name() == "luma_ray2" else NOVA_REEL_ESTIMATED_USD_PER_SECOND
+    provider = _video_provider_name()
+    if provider == "luma_ray2":
+        return LUMA_RAY2_ESTIMATED_USD_PER_SECOND
+    if provider == "liblibai_star3":
+        return 0.0
+    return NOVA_REEL_ESTIMATED_USD_PER_SECOND
 
 
 def _category_en(category):
@@ -5170,6 +5188,84 @@ Storyboard:
     return re.sub(r"\s+", " ", prompt).strip()[:4000]
 
 
+def _compose_liblibai_star3_keyframe_prompt(category: str, model: str, manual_shots: list[dict]) -> str:
+    first_text = str((manual_shots or [{}])[0].get("text") or "")
+    all_text = " | ".join(str(shot.get("text") or "") for shot in (manual_shots or [])[:3] if shot.get("text"))
+    base = _enhance_storyboard_image_prompt(
+        first_text or all_text,
+        category=category,
+        model=model,
+        shot_index=0,
+        reference_policy="use-product-reference",
+    )
+    return (
+        "LibLibAI Star-3 high-fidelity product keyframe test. "
+        "Create one single 16:9 photorealistic e-commerce video keyframe, not a grid and not a collage. "
+        "The uploaded product image is the strict source of truth for product identity: preserve silhouette, "
+        "door outline, glass/metal finish, button/control layout, logo position, proportions, and visible details. "
+        "Do not redesign the product and do not add a second same-category appliance. "
+        f"{base} "
+        f"Storyboard context: {all_text or first_text}"
+    )[:3000]
+
+
+def _liblibai_star3_keyframe_key(video_job_id: str) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(video_job_id or uuid.uuid4().hex[:12]))[:80]
+    return f"storyboard_video_keyframes/{safe_id}.png"
+
+
+def _liblibai_star3_reference_bytes(manual_shots: list[dict]) -> bytes:
+    source_key = _first_video_source_image_key(manual_shots)
+    if source_key:
+        return _reference_frame0_bytes(source_key)
+    return b""
+
+
+def _run_liblibai_star3_keyframe_job(video_job_id: str):
+    jobs = _load_storyboard_video_jobs()
+    job = next((item for item in jobs if item.get("id") == video_job_id), None)
+    if not job:
+        return
+    try:
+        shots = job.get("shots") or []
+        prompt = _compose_liblibai_star3_keyframe_prompt(job.get("category", ""), job.get("model", ""), shots)
+        reference_bytes = _liblibai_star3_reference_bytes(shots)
+        client = LiblibAIClient(_liblibai_image_config())
+        image_bytes, metadata = client.generate_image(prompt, reference_image_bytes=reference_bytes or None)
+        image_bytes = _storyboard_image_with_hisense_brand_stamp(image_bytes)
+        image_key = _liblibai_star3_keyframe_key(video_job_id)
+        image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
+        update = {
+            "status": "Completed",
+            "updated_at": _utc_now(),
+            "keyframe_image_key": image_key,
+            "keyframe_image_uri": image_uri,
+            "liblibai_generate_uuid": metadata.get("generate_uuid", ""),
+            "liblibai_image_url": metadata.get("image_url", ""),
+            "generation_prompt": prompt,
+            "failure_message": "",
+            "qa_status": "manual_review",
+            "qa_score": None,
+            "qa_message": "LibLibAI Star-3 已生成高保真产品关键帧；请人工复核产品外观一致性后再进入视频化。",
+            "metadata": metadata,
+        }
+    except Exception as exc:
+        update = {
+            "status": "Failed",
+            "updated_at": _utc_now(),
+            "failure_message": f"LibLibAI Star-3 keyframe failed: {exc}",
+            "qa_status": "failed",
+            "qa_message": "LibLibAI Star-3 关键帧生成失败，请检查 API Key、积分或模板配置。",
+        }
+    with job_lock:
+        jobs = _load_storyboard_video_jobs()
+        for item in jobs:
+            if item.get("id") == video_job_id:
+                item.update(update)
+                break
+        _save_storyboard_video_jobs(jobs)
+
+
 def _image_format_from_key(key: str) -> str:
     return "jpeg" if str(key or "").lower().endswith((".jpg", ".jpeg")) else "png"
 
@@ -5357,8 +5453,11 @@ def _first_video_source_image_key(manual_shots: list[dict]) -> str:
 
 
 def _storyboard_video_generation_mode(manual_shots: list[dict]) -> str:
-    if _video_provider_name() == "luma_ray2":
+    provider = _video_provider_name()
+    if provider == "luma_ray2":
         return "luma-keyframes-frame0"
+    if provider == "liblibai_star3":
+        return "liblibai-star3-keyframe"
     return "multi-shot-manual"
 
 
@@ -5694,7 +5793,14 @@ def _has_valid_media_access(request: Request, video_job_id: str, token: str = ""
 
 def _public_nova_reel_job(job):
     public = dict(job or {})
-    if public.get("id") and public.get("video_s3_uri"):
+    if public.get("id") and public.get("keyframe_image_key"):
+        keyframe_id = urllib.parse.quote(str(public.get("id") or ""), safe="")
+        version = urllib.parse.quote(str(public.get("updated_at") or public.get("created_at") or ""), safe="")
+        suffix = f"?v={version}" if version else ""
+        public["preview_url"] = f"/api/video-jobs/{keyframe_id}/keyframe{suffix}"
+        public["preview_media_type"] = "image"
+        public["download_url"] = public["preview_url"]
+    elif public.get("id") and public.get("video_s3_uri"):
         video_id = urllib.parse.quote(str(public.get("id") or ""), safe="")
         version = urllib.parse.quote(str(public.get("updated_at") or public.get("created_at") or ""), safe="")
         expires = int(time.time()) + 60 * 60 * 12
@@ -5703,10 +5809,12 @@ def _public_nova_reel_job(job):
         suffix_parts = [item for item in (f"v={version}" if version else "", token_suffix) if item]
         suffix = f"?{'&'.join(suffix_parts)}" if suffix_parts else ""
         public["preview_url"] = f"/api/video-jobs/{video_id}/video{suffix}"
+        public["preview_media_type"] = "video"
         download_parts = ["download=1", *suffix_parts]
         public["download_url"] = f"/api/video-jobs/{video_id}/video?{'&'.join(download_parts)}"
     else:
         public["preview_url"] = ""
+        public["preview_media_type"] = ""
         public["download_url"] = ""
     return public
 
@@ -7486,6 +7594,18 @@ def video_job_video(video_job_id: str, request: Request, download: bool = False,
         raise HTTPException(status_code=404, detail=f"Video not found: {exc}") from exc
 
 
+@app.get("/api/video-jobs/{video_job_id}/keyframe", dependencies=[Depends(_verify_access)])
+def video_job_keyframe(video_job_id: str):
+    job = _video_job_by_id(video_job_id)
+    image_key = str((job or {}).get("keyframe_image_key") or "")
+    if not job or not image_key:
+        raise HTTPException(status_code=404, detail="Keyframe not found.")
+    image_bytes = STORAGE.read_file_bytes(image_key)
+    if not image_bytes:
+        raise HTTPException(status_code=404, detail="Keyframe not found.")
+    return Response(image_bytes, media_type="image/png", headers={"Cache-Control": "private, max-age=60"})
+
+
 @app.get("/api/nova-canvas/jobs", dependencies=[Depends(_verify_access)])
 def nova_canvas_jobs(script_job_id: str = "", variant_index: int = -1):
     jobs = _load_nova_canvas_jobs()
@@ -7810,16 +7930,20 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
             req.variant_index,
             product_image_id=req.product_image_id,
         )
-    actual_duration_seconds = _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if _video_provider_name() == "luma_ray2" else duration_seconds
+    provider = _video_provider_name()
+    actual_duration_seconds = _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if provider == "luma_ray2" else duration_seconds
     frame0_source_image_key = _first_video_source_image_key(manual_shots)
-    try:
-        invocation_arn, output_s3_uri = _start_storyboard_video_job(
-            request_payload.get("category", ""),
-            request_payload.get("model", ""),
-            manual_shots,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=429 if "throttling" in str(exc).lower() else 400, detail=_friendly_video_submit_error(exc)) from exc
+    if provider == "liblibai_star3":
+        invocation_arn, output_s3_uri = "", ""
+    else:
+        try:
+            invocation_arn, output_s3_uri = _start_storyboard_video_job(
+                request_payload.get("category", ""),
+                request_payload.get("model", ""),
+                manual_shots,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=429 if "throttling" in str(exc).lower() else 400, detail=_friendly_video_submit_error(exc)) from exc
 
     now = _utc_now()
     video_job = {
@@ -7850,7 +7974,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "invocation_arn": invocation_arn,
         "output_s3_uri": output_s3_uri,
         "video_s3_uri": "",
-        "provider": _video_provider_name(),
+        "provider": provider,
         "model_id": _video_model_id(),
         "region": _video_region(),
         "generation_mode": _storyboard_video_generation_mode(manual_shots),
@@ -7858,12 +7982,18 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "frame0_reference_kind": _storyboard_video_frame0_kind(frame0_source_image_key) if frame0_source_image_key else "",
         "qa_status": "pending",
         "qa_score": None,
-        "qa_message": "生成完成后将进行首帧/中帧一致性质检；若环境无法自动抽帧，将标记为人工复核。",
+        "qa_message": (
+            "LibLibAI Star-3 正在生成高保真产品关键帧；完成后请人工复核产品外观一致性。"
+            if provider == "liblibai_star3"
+            else "生成完成后将进行首帧/中帧一致性质检；若环境无法自动抽帧，将标记为人工复核。"
+        ),
     }
     with job_lock:
         jobs = _load_storyboard_video_jobs()
         jobs.insert(0, video_job)
         _save_storyboard_video_jobs(jobs)
+    if provider == "liblibai_star3":
+        threading.Thread(target=_run_liblibai_star3_keyframe_job, args=(video_job["id"],), daemon=True).start()
     return {"job": _public_nova_reel_job(video_job)}
 
 
