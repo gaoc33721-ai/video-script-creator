@@ -1300,18 +1300,21 @@ function hasActiveCanvasJobForShot(shotIndex) {
 
 function storyboardSubmitPrompt(shot = {}) {
   return [
-    "Create a 16:9 product motion segment reference image based on the uploaded product image and this script segment.",
-    shot.segment ? `Shot: ${shot.segment}.` : "",
-    shot.feature ? `Feature: ${shot.feature}.` : "",
-    shot.method ? `Visual action: ${shot.method}.` : "",
-    shot.angle ? `Camera angle: ${shot.angle}.` : "",
-    shot.movement ? `Camera movement: ${shot.movement}.` : "",
-    shot.subtitle ? `Voiceover/subtitle: ${shot.subtitle}.` : "",
-    "Keep product identity from the reference image while generating a new scene, not a copied packshot.",
+    "以参考产品图为唯一产品身份来源，生成一张 16:9 九宫格连续分镜参考图，用于后续生成 5-6 秒产品视频片段。",
+    "九宫格必须表现同一个真实 Hisense 产品在同一场景中的连续动作阶段，不是 9 个不同产品或无关素材。",
+    shot.segment ? `镜头段落：${shot.segment}。` : "",
+    shot.feature ? `核心卖点：${shot.feature}。` : "",
+    shot.method ? `画面动作/结果：${shot.method}。` : "",
+    shot.angle ? `机位/景别：${shot.angle}。` : "",
+    shot.movement ? `镜头运动：${shot.movement}。` : "",
+    shot.subtitle ? `传播信息：${shot.subtitle}。` : "",
+    "九宫格节奏建议：1-2格建立真实使用场景，3-5格展示手部/食材/门体/按键/腔体互动，6-8格展示卖点发生过程，9格展示完成结果或产品质感收束。",
+    "画面必须真实商业广告质感，厨房/家居环境干净自然；产品外观、比例、控制面板、门体、Logo位置尽量沿用参考图。",
+    "禁止生成文字叠加、水印、价格贴、促销标、竞品品牌、第二台同类产品、电视屏幕或无关家电。",
   ]
     .filter(Boolean)
     .join(" ")
-    .slice(0, 1800);
+    .slice(0, 2200);
 }
 
 function canvasJobsRenderSignature(jobs = state.canvasJobs, provider = state.canvasProvider, modelId = state.canvasModelId) {
@@ -1576,36 +1579,38 @@ function parseFirstMarkdownTable(markdown) {
 function buildStoryboardImagePrompt({ category, model, segment, feature, method, angle, movement, subtitle }) {
   const categoryHint = storyboardCategoryHint(category, feature, method, subtitle);
   const subjectParts = [
-    "Subject: exactly one physical Hisense appliance as the core subject",
-    model ? `model Hisense ${model}` : "Hisense product model from the brief",
-    categoryHint ? categoryHint.subject : (category ? `product category: ${category}` : "the selected product category"),
-    "preserve the uploaded product image only for identity, color, finish, door outline, handle, buttons, display/control-panel layout, logo position, and proportions",
-    "no duplicate unit, no side-by-side appliances, no showroom lineup, no same-category background appliance",
+    "主任务：生成一张 16:9 九宫格连续分镜参考图，用于后续 AI 视频模型生成单个产品视频片段",
+    "主体：只允许出现一台真实 Hisense 家电作为核心主体",
+    model ? `型号：Hisense ${model}` : "型号：使用脚本中的 Hisense 产品型号",
+    categoryHint ? `品类：${categoryHint.subject}` : (category ? `品类：${category}` : "品类：所选产品品类"),
+    "参考产品图仅用于保持产品身份、颜色、材质、门体轮廓、把手、按键、显示/控制面板布局、Logo位置和比例",
+    "禁止重复产品、并排产品、展厅阵列、背景中出现第二台同品类家电",
   ];
   const actionParts = [
-    `Action/Pose: ${segment}`,
-    feature ? `highlight product benefit: ${feature}` : "",
-    method ? `visible action/result: ${method}` : "",
-    angle ? `camera angle: ${angle}` : "",
-    movement ? `camera movement: ${movement}` : "",
-    subtitle ? `message cue: ${subtitle}` : "",
-    "make hands, food, steam, racks, clothes, controls, door/cavity interaction, or completion result dominant when the storyboard mentions them",
+    `镜头段落：${segment}`,
+    feature ? `突出卖点：${feature}` : "",
+    method ? `可见动作/结果：${method}` : "",
+    angle ? `机位/景别：${angle}` : "",
+    movement ? `镜头运动：${movement}` : "",
+    subtitle ? `传播信息：${subtitle}` : "",
+    "九宫格连续动作：第1-2格建立真实场景，第3-5格展示手部/食材/门体/按键/腔体互动，第6-8格展示卖点过程，第9格展示完成结果或产品质感收束",
+    "当脚本提到手、食物、蒸汽、搁架、衣物、控制面板、门体/腔体互动或完成结果时，这些元素必须成为画面重点",
   ];
   const backgroundParts = [
-    "Background: create a new real-life storyboard scene from the row",
-    categoryHint ? categoryHint.setting : "a clean home environment suitable for the product category",
-    categoryHint ? `must include: ${categoryHint.must}` : "",
-    "do not copy the uploaded image's room, closet, cabinet layout, lighting, crop, or camera angle",
+    "场景：根据当前镜头重新生成真实生活化广告场景，不要复制上传产品图的房间、柜体、灯光、裁切或机位",
+    categoryHint ? categoryHint.setting : "干净、真实、适合该产品品类的家居环境",
+    categoryHint ? `必须包含：${categoryHint.must}` : "",
   ];
   const lightingParts = [
-    "Lighting/Color: clean commercial soft daylight, realistic natural color, product contours clearly readable",
-    "balanced e-commerce lighting with subtle rim light and no harsh glare",
+    "光线/色彩：真实自然的商业广告柔光，产品轮廓清晰可读，避免强眩光",
+    "整体质感：干净、清晰、真实，不要电商白底棚拍感，也不要过度电影化导致产品看不清",
   ];
   const styleParts = [
-    "Style/Rendering: premium 16:9 photorealistic e-commerce storyboard reference image, high detail, sharp physically plausible appliance geometry",
-    "complete sharp Latin 'Hisense' logo only when readable; no misspelled, partial, garbled, or fake brand text",
-    "no text overlay, no watermark, no discount badge, no competitor brands, no wrong product category",
-    categoryHint ? `avoid: ${categoryHint.negative}` : "",
+    "输出形式：一张完整的 16:9 九宫格 storyboard contact sheet，每格都是同一支视频的连续关键帧",
+    "每格都必须是单画面真实摄影风格，不要漫画、不要插画、不要UI界面",
+    "Logo规则：只有能准确显示完整 Latin 'Hisense' 时才显示；否则宁可留空，不要乱码、错拼、半截或虚假品牌字",
+    "禁止：文字叠加、水印、价格/折扣徽章、竞品品牌、错误品类",
+    categoryHint ? `避免：${categoryHint.negative}` : "",
   ];
   return [subjectParts, actionParts, backgroundParts, lightingParts, styleParts]
     .map((parts) => parts.filter(Boolean).join("; ") + ".")

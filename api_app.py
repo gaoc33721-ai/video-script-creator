@@ -3951,12 +3951,21 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
     context = _storyboard_category_context(category, model, detection_text=raw_prompt)
     focus = _storyboard_visual_focus(raw_prompt, category=category, model=model)
     action_constraints = _storyboard_action_constraints(raw_prompt)
+    wants_contact_sheet = any(token in raw_prompt.lower() for token in ("九宫格", "9-grid", "3x3", "contact sheet", "storyboard contact"))
     scene_instruction = focus["constraint"] if str(reference_policy or "").startswith("skip-") else context["must"]
     reference_text = (
         "preserve the supplied reference only for product identity, silhouette, color, finish, door outline, "
         "handle/buttons, logo placement, control-panel layout, cavity/drum shape, and proportions"
         if not str(reference_policy or "").startswith("skip-")
         else "no product reference image is used; obey the storyboard action/result instead of making a product packshot"
+    )
+    output_format = (
+        "Output format: one 16:9 nine-panel 3x3 storyboard contact sheet. Each panel is a sequential keyframe from "
+        "the same 5-6 second product video clip: panel 1-2 establish the scene, panel 3-5 show hand/food/door/control "
+        "interaction, panel 6-8 show the benefit process, panel 9 shows the result or product beauty close-up. Keep the "
+        "same product and same environment across all nine panels."
+        if wants_contact_sheet
+        else "Output format: one 16:9 photorealistic storyboard keyframe for a 5-6 second product video clip."
     )
     lines = [
         (
@@ -3982,7 +3991,8 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
             "subtle rim light, balanced exposure, no harsh glare, no UI mockups."
         ),
         (
-            "Style/Rendering: premium 16:9 photorealistic e-commerce storyboard still, high detail, sharp and "
+            f"{output_format} "
+            "Style/Rendering: premium photorealistic e-commerce storyboard reference, high detail, sharp and "
             "physically plausible handles, buttons, knobs, display area, door seams, drum/cavity shape, and panel geometry; "
             "readable logo text must be exactly 'Hisense' with complete sharp letters; no text overlay, no watermark, "
             "no discount badge, no round sticker, no competitor brands, no wrong product category; "
@@ -4173,6 +4183,7 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
     action_constraints = _storyboard_action_constraints(raw_prompt)
     scene_instruction = focus["constraint"] if str(reference_policy or "").startswith("skip-") else context["must"]
     detail = re.sub(r"\s+", " ", str(raw_prompt or "")).strip()
+    wants_contact_sheet = any(token in detail.lower() for token in ("九宫格", "9-grid", "3x3", "contact sheet", "storyboard contact"))
     for boilerplate in (
         "Premium 16:9 photorealistic e-commerce storyboard reference image for a Hisense product video.",
         "Premium photorealistic 16:9 e-commerce storyboard still.",
@@ -4182,18 +4193,23 @@ def _compact_liblibai_storyboard_prompt(raw_prompt, category="", model="", shot_
     detail = re.sub(r"\b(?:Single-product|One-product) rule:.*?(?=(?:Subject:|Action/Pose:|Background:|Lighting/Color:|Style/Rendering:|Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
     detail = re.sub(r"\bBrand (?:text )?rule:.*?(?=(?:Subject:|Action/Pose:|Background:|Lighting/Color:|Style/Rendering:|Product category|Product model|Shot:|Product benefit|Visual action|Camera angle|Keep the product message|$))", "", detail).strip()
     detail = re.sub(r"\bThe selected product must be the main subject.*$", "", detail).strip()
-    detail = detail[:520].strip()
+    detail = detail[:760].strip()
     reference_text = (
         "preserve reference only for appliance identity, color, finish, door outline, handle/control-panel, buttons, knobs, display, cavity/drum shape, logo position, and proportions"
         if not str(reference_policy or "").startswith("skip-")
         else "no product reference image is used; obey the storyboard action/result instead of making a packshot"
+    )
+    output_format = (
+        "Output: one 16:9 3x3 nine-panel storyboard contact sheet, nine sequential keyframes from the same 5-6 second product video clip; same product, same scene, continuous action; not nine unrelated images."
+        if wants_contact_sheet
+        else "Output: one 16:9 photorealistic storyboard keyframe for a 5-6 second product video clip."
     )
     lines = [
         f"Subject: exactly one physical Hisense appliance; {context['subject']}; model Hisense {model or 'from brief'}; {reference_text}; no duplicate, second unit, side-by-side appliance, product lineup, or background same-category appliance.",
         f"Action/Pose: shot {int(shot_index) + 1}; critical visual target: {focus['primary']}; composition: {focus['composition']}; scene action/result: {scene_instruction}; camera/action constraints: {action_constraints or 'follow storyboard cues'}; storyboard details: {detail}.",
         f"Background: {context['setting']}; create a new real-life scene from the storyboard row; do not copy the reference room, closet, cabinet layout, white background, lighting, crop, or camera angle.",
         "Lighting/Color: clean commercial soft daylight, realistic natural colors, readable contours, subtle rim light, balanced exposure, no harsh glare.",
-        f"Style/Rendering: premium 16:9 photorealistic e-commerce storyboard still, high detail, sharp physically plausible appliance geometry, complete sharp 'Hisense' logo only if readable, no text overlay, no watermark, no discount badge, no competitor brands, no wrong product category. Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, {focus['negative']}.",
+        f"{output_format} Style/Rendering: premium photorealistic e-commerce storyboard reference, high detail, sharp physically plausible appliance geometry, complete sharp 'Hisense' logo only if readable, no text overlay, no watermark, no discount badge, no competitor brands, no wrong product category. Negative: {_HISENSE_BRAND_NEGATIVE}, {_SINGLE_PRODUCT_NEGATIVE}, {context['negative']}, {focus['negative']}.",
     ]
     prompt = "\n".join(line for line in lines if line)
     return prompt[:LIBLIBAI_MAX_PROMPT_LENGTH].strip()
@@ -4763,12 +4779,45 @@ def _compose_manual_shot_prompt(group_rows: list[dict], category: str, model: st
         )
     details = " | ".join(part for part in detail_parts if part)
     prompt = (
-        f"Six-second product motion segment {shot_index + 1}/{shot_count} for Hisense {_category_en(category)} model {model}. "
-        f"Use supplied product image only for identity: shape, finish, logo, panel layout, proportions. Create a new scene from this script segment, "
-        f"animate the product or user interaction, cinematic soft light, smooth camera. Keep first/last frames transition-friendly for smart editing. "
-        f"No text overlays, no competitor brands. Segment details: {details or 'product-focused lifestyle proof shot'}."
+        f"以参考图为故事板/关键帧依据，生成第 {shot_index + 1}/{shot_count} 个 5-6 秒 Hisense 产品视频片段。"
+        f"产品：Hisense {_category_en(category)}，型号 {model}。"
+        "参考图可能是一张九宫格连续分镜图，只能用于理解动作阶段、产品身份、场景和构图；"
+        "最终视频必须是单画面全屏真实广告镜头，严禁保留九宫格、拼贴、分屏或边框。"
+        "只出现一台 Hisense 产品，保持外观、比例、门体/把手/控制面板/Logo位置一致。"
+        "镜头语言：真实商业广告质感，柔和自然光，轻微稳定推进或跟拍，动作自然连续，首尾帧适合剪辑。"
+        "禁止文字叠加、水印、价格贴、竞品品牌、第二台同类产品、电视屏幕或无关家电。"
+        f"分镜内容：{details or '产品使用场景和卖点验证镜头'}。"
     )
-    return re.sub(r"\s+", " ", prompt).strip()[:512]
+    return re.sub(r"\s+", " ", prompt).strip()[:1200]
+
+
+def _compose_ray2_storyboard_video_prompt(category: str, model: str, manual_shots: list[dict]) -> str:
+    detail = " | ".join(str(shot.get("text") or "") for shot in manual_shots if shot.get("text"))
+    mode = "单片段" if len(manual_shots) == 1 else "多片段整合"
+    prompt = f"""
+目标：生成一段高质量 Hisense 产品广告视频，模式：{mode}。
+产品：Hisense {_category_en(category)}，型号 {model}。
+
+参考图使用规则：
+- 如果输入图是九宫格/多格 storyboard contact sheet，只把它当作动作阶段、场景、机位和产品身份参考。
+- 最终输出必须是单画面全屏视频，不要出现九宫格、拼贴、分屏、边框、UI截图或静态图片墙。
+- 保持同一台产品的外观、比例、门体/把手、控制面板、材质、颜色和 Logo 位置稳定。
+
+导演要求：
+- 真实商业广告质感，干净厨房/家居环境，柔和自然光，产品轮廓清晰。
+- 根据分镜让手部、食材、蒸汽、门体、腔体、按键、搁架或完成结果自然运动。
+- 镜头运动要稳定、轻微、连续，例如缓慢推进、近景跟拍、轻微转场，不要剧烈摇晃。
+- 突出产品功能体验和最终效果，不要把画面拍成展厅陈列或电商白底图。
+
+硬性禁止：
+- 不要文字叠加、水印、价格贴、促销徽章、字幕烧录。
+- 不要竞品品牌、错误品类、第二台同类产品、电视屏幕、客厅沙发或无关家电。
+- 不要错拼 Hisense；如果无法准确渲染品牌字，保持标识区域干净即可。
+
+分镜内容：
+{detail or '产品使用场景和卖点验证镜头'}
+""".strip()
+    return re.sub(r"\s+", " ", prompt).strip()[:4000]
 
 
 def _image_format_from_key(key: str) -> str:
@@ -4906,19 +4955,12 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
 
 def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
     if _video_provider_name() == "luma_ray2":
-        detail = " | ".join(str(shot.get("text") or "") for shot in manual_shots if shot.get("text"))
-        prompt = (
-            f"Premium Ray2 image-to-video product clip for Hisense {_category_en(category)} model {model}. "
-            "Create one coherent high-quality e-commerce video from the storyboard beats. Keep the appliance identity, "
-            "shape, finish, control panel, proportions, and realistic product motion. Smooth cinematic camera movement, "
-            "natural hand interaction if described, commercial soft daylight, no text overlay, no watermark, no competitor brands. "
-            f"Storyboard beats: {detail or 'product-focused lifestyle proof shot'}"
-        )
+        prompt = _compose_ray2_storyboard_video_prompt(category, model, manual_shots)
         first_image = next((_ray2_image_payload_from_shot(shot) for shot in manual_shots if _ray2_image_payload_from_shot(shot)), None)
         return _start_luma_ray2_job(
             category,
             model,
-            re.sub(r"\s+", " ", prompt).strip()[:4000],
+            prompt,
             duration_seconds=9 if len(manual_shots) > 1 else 5,
             image_payload=first_image,
         )
