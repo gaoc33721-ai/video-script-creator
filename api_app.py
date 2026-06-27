@@ -3699,60 +3699,170 @@ def _local_product_ninegrid_bytes(reference_image_bytes: bytes, prompt: str = ""
     gap = 10
     cell_w = (canvas_w - margin * 2 - gap * 2) // 3
     cell_h = (canvas_h - margin * 2 - gap * 2) // 3
-    canvas = Image.new("RGB", (canvas_w, canvas_h), (238, 240, 240))
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (236, 236, 232))
     draw = ImageDraw.Draw(canvas)
-    palette = [
-        (234, 229, 220),
-        (229, 232, 228),
-        (238, 235, 229),
-        (224, 228, 230),
-        (236, 232, 224),
-        (230, 235, 233),
-        (235, 230, 226),
-        (226, 232, 231),
-        (240, 236, 230),
-    ]
-    scales = [0.72, 0.76, 0.82, 0.86, 0.92, 0.94, 0.88, 0.84, 0.80]
-    offsets = [(-8, 8), (10, 2), (18, -4), (-14, 6), (0, 0), (14, 4), (-18, -2), (8, 8), (0, -6)]
+    raw_prompt = str(prompt or "").lower()
+    is_defrost = any(token in raw_prompt for token in ("defrost", "frozen", "thaw", "解冻", "冷冻", "冰冻", "鸡胸", "chicken"))
+    is_reheat = any(token in raw_prompt for token in ("reheat", "leftover", "复热", "加热", "冷饭", "便当"))
+    food_kind = "chicken" if is_defrost else "meal_box" if is_reheat else "food"
 
-    for index in range(9):
+    def cell_box(index):
         row, col = divmod(index, 3)
         x0 = margin + col * (cell_w + gap)
         y0 = margin + row * (cell_h + gap)
-        x1 = x0 + cell_w
-        y1 = y0 + cell_h
-        bg = palette[index]
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=10, fill=bg, outline=(205, 209, 210), width=1)
-        # Countertop and soft background depth; no text labels, no UI.
-        draw.rectangle((x0 + 8, y0 + int(cell_h * 0.66), x1 - 8, y1 - 10), fill=tuple(max(0, c - 24) for c in bg))
-        draw.ellipse((x0 + cell_w * 0.58, y0 + cell_h * 0.08, x1 + cell_w * 0.28, y0 + cell_h * 0.80), fill=(248, 247, 242))
+        return x0, y0, x0 + cell_w, y0 + cell_h
 
-        target_w = int(cell_w * scales[index])
+    def draw_kitchen_cell(x0, y0, x1, y1, tone=(230, 226, 218), fridge=False):
+        draw.rectangle((x0, y0, x1, y1), fill=tone)
+        draw.rectangle((x0, y0, x1, y0 + int(cell_h * 0.58)), fill=tuple(min(255, c + 12) for c in tone))
+        draw.rectangle((x0, y0 + int(cell_h * 0.64), x1, y1), fill=tuple(max(0, c - 28) for c in tone))
+        draw.line((x0, y0 + int(cell_h * 0.64), x1, y0 + int(cell_h * 0.64)), fill=(190, 184, 174), width=2)
+        draw.ellipse((x1 - 86, y0 + 18, x1 + 70, y0 + 158), fill=(245, 243, 236))
+        if fridge:
+            draw.rounded_rectangle((x0 + 12, y0 + 16, x0 + 126, y0 + 168), radius=8, fill=(212, 216, 216), outline=(178, 184, 186), width=2)
+            draw.rectangle((x0 + 18, y0 + 34, x0 + 120, y0 + 94), fill=(235, 242, 246), outline=(188, 196, 200))
+            for shelf_y in (52, 74, 116, 140):
+                draw.line((x0 + 24, y0 + shelf_y, x0 + 116, y0 + shelf_y), fill=(188, 200, 206), width=2)
+
+    def paste_product(index, scale=0.78, x_bias=0, y_bias=0, behind=False):
+        x0, y0, x1, y1 = cell_box(index)
+        target_w = int(cell_w * scale)
         target_h = int(target_w * product.height / max(1, product.width))
-        if target_h > int(cell_h * 0.70):
-            target_h = int(cell_h * 0.70)
+        if target_h > int(cell_h * 0.62):
+            target_h = int(cell_h * 0.62)
             target_w = int(target_h * product.width / max(1, product.height))
         resized = product.resize((max(1, target_w), max(1, target_h)), Image.Resampling.LANCZOS)
         shadow = Image.new("RGBA", resized.size, (0, 0, 0, 0))
         shadow.putalpha(resized.getchannel("A").filter(ImageFilter.GaussianBlur(7)))
         shadow = ImageOps.colorize(shadow.getchannel("A"), black=(0, 0, 0), white=(0, 0, 0)).convert("RGBA")
-        shadow.putalpha(shadow.getchannel("A").point(lambda value: int(value * 0.22)))
-        dx, dy = offsets[index]
-        px = x0 + (cell_w - target_w) // 2 + dx
-        py = y0 + int(cell_h * 0.34) - target_h // 2 + dy
-        canvas.paste(shadow, (px + 6, py + 8), shadow)
+        shadow.putalpha(shadow.getchannel("A").point(lambda value: int(value * (0.16 if behind else 0.24))))
+        px = x0 + int(cell_w * 0.47) - target_w // 2 + x_bias
+        py = y0 + int(cell_h * 0.44) - target_h // 2 + y_bias
+        canvas.paste(shadow, (px + 6, py + 9), shadow)
         canvas.paste(resized, (px, py), resized)
+        return px, py, target_w, target_h
 
-        # Small action cues drawn as props/shapes only; product identity pixels remain otherwise unchanged.
-        cue_y = y0 + int(cell_h * 0.73)
-        if index in {1, 2, 3, 4}:
-            draw.rounded_rectangle((x0 + 26, cue_y, x0 + 94, cue_y + 22), radius=10, fill=(238, 224, 204), outline=(210, 190, 160))
-        if index in {4, 5, 6}:
-            for s in range(3):
-                sx = x0 + 112 + s * 16
-                draw.arc((sx, cue_y - 32, sx + 26, cue_y + 14), start=210, end=330, fill=(250, 250, 250), width=2)
-        if index in {7, 8}:
-            draw.rounded_rectangle((x1 - 112, cue_y - 8, x1 - 30, cue_y + 18), radius=8, fill=(226, 238, 232), outline=(190, 208, 198))
+    def draw_product_open(index):
+        x0, y0, x1, y1 = cell_box(index)
+        px, py, pw, ph = paste_product(index, scale=0.82, x_bias=30, y_bias=8)
+        cavity = (px + int(pw * 0.18), py + int(ph * 0.28), px + int(pw * 0.70), py + int(ph * 0.86))
+        draw.rounded_rectangle(cavity, radius=4, fill=(28, 30, 30), outline=(70, 72, 70), width=2)
+        draw.rectangle((cavity[0] + 12, cavity[1] + 12, cavity[2] - 12, cavity[3] - 10), fill=(18, 19, 20), outline=(82, 82, 78))
+        door = (px - int(pw * 0.18), py + int(ph * 0.22), px + int(pw * 0.20), py + int(ph * 0.94))
+        draw.rounded_rectangle(door, radius=6, fill=(18, 20, 22), outline=(70, 72, 74), width=2)
+        draw.line((door[2], door[1] + 6, cavity[0], cavity[1] + 10), fill=(85, 86, 86), width=3)
+        return cavity
+
+    def draw_food(cx, cy, size=1.0, cooked=False, plate=False):
+        if plate:
+            draw.ellipse((cx - 68 * size, cy - 24 * size, cx + 72 * size, cy + 28 * size), fill=(202, 212, 202), outline=(150, 160, 150), width=2)
+        fill = (221, 146, 116) if cooked else (232, 180, 160)
+        outline = (166, 112, 96)
+        draw.ellipse((cx - 58 * size, cy - 22 * size, cx + 62 * size, cy + 26 * size), fill=fill, outline=outline, width=2)
+        draw.arc((cx - 54 * size, cy - 20 * size, cx + 44 * size, cy + 24 * size), 190, 340, fill=(245, 210, 194), width=max(1, int(2 * size)))
+        if not cooked:
+            for ox, oy in [(-38, -10), (-20, 4), (0, -8), (22, 8), (42, -4)]:
+                draw.ellipse((cx + ox * size - 4, cy + oy * size - 4, cx + ox * size + 4, cy + oy * size + 4), fill=(246, 250, 250))
+        else:
+            for ox, oy in [(-34, -24), (-8, -34), (22, -26)]:
+                draw.arc((cx + ox * size, cy + oy * size - 22, cx + ox * size + 22, cy + oy * size + 22), 220, 320, fill=(246, 246, 240), width=2)
+
+    def draw_meal_box(cx, cy, size=1.0):
+        draw.rounded_rectangle((cx - 70 * size, cy - 30 * size, cx + 70 * size, cy + 34 * size), radius=12, fill=(238, 238, 230), outline=(160, 164, 162), width=2)
+        draw.rectangle((cx - 54 * size, cy - 18 * size, cx + 4 * size, cy + 22 * size), fill=(220, 180, 120))
+        draw.rectangle((cx + 8 * size, cy - 18 * size, cx + 54 * size, cy + 22 * size), fill=(112, 158, 102))
+
+    def draw_cutting_board(x0, y0, x1, y1):
+        bx0 = x0 + int(cell_w * 0.30)
+        by0 = y0 + int(cell_h * 0.60)
+        bx1 = x0 + int(cell_w * 0.77)
+        by1 = y0 + int(cell_h * 0.84)
+        draw.rounded_rectangle((bx0, by0, bx1, by1), radius=12, fill=(172, 126, 78), outline=(136, 94, 54), width=2)
+        draw.line((bx0 + 16, by0 + 8, bx1 - 18, by1 - 10), fill=(198, 150, 98), width=2)
+        return bx0, by0, bx1, by1
+
+    def draw_hand(x, y, angle="right", scale=1.0):
+        sleeve = (49, 76, 66)
+        skin = (221, 166, 132)
+        if angle == "right":
+            draw.rounded_rectangle((x - 86 * scale, y - 18 * scale, x - 18 * scale, y + 14 * scale), radius=11, fill=sleeve)
+            draw.ellipse((x - 28 * scale, y - 20 * scale, x + 22 * scale, y + 22 * scale), fill=skin, outline=(178, 126, 98))
+            draw.rounded_rectangle((x + 12 * scale, y - 6 * scale, x + 58 * scale, y + 7 * scale), radius=6, fill=skin, outline=(178, 126, 98))
+        else:
+            draw.rounded_rectangle((x + 18 * scale, y - 18 * scale, x + 86 * scale, y + 14 * scale), radius=11, fill=sleeve)
+            draw.ellipse((x - 22 * scale, y - 20 * scale, x + 28 * scale, y + 22 * scale), fill=skin, outline=(178, 126, 98))
+            draw.rounded_rectangle((x - 58 * scale, y - 6 * scale, x - 12 * scale, y + 7 * scale), radius=6, fill=skin, outline=(178, 126, 98))
+
+    def draw_control_touch(index):
+        x0, y0, x1, y1 = cell_box(index)
+        px, py, pw, ph = paste_product(index, scale=1.08, x_bias=-18, y_bias=8)
+        panel_x = px + int(pw * 0.82)
+        draw.rectangle((panel_x, py + 4, px + pw - 6, py + ph - 4), fill=(10, 11, 13))
+        draw.text((panel_x + 18, py + 22), "1:05", fill=(154, 180, 255))
+        for k in range(3):
+            yy = py + 74 + k * 28
+            draw.rounded_rectangle((panel_x + 24, yy, panel_x + 56, yy + 16), radius=3, fill=(24, 25, 28), outline=(64, 66, 70))
+        draw_hand(panel_x + 54, py + 126, angle="right", scale=0.76)
+
+    def draw_motion_marks(cx, cy):
+        for i in range(3):
+            draw.arc((cx - 30 + i * 22, cy - 28, cx + 18 + i * 22, cy + 20), 210, 330, fill=(250, 250, 246), width=2)
+
+    stages = [
+        "freezer" if is_defrost else "setup",
+        "prep",
+        "closeup",
+        "load",
+        "inside",
+        "control",
+        "process",
+        "open_result",
+        "final",
+    ]
+
+    for index in range(9):
+        x0, y0, x1, y1 = cell_box(index)
+        draw_kitchen_cell(x0, y0, x1, y1, tone=(232 - (index % 3) * 6, 228 + (index % 2) * 4, 220 + (index % 4) * 3), fridge=stages[index] == "freezer")
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=10, outline=(198, 198, 194), width=1)
+
+        if stages[index] == "freezer":
+            paste_product(index, scale=0.58, x_bias=78, y_bias=-16, behind=True)
+            draw_food(x0 + 120, y0 + 114, size=0.62, cooked=False)
+            draw_hand(x0 + 120, y0 + 118, angle="right", scale=0.65)
+        elif stages[index] == "prep":
+            paste_product(index, scale=0.66, x_bias=62, y_bias=-22, behind=True)
+            bx0, by0, bx1, by1 = draw_cutting_board(x0, y0, x1, y1)
+            draw_food((bx0 + bx1) // 2, by0 + 30, size=0.62, cooked=False)
+            draw_hand((bx0 + bx1) // 2 + 18, by0 + 24, angle="right", scale=0.58)
+        elif stages[index] == "closeup":
+            paste_product(index, scale=0.42, x_bias=118, y_bias=-44, behind=True)
+            draw_food(x0 + int(cell_w * 0.48), y0 + int(cell_h * 0.62), size=1.20, cooked=False)
+        elif stages[index] == "load":
+            cavity = draw_product_open(index)
+            draw_food((cavity[0] + cavity[2]) // 2, cavity[1] + int((cavity[3] - cavity[1]) * 0.58), size=0.42, cooked=False, plate=True)
+            draw_hand(cavity[0] - 2, cavity[1] + 52, angle="right", scale=0.70)
+        elif stages[index] == "inside":
+            cavity = draw_product_open(index)
+            draw_food((cavity[0] + cavity[2]) // 2, cavity[1] + int((cavity[3] - cavity[1]) * 0.64), size=0.58, cooked=False, plate=True)
+            draw.line((cavity[0] + 16, cavity[1] + 18, cavity[2] - 18, cavity[1] + 18), fill=(118, 120, 118), width=2)
+        elif stages[index] == "control":
+            draw_control_touch(index)
+        elif stages[index] == "process":
+            cavity = draw_product_open(index)
+            draw_food((cavity[0] + cavity[2]) // 2, cavity[1] + int((cavity[3] - cavity[1]) * 0.64), size=0.50, cooked=True, plate=True)
+            draw_motion_marks((cavity[0] + cavity[2]) // 2 - 24, cavity[1] + 30)
+        elif stages[index] == "open_result":
+            cavity = draw_product_open(index)
+            draw_food((cavity[0] + cavity[2]) // 2, cavity[1] + int((cavity[3] - cavity[1]) * 0.64), size=0.48, cooked=True, plate=True)
+            draw_hand(cavity[0] - 8, cavity[1] + 56, angle="right", scale=0.64)
+        else:
+            paste_product(index, scale=0.72, x_bias=44, y_bias=-26, behind=True)
+            bx0, by0, bx1, by1 = draw_cutting_board(x0, y0, x1, y1)
+            if food_kind == "meal_box":
+                draw_meal_box((bx0 + bx1) // 2, by0 + 28, size=0.72)
+            else:
+                draw_food((bx0 + bx1) // 2, by0 + 28, size=0.70, cooked=True, plate=True)
+            draw_motion_marks((bx0 + bx1) // 2 - 20, by0 - 4)
 
     output = io.BytesIO()
     canvas.save(output, format="PNG", optimize=True)
@@ -4981,6 +5091,7 @@ Product: exactly one Hisense {_category_en(category)}, model {model}.
 
 Reference image rule:
 - The keyframe may be a 3x3 storyboard contact sheet. Use it only as a product-identity and action-stage reference.
+- Read a 3x3 storyboard from left to right, top to bottom as one continuous action sequence. If the contact sheet is schematic or composited, keep the action logic but render the final video as photorealistic footage, not as an illustration.
 - The final output must be one full-screen moving video, not a grid, collage, split-screen, UI screenshot, frame wall, or still image.
 - The reference image is the highest-priority source for product identity. Preserve the same appliance silhouette, front aspect ratio, door outline, handle position, control-panel layout, display position, logo position, black/glass finish, and overall proportions.
 
