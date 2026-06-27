@@ -195,6 +195,9 @@ LIBLIBAI_FALLBACK_TO_CONTROLNET = os.getenv("LIBLIBAI_FALLBACK_TO_CONTROLNET", "
 STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")))
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
+STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED = os.getenv(
+    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
 STORYBOARD_IMAGE_BRAND_STAMP_ENABLED = os.getenv(
     "STORYBOARD_IMAGE_BRAND_STAMP_ENABLED", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -3551,6 +3554,48 @@ def _center_product_crop_box(image):
     return _clamp_crop_box((left, top, left + crop_width, top + crop_height), width, height)
 
 
+def _dark_appliance_crop_box(image):
+    width, height = image.size
+    if width < 80 or height < 80:
+        return None
+    analysis_width = min(480, max(160, width))
+    analysis_height = max(1, int(round(height * analysis_width / width)))
+    rgb = image.convert("RGB").resize((analysis_width, analysis_height))
+    pixels = rgb.load()
+    xs = []
+    ys = []
+    for y in range(analysis_height):
+        for x in range(analysis_width):
+            r, g, b = pixels[x, y]
+            value = (r + g + b) / 3
+            # Capture black glass/body, display/control details, and dark logos on white catalog backgrounds.
+            if value < 105 and not (x > analysis_width * 0.72 and y > analysis_height * 0.58 and value > 45):
+                xs.append(x)
+                ys.append(y)
+    if len(xs) < analysis_width * analysis_height * 0.015:
+        return None
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    box_w = max_x - min_x + 1
+    box_h = max_y - min_y + 1
+    if box_w < analysis_width * 0.22 or box_h < analysis_height * 0.12:
+        return None
+    pad_x = box_w * 0.045
+    pad_y = box_h * 0.12
+    scale_x = width / analysis_width
+    scale_y = height / analysis_height
+    return _clamp_crop_box(
+        (
+            (min_x - pad_x) * scale_x,
+            (min_y - pad_y) * scale_y,
+            (max_x + pad_x) * scale_x,
+            (max_y + pad_y) * scale_y,
+        ),
+        width,
+        height,
+    )
+
+
 def _prepare_storyboard_reference_image_bytes(data: bytes, category="", model="", prompt=""):
     try:
         from PIL import Image, ImageEnhance, ImageOps, UnidentifiedImageError
@@ -3579,6 +3624,10 @@ def _prepare_storyboard_reference_image_bytes(data: bytes, category="", model=""
         crop_box = _front_load_appliance_crop_box(image)
         if crop_box:
             reference_preprocess = "front-load-product-reference-card"
+    if not crop_box and _has_any_storyboard_token(detection_text.lower(), ("microwave", "oven", "air fryer", "reheat", "defrost")):
+        crop_box = _dark_appliance_crop_box(image)
+        if crop_box:
+            reference_preprocess = "dark-appliance-product-reference-card"
     if not crop_box:
         crop_box = _center_product_crop_box(image)
 
@@ -3595,6 +3644,129 @@ def _prepare_storyboard_reference_image_bytes(data: bytes, category="", model=""
         "reference_preprocess": reference_preprocess,
         "reference_crop_box": list(crop_box),
         "reference_card_size": [1024, 1024],
+    }
+
+
+def _wants_local_product_ninegrid(prompt: str) -> bool:
+    raw = str(prompt or "").lower()
+    return STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED and any(
+        token in raw
+        for token in (
+            "九宫格",
+            "3x3",
+            "9-grid",
+            "nine-panel",
+            "contact sheet",
+            "storyboard contact",
+        )
+    )
+
+
+def _product_rgba_from_reference(reference_image_bytes: bytes):
+    from PIL import Image, ImageEnhance, ImageOps
+
+    image = Image.open(io.BytesIO(reference_image_bytes))
+    image = ImageOps.exif_transpose(image).convert("RGBA")
+    bbox = image.getbbox()
+    if bbox:
+        image = image.crop(bbox)
+    image = ImageEnhance.Sharpness(image).enhance(1.12)
+
+    pixels = image.load()
+    width, height = image.size
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = pixels[x, y]
+            if a == 0:
+                continue
+            # Remove white catalog backgrounds while preserving dark glass/product edges.
+            if r > 242 and g > 242 and b > 242:
+                pixels[x, y] = (r, g, b, 0)
+
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox:
+        image = image.crop(bbox)
+    return image
+
+
+def _local_product_ninegrid_bytes(reference_image_bytes: bytes, prompt: str = "") -> bytes:
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps
+
+    product = _product_rgba_from_reference(reference_image_bytes)
+    canvas_w, canvas_h = 1280, 720
+    margin = 18
+    gap = 10
+    cell_w = (canvas_w - margin * 2 - gap * 2) // 3
+    cell_h = (canvas_h - margin * 2 - gap * 2) // 3
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (238, 240, 240))
+    draw = ImageDraw.Draw(canvas)
+    palette = [
+        (234, 229, 220),
+        (229, 232, 228),
+        (238, 235, 229),
+        (224, 228, 230),
+        (236, 232, 224),
+        (230, 235, 233),
+        (235, 230, 226),
+        (226, 232, 231),
+        (240, 236, 230),
+    ]
+    scales = [0.72, 0.76, 0.82, 0.86, 0.92, 0.94, 0.88, 0.84, 0.80]
+    offsets = [(-8, 8), (10, 2), (18, -4), (-14, 6), (0, 0), (14, 4), (-18, -2), (8, 8), (0, -6)]
+
+    for index in range(9):
+        row, col = divmod(index, 3)
+        x0 = margin + col * (cell_w + gap)
+        y0 = margin + row * (cell_h + gap)
+        x1 = x0 + cell_w
+        y1 = y0 + cell_h
+        bg = palette[index]
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=10, fill=bg, outline=(205, 209, 210), width=1)
+        # Countertop and soft background depth; no text labels, no UI.
+        draw.rectangle((x0 + 8, y0 + int(cell_h * 0.66), x1 - 8, y1 - 10), fill=tuple(max(0, c - 24) for c in bg))
+        draw.ellipse((x0 + cell_w * 0.58, y0 + cell_h * 0.08, x1 + cell_w * 0.28, y0 + cell_h * 0.80), fill=(248, 247, 242))
+
+        target_w = int(cell_w * scales[index])
+        target_h = int(target_w * product.height / max(1, product.width))
+        if target_h > int(cell_h * 0.70):
+            target_h = int(cell_h * 0.70)
+            target_w = int(target_h * product.width / max(1, product.height))
+        resized = product.resize((max(1, target_w), max(1, target_h)), Image.Resampling.LANCZOS)
+        shadow = Image.new("RGBA", resized.size, (0, 0, 0, 0))
+        shadow.putalpha(resized.getchannel("A").filter(ImageFilter.GaussianBlur(7)))
+        shadow = ImageOps.colorize(shadow.getchannel("A"), black=(0, 0, 0), white=(0, 0, 0)).convert("RGBA")
+        shadow.putalpha(shadow.getchannel("A").point(lambda value: int(value * 0.22)))
+        dx, dy = offsets[index]
+        px = x0 + (cell_w - target_w) // 2 + dx
+        py = y0 + int(cell_h * 0.34) - target_h // 2 + dy
+        canvas.paste(shadow, (px + 6, py + 8), shadow)
+        canvas.paste(resized, (px, py), resized)
+
+        # Small action cues drawn as props/shapes only; product identity pixels remain otherwise unchanged.
+        cue_y = y0 + int(cell_h * 0.73)
+        if index in {1, 2, 3, 4}:
+            draw.rounded_rectangle((x0 + 26, cue_y, x0 + 94, cue_y + 22), radius=10, fill=(238, 224, 204), outline=(210, 190, 160))
+        if index in {4, 5, 6}:
+            for s in range(3):
+                sx = x0 + 112 + s * 16
+                draw.arc((sx, cue_y - 32, sx + 26, cue_y + 14), start=210, end=330, fill=(250, 250, 250), width=2)
+        if index in {7, 8}:
+            draw.rounded_rectangle((x1 - 112, cue_y - 8, x1 - 30, cue_y + 18), radius=8, fill=(226, 238, 232), outline=(190, 208, 198))
+
+    output = io.BytesIO()
+    canvas.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _start_local_product_ninegrid_image(prompt, script_job_id, variant_index, shot_index, reference_image_bytes: bytes):
+    image_bytes = _local_product_ninegrid_bytes(reference_image_bytes, prompt=prompt)
+    image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
+    image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
+    return image_key, image_uri, {
+        "mode": "local-product-ninegrid",
+        "model_id": "local-product-ninegrid",
+        "reference_control_type": "pixel-composite",
     }
 
 
@@ -4407,6 +4579,15 @@ def _start_storyboard_image(
     model="",
     reference_image_bytes: bytes | None = None,
 ):
+    if reference_image_bytes and _wants_local_product_ninegrid(prompt):
+        image_key, image_uri, metadata = _start_local_product_ninegrid_image(
+            prompt,
+            script_job_id,
+            variant_index,
+            shot_index,
+            reference_image_bytes,
+        )
+        return image_key, image_uri, None, metadata
     if _image_provider_name() == "liblibai":
         try:
             image_key, image_uri, metadata = _start_liblibai_image(
@@ -4793,29 +4974,33 @@ def _compose_manual_shot_prompt(group_rows: list[dict], category: str, model: st
 
 def _compose_ray2_storyboard_video_prompt(category: str, model: str, manual_shots: list[dict]) -> str:
     detail = " | ".join(str(shot.get("text") or "") for shot in manual_shots if shot.get("text"))
-    mode = "单片段" if len(manual_shots) == 1 else "多片段整合"
+    mode = "single shot" if len(manual_shots) == 1 else "multi-shot sequence"
     prompt = f"""
-目标：生成一段高质量 Hisense 产品广告视频，模式：{mode}。
-产品：Hisense {_category_en(category)}，型号 {model}。
+Goal: create one premium 16:9 Hisense product advertising video. Mode: {mode}.
+Product: exactly one Hisense {_category_en(category)}, model {model}.
 
-参考图使用规则：
-- 如果输入图是九宫格/多格 storyboard contact sheet，只把它当作动作阶段、场景、机位和产品身份参考。
-- 最终输出必须是单画面全屏视频，不要出现九宫格、拼贴、分屏、边框、UI截图或静态图片墙。
-- 保持同一台产品的外观、比例、门体/把手、控制面板、材质、颜色和 Logo 位置稳定。
+Reference image rule:
+- The keyframe may be a 3x3 storyboard contact sheet. Use it only as a product-identity and action-stage reference.
+- The final output must be one full-screen moving video, not a grid, collage, split-screen, UI screenshot, frame wall, or still image.
+- The reference image is the highest-priority source for product identity. Preserve the same appliance silhouette, front aspect ratio, door outline, handle position, control-panel layout, display position, logo position, black/glass finish, and overall proportions.
 
-导演要求：
-- 真实商业广告质感，干净厨房/家居环境，柔和自然光，产品轮廓清晰。
-- 根据分镜让手部、食材、蒸汽、门体、腔体、按键、搁架或完成结果自然运动。
-- 镜头运动要稳定、轻微、连续，例如缓慢推进、近景跟拍、轻微转场，不要剧烈摇晃。
-- 突出产品功能体验和最终效果，不要把画面拍成展厅陈列或电商白底图。
+Hard product-identity lock:
+- Do not redesign the appliance. Do not invent any knob, rotary dial, silver vertical side panel, transparent door, curved handle, chrome handle, extra button column, extra display, side-by-side second product, or wrong appliance category.
+- If the reference shows a black mirror-glass microwave, keep a black glossy mirror-glass front, a slim right-side vertical control strip, a small blue/white digital display near the upper-right, and the Hisense logo near the lower-left when visible.
+- Promotional badges, price stickers, discount circles, watermarks, and marketplace labels are not product features and must not appear in the video.
 
-硬性禁止：
-- 不要文字叠加、水印、价格贴、促销徽章、字幕烧录。
-- 不要竞品品牌、错误品类、第二台同类产品、电视屏幕、客厅沙发或无关家电。
-- 不要错拼 Hisense；如果无法准确渲染品牌字，保持标识区域干净即可。
+Director requirements:
+- Realistic e-commerce commercial footage in a clean modern kitchen or product-use environment, with soft natural/commercial light and readable product contours.
+- Follow the storyboard action with hands, food, steam, door/cavity interaction, control-panel operation, racks/plates, or completion result when mentioned.
+- Use stable subtle camera movement: slow push-in, close follow, controlled cut, or gentle transition. Avoid violent camera shake.
+- Emphasize product-use evidence and final result. Do not turn it into a showroom lineup or white-background catalog render.
 
-分镜内容：
-{detail or '产品使用场景和卖点验证镜头'}
+Negative constraints:
+- No text overlay, no burned-in subtitles, no watermark, no price/discount badge, no competitor brand, no duplicate Hisense appliance, no TV screen, no living room sofa, no unrelated appliance, no misspelled or fake brand text.
+- If exact Latin 'Hisense' cannot be rendered cleanly, leave the logo area blank instead of generating garbled letters.
+
+Storyboard:
+{detail or 'product-use scene and benefit proof shot'}
 """.strip()
     return re.sub(r"\s+", " ", prompt).strip()[:4000]
 
@@ -7012,7 +7197,7 @@ def nova_canvas_jobs(script_job_id: str = "", variant_index: int = -1):
         "jobs": [_public_nova_canvas_job(item) for item in jobs[:80]],
         "provider": _image_provider_name(),
         "model_id": _image_provider_model_id(),
-        "region": NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
+        "region": "" if use_local_ninegrid else NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
         "estimated_usd_per_image": NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE,
     }
 
@@ -7093,6 +7278,9 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
             shot_index=req.shot_index,
             reference_policy=reference_policy,
         )
+    use_local_ninegrid = bool(reference_image_bytes and _wants_local_product_ninegrid(raw_prompt))
+    image_provider = "local" if use_local_ninegrid else _image_provider_name()
+    image_model_id = "local-product-ninegrid" if use_local_ninegrid else _image_provider_model_id()
     image_job = {
         "id": uuid.uuid4().hex[:12],
         "script_job_id": script_job.get("id"),
@@ -7112,18 +7300,20 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "failure_message": "",
         "image_key": "",
         "image_uri": "",
-        "provider": _image_provider_name(),
-        "model_id": _image_provider_model_id(),
+        "provider": image_provider,
+        "model_id": image_model_id,
         "region": NOVA_CANVAS_AWS_REGION if _image_provider_name() == "nova_canvas" else "",
         "external_job_id": "",
         "remote_image_url": "",
         "reference_image_url": "",
         "image_generation_mode": (
-            "image-to-image"
+            "local-product-ninegrid"
+            if use_local_ninegrid
+            else "image-to-image"
             if reference_image_bytes and _liblibai_uses_source_image_mode()
             else "reference-controlnet" if reference_image_bytes else "text-to-image"
         ),
-        "reference_control_type": LIBLIBAI_REFERENCE_CONTROL_TYPE if _image_provider_name() == "liblibai" and reference_image_bytes else "",
+        "reference_control_type": "pixel-composite" if use_local_ninegrid else LIBLIBAI_REFERENCE_CONTROL_TYPE if _image_provider_name() == "liblibai" and reference_image_bytes else "",
         "reference_policy": reference_policy,
         "reference_preprocess": reference_metadata.get("reference_preprocess", ""),
         "reference_crop_box": reference_metadata.get("reference_crop_box", []),
