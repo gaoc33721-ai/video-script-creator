@@ -1298,6 +1298,11 @@ function hasActiveCanvasJobForShot(shotIndex) {
   return isActiveCanvasJob(canvasJobForShot(shotIndex));
 }
 
+function hasSucceededCanvasJobForShot(shotIndex) {
+  const job = canvasJobForShot(shotIndex);
+  return Boolean(job && job.status === "succeeded" && (job.preview_url || job.image_uri));
+}
+
 function storyboardSubmitPrompt(shot = {}) {
   return [
     "以参考产品图为唯一产品身份来源，生成一张 16:9 九宫格连续分镜参考图，用于后续生成 5-6 秒产品视频片段。",
@@ -1475,10 +1480,36 @@ async function waitForCanvasJob(shotIndex, timeoutMs = 420000) {
   throw new Error("参考图已提交后台生成，请稍后刷新状态。");
 }
 
+async function ensureCanvasImageForShot(shotIndex) {
+  const job = state.currentResultJob;
+  if (!job) return null;
+  await loadCanvasJobs(job.id).catch(() => {});
+  if (hasSucceededCanvasJobForShot(shotIndex)) {
+    return canvasJobForShot(shotIndex);
+  }
+  if (hasActiveCanvasJobForShot(shotIndex)) {
+    setMessage("productImageMessage", `正在等待第 ${shotIndex + 1} 个分镜的九宫格参考图完成...`);
+    const activeResult = await waitForCanvasJob(shotIndex);
+    if (activeResult && activeResult.status === "succeeded") {
+      return activeResult;
+    }
+    throw new Error(formatErrorDetail(activeResult?.failure_message, "片段参考图生成失败，无法继续生成视频。"));
+  }
+  setMessage("productImageMessage", `正在先为第 ${shotIndex + 1} 个分镜生成九宫格参考图...`);
+  await submitCanvasImage(shotIndex, { waitForCompletion: true, suppressFailureCard: true });
+  await loadCanvasJobs(job.id).catch(() => {});
+  const generated = canvasJobForShot(shotIndex);
+  if (generated && generated.status === "succeeded") {
+    return generated;
+  }
+  throw new Error(formatErrorDetail(generated?.failure_message, "九宫格参考图未生成成功，请稍后刷新状态或重试。"));
+}
+
 async function submitCanvasImage(shotIndex, options = {}) {
   const job = state.currentResultJob;
   const shot = state.storyboardShots[shotIndex];
   const waitForCompletion = options.waitForCompletion !== false;
+  const suppressFailureCard = options.suppressFailureCard === true;
   if (!job || !shot) return;
   state.canvasGenerating.add(shotIndex);
   rerenderStoryboardCards();
@@ -1504,18 +1535,21 @@ async function submitCanvasImage(shotIndex, options = {}) {
       return;
     }
     const failureMessage = formatErrorDetail(error, "参考图生成失败");
-    state.canvasJobs = [
-      {
-        id: `failed-${Date.now()}`,
-        script_job_id: job.id,
-        variant_index: state.activeVariantIndex,
-        shot_index: shotIndex,
-        status: "failed",
-        failure_message: failureMessage,
-        created_at: new Date().toISOString(),
-      },
-      ...(state.canvasJobs || []),
-    ];
+    if (!suppressFailureCard) {
+      state.canvasJobs = [
+        {
+          id: `failed-${Date.now()}`,
+          script_job_id: job.id,
+          variant_index: state.activeVariantIndex,
+          shot_index: shotIndex,
+          status: "failed",
+          failure_message: failureMessage,
+          created_at: new Date().toISOString(),
+        },
+        ...(state.canvasJobs || []),
+      ];
+    }
+    throw error;
   } finally {
     state.canvasGenerating.delete(shotIndex);
     rerenderStoryboardCards();
@@ -1855,8 +1889,10 @@ async function submitStoryboardShotVideo(shotIndex) {
   if (!job) return;
   const shot = state.storyboardShots[shotIndex];
   if (!shot) return;
-  setMessage("productImageMessage", `正在提交第 ${shotIndex + 1} 个分镜视频...`);
+  setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜视频...`);
   try {
+    await ensureCanvasImageForShot(shotIndex);
+    setMessage("productImageMessage", `九宫格参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜视频...`);
     await api("/api/storyboard-video/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1873,7 +1909,6 @@ async function submitStoryboardShotVideo(shotIndex) {
     setMessage("productImageMessage", error.message, "error");
   }
 }
-
 async function refreshStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
