@@ -207,7 +207,7 @@ STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
 STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED = os.getenv(
-    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "true"
+    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "false"
 ).strip().lower() in {"1", "true", "yes", "on"}
 STORYBOARD_IMAGE_BRAND_STAMP_ENABLED = os.getenv(
     "STORYBOARD_IMAGE_BRAND_STAMP_ENABLED", "true"
@@ -4271,7 +4271,10 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         "Output format: one 16:9 nine-panel 3x3 storyboard contact sheet. Each panel is a sequential keyframe from "
         "the same 5-6 second product video clip: panel 1-2 establish the scene, panel 3-5 show hand/food/door/control "
         "interaction, panel 6-8 show the benefit process, panel 9 shows the result or product beauty close-up. Keep the "
-        "same product and same environment across all nine panels."
+        "same product and same environment across all nine panels. Do not create nine similar product packshots, white "
+        "background catalog images, isolated product variants, or repeated near-identical appliance poses. Every panel "
+        "must advance the story with visible action changes, props/food/user-hand interaction, appliance door/control "
+        "state changes, or before-to-after result changes."
         if wants_contact_sheet
         else "Output format: one 16:9 photorealistic storyboard keyframe for a 5-6 second product video clip."
     )
@@ -5019,6 +5022,12 @@ def _source_image_is_ninegrid(source_image_key: str, image=None) -> bool:
         return True
     if str((job or {}).get("reference_control_type") or "") == "pixel-composite":
         return True
+    marker_text = " ".join(
+        str((job or {}).get(key) or "")
+        for key in ("image_generation_mode", "prompt", "generation_prompt")
+    ).lower()
+    if any(token in marker_text for token in ("九宫格", "3x3", "9-grid", "nine-panel", "contact sheet", "storyboard contact")):
+        return True
     return False
 
 
@@ -5338,25 +5347,52 @@ def _toapis_upload_image(image_bytes: bytes, filename: str = "product-reference.
 
 def _compose_toapis_video_prompt(category: str, model: str, manual_shots: list[dict]) -> str:
     detail = " | ".join(str(shot.get("text") or "") for shot in (manual_shots or [])[:3] if shot.get("text"))
+    product_name = f"Hisense {model}".strip()
+    category_name = _category_en(category)
     return (
-        f"Create a high-fidelity 16:9 product advertising video for one Hisense {_category_en(category)}, model {model}. "
-        "Use image 1 as the strict first-frame product identity source. Preserve the exact product "
-        "silhouette, glass/metal finish, door outline, handle or button layout, control-panel placement, logo position, "
-        "front proportions, and visible details. Do not redesign the product. Do not add a second same-category appliance. "
-        "Render realistic commercial footage in a clean home or kitchen environment with soft natural light, stable camera "
-        "movement, subtle product-use action, and no text overlay. "
-        f"Storyboard/action: {detail or 'product-use scene and benefit proof shot'}."
-    )[:1800]
+        "Use the reference storyboard image as the visual basis. If it is a 3x3 grid, read it from left to right and "
+        "top to bottom as one continuous action sequence. The final output must be a single full-screen video, never a "
+        "grid, collage, split screen, border, or contact sheet. "
+        f"Subject: exactly one core product, a {product_name} {category_name}. Preserve product identity with highest "
+        "priority: same silhouette, front proportions, door outline, black mirror/glass or metal finish, right-side "
+        "control panel, digital display area, button layout, handle/trim position, cavity and glass turntable visibility "
+        "when open, and a clear readable Hisense logo in the correct position. Do not morph, redesign, crop away, "
+        "duplicate, or replace the appliance. "
+        "Action sequence: create a coherent 5-6 second premium appliance function demo based on the storyboard/action "
+        "notes. Show a realistic user pain point, natural hand interaction with the appliance, product operation details, "
+        "and a clean benefit/result ending. If the story involves defrosting, show frozen food with visible frost, "
+        "placement into the Hisense appliance, a clear control-panel button interaction for Time & Weight Defrost or "
+        "Defrost, product running detail shots, and a fresher more even final result. "
+        f"Storyboard/action notes: {detail or 'product-use scene and benefit proof shot'}. "
+        "Background: modern real kitchen countertop or appropriate clean home environment, tidy commercial e-commerce "
+        "ad feel, soft natural daylight, realistic scale, clear product outline. "
+        "Lighting/color: refined high-end small-appliance commercial look, soft highlights on glass/metal, crisp focus, "
+        "smooth transitions, gentle push-ins and close-ups, no exaggerated acting. "
+        "Style/rendering: photorealistic, premium, clear, stable, no text overlay, no watermark, no discount badge, no "
+        "fake or garbled brand text. Only one Hisense appliance may appear; do not show a second same-category product, "
+        "TV, living room, sofa, unrelated appliance, competitor brand, or showroom lineup."
+    )[:2400]
 
 
 def _start_toapis_video_job(category, model, manual_shots: list[dict]):
     import requests as _requests
 
     source_key = _first_video_source_image_key(manual_shots)
-    reference_bytes = _reference_frame0_bytes(source_key) if source_key else b""
-    first_frame_url = _toapis_upload_image(reference_bytes, filename=f"{_safe_ascii_slug(model) or 'product'}-first-frame.png")
     prompt = _compose_toapis_video_prompt(category, model, manual_shots)
     provider = _video_provider_name()
+    reference_bytes = (
+        _reference_source_image_bytes(source_key)
+        if provider == "toapis_grok_video_3"
+        else _reference_frame0_bytes(source_key)
+        if source_key
+        else b""
+    )
+    reference_filename = (
+        f"{_safe_ascii_slug(model) or 'product'}-storyboard-reference.png"
+        if provider == "toapis_grok_video_3" and _source_image_is_ninegrid(source_key)
+        else f"{_safe_ascii_slug(model) or 'product'}-first-frame.png"
+    )
+    first_frame_url = _toapis_upload_image(reference_bytes, filename=reference_filename)
     model_name = TOAPIS_VIDEO_MODEL
     if provider == "toapis_grok_video_3":
         model_name = "grok-video-3"
@@ -5651,6 +5687,12 @@ def _first_video_source_image_key(manual_shots: list[dict]) -> str:
         if key:
             return key
     return ""
+
+
+def _reference_source_image_bytes(source_image_key: str) -> bytes:
+    if not source_image_key:
+        return b""
+    return STORAGE.read_file_bytes(source_image_key) or b""
 
 
 def _storyboard_video_generation_mode(manual_shots: list[dict]) -> str:
