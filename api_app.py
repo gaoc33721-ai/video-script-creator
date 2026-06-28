@@ -162,7 +162,7 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
-VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", os.getenv("MEDIA_VIDEO_PROVIDER", "toapis_seedance2")).strip().lower().replace("-", "_")
+VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", os.getenv("MEDIA_VIDEO_PROVIDER", "toapis_grok_video_3")).strip().lower().replace("-", "_")
 VIDEO_OUTPUT_S3_URI = os.getenv("VIDEO_OUTPUT_S3_URI", NOVA_REEL_OUTPUT_S3_URI).rstrip("/")
 LUMA_RAY2_AWS_REGION = os.getenv("LUMA_RAY2_AWS_REGION", "us-west-2")
 LUMA_RAY2_MODEL_ID = os.getenv("LUMA_RAY2_MODEL_ID", "luma.ray-v2:0")
@@ -184,10 +184,10 @@ LIBLIBAI_IMG2IMG_TEMPLATE_UUID = os.getenv("LIBLIBAI_IMG2IMG_TEMPLATE_UUID", "07
 LIBLIBAI_IMAGE_MODEL_LABEL = os.getenv("LIBLIBAI_IMAGE_MODEL_LABEL", "liblibai:star-3-alpha")
 LIBLIBAI_VIDEO_MODEL_LABEL = os.getenv("LIBLIBAI_VIDEO_MODEL_LABEL", "liblibai:star-3-keyframe")
 TOAPIS_BASE_URL = os.getenv("TOAPIS_BASE_URL", "https://toapis.com")
-TOAPIS_VIDEO_MODEL = os.getenv("TOAPIS_VIDEO_MODEL", "seedance-2")
+TOAPIS_VIDEO_MODEL = os.getenv("TOAPIS_VIDEO_MODEL", "grok-video-3")
 TOAPIS_VIDEO_RESOLUTION = os.getenv("TOAPIS_VIDEO_RESOLUTION", "1080p")
 TOAPIS_VIDEO_RATIO = os.getenv("TOAPIS_VIDEO_RATIO", "16:9")
-TOAPIS_VIDEO_DURATION = int(os.getenv("TOAPIS_VIDEO_DURATION", "5"))
+TOAPIS_VIDEO_DURATION = int(os.getenv("TOAPIS_VIDEO_DURATION", "6"))
 TOAPIS_REQUEST_TIMEOUT = int(os.getenv("TOAPIS_REQUEST_TIMEOUT", "90"))
 TOAPIS_RESULT_TIMEOUT = int(os.getenv("TOAPIS_RESULT_TIMEOUT", "180"))
 LIBLIBAI_IMAGE_ASPECT_RATIO = os.getenv("LIBLIBAI_IMAGE_ASPECT_RATIO", "landscape")
@@ -4847,7 +4847,9 @@ def _video_provider_name() -> str:
         return "luma_ray2"
     if provider in {"liblib", "liblibai", "liblibai_star3", "star3", "star_3"}:
         return "liblibai_star3"
-    if provider in {"toapis", "toapi", "seedance", "seedance2", "seedance_2", "toapis_seedance2", "toapis_video"}:
+    if provider in {"toapis", "toapi", "grok", "grok_video", "grok_video_3", "grokvideo3", "toapis_grok_video_3"}:
+        return "toapis_grok_video_3"
+    if provider in {"seedance", "seedance2", "seedance_2", "toapis_seedance2", "toapis_video"}:
         return "toapis_seedance2"
     if provider in {"happyhorse", "toapis_happyhorse", "happy_horse"}:
         return "toapis_happyhorse"
@@ -4860,7 +4862,7 @@ def _video_model_id() -> str:
         return LUMA_RAY2_MODEL_ID
     if provider == "liblibai_star3":
         return LIBLIBAI_VIDEO_MODEL_LABEL
-    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+    if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
         return TOAPIS_VIDEO_MODEL
     return NOVA_REEL_MODEL_ID
 
@@ -4871,7 +4873,7 @@ def _video_region() -> str:
         return LUMA_RAY2_AWS_REGION
     if provider == "liblibai_star3":
         return ""
-    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+    if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
         return ""
     return NOVA_REEL_AWS_REGION
 
@@ -4882,7 +4884,7 @@ def _video_estimated_usd_per_second() -> float:
         return LUMA_RAY2_ESTIMATED_USD_PER_SECOND
     if provider == "liblibai_star3":
         return 0.0
-    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+    if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
         return 0.0
     return NOVA_REEL_ESTIMATED_USD_PER_SECOND
 
@@ -5356,20 +5358,28 @@ def _start_toapis_video_job(category, model, manual_shots: list[dict]):
     prompt = _compose_toapis_video_prompt(category, model, manual_shots)
     provider = _video_provider_name()
     model_name = TOAPIS_VIDEO_MODEL
+    if provider == "toapis_grok_video_3":
+        model_name = "grok-video-3"
     if provider == "toapis_happyhorse" and not model_name.lower().startswith("happy"):
         model_name = "happyhorse-1.0"
     payload = {
         "model": model_name,
         "client_business_id": f"storyboard_{uuid.uuid4().hex[:20]}",
         "prompt": prompt,
-        "duration": max(5, min(10, int(TOAPIS_VIDEO_DURATION or 5))),
         "aspect_ratio": TOAPIS_VIDEO_RATIO,
         "resolution": TOAPIS_VIDEO_RESOLUTION,
     }
-    if provider == "toapis_happyhorse":
+    if provider == "toapis_grok_video_3":
+        allowed_seconds = {6, 10, 15}
+        seconds = int(TOAPIS_VIDEO_DURATION or 6)
+        payload["seconds"] = str(seconds if seconds in allowed_seconds else 6)
+        payload["images"] = [first_frame_url]
+    elif provider == "toapis_happyhorse":
+        payload["duration"] = max(5, min(10, int(TOAPIS_VIDEO_DURATION or 5)))
         payload["action"] = "image-to-video"
         payload["image_urls"] = [first_frame_url]
     else:
+        payload["duration"] = max(5, min(10, int(TOAPIS_VIDEO_DURATION or 5)))
         payload["image_with_roles"] = [{"url": first_frame_url, "role": "first_frame"}]
     response = _requests.post(
         _toapis_url("/v1/videos/generations"),
@@ -5588,7 +5598,7 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
 
 
 def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
-    if _video_provider_name() in {"toapis_seedance2", "toapis_happyhorse"}:
+    if _video_provider_name() in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
         return _start_toapis_video_job(category, model, manual_shots)
 
     if _video_provider_name() == "luma_ray2":
@@ -5645,7 +5655,7 @@ def _first_video_source_image_key(manual_shots: list[dict]) -> str:
 
 def _storyboard_video_generation_mode(manual_shots: list[dict]) -> str:
     provider = _video_provider_name()
-    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+    if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
         return "toapis-image-to-video"
     if provider == "luma_ray2":
         return "luma-keyframes-frame0"
@@ -8174,7 +8184,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "status": "InProgress",
         "failure_message": "",
         "invocation_arn": invocation_arn,
-        "external_task_id": invocation_arn if provider in {"toapis_seedance2", "toapis_happyhorse"} else "",
+        "external_task_id": invocation_arn if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"} else "",
         "output_s3_uri": output_s3_uri,
         "video_s3_uri": "",
         "provider": provider,
@@ -8189,7 +8199,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
             "LibLibAI Star-3 正在生成高保真产品关键帧；完成后请人工复核产品外观一致性。"
             if provider == "liblibai_star3"
             else "ToAPIs 正在生成高保真产品视频；完成后将下载回平台并进行首帧/中帧一致性质检。"
-            if provider in {"toapis_seedance2", "toapis_happyhorse"}
+            if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}
             else "生成完成后将进行首帧/中帧一致性质检；若环境无法自动抽帧，将标记为人工复核。"
         ),
     }
@@ -8221,7 +8231,7 @@ def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = 
         if not invocation_arn:
             continue
         try:
-            if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+            if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
                 result = _query_toapis_video_job(invocation_arn)
                 status, video_url, failure = _toapis_status(result)
                 item["status"] = status

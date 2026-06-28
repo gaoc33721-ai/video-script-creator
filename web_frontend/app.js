@@ -1853,7 +1853,7 @@ function renderStoryboardVideoJobs(jobs) {
       const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
       const modeLabel =
         job.generation_mode === "toapis-image-to-video"
-          ? "ToAPIs Seedance 2 · 高保真产品视频"
+          ? "ToAPIs Grok Video 3 · 高性价比产品视频"
           : job.generation_mode === "liblibai-star3-keyframe"
           ? "LibLibAI Star-3 · 高保真产品关键帧"
           : job.generation_mode === "luma-keyframes-frame0"
@@ -1875,13 +1875,13 @@ function renderStoryboardVideoJobs(jobs) {
           ${preview}
         </article>
       `;
-    }).join("") || '<div class="empty-state"><strong>暂无生成任务</strong><span>上传产品图并确认片段后，可提交 ToAPIs Seedance 2 高保真产品视频任务。</span></div>';
+    }).join("") || '<div class="empty-state"><strong>暂无生成任务</strong><span>上传产品图并确认片段后，可提交 ToAPIs Grok Video 3 高性价比产品视频任务。</span></div>';
 }
 
 async function submitStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在提交 ToAPIs Seedance 2 高保真产品视频任务：使用首帧/参考图锁定产品外观，不再停留在关键帧。");
+  setMessage("storyboardVideoMessage", "正在提交 ToAPIs Grok Video 3 产品视频任务：使用参考图锁定产品外观，不再停留在关键帧。");
   try {
     await api("/api/storyboard-video/submit", {
       method: "POST",
@@ -1907,7 +1907,7 @@ async function submitStoryboardShotVideo(shotIndex) {
   setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜的 ToAPIs 高保真视频...`);
   try {
     await ensureCanvasImageForShot(shotIndex);
-    setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜的 ToAPIs Seedance 2 高保真产品视频任务。`);
+    setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜的 ToAPIs Grok Video 3 产品视频任务。`);
     await api("/api/storyboard-video/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
