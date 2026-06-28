@@ -19,7 +19,7 @@ NOVA_REEL_MODEL_ID="${NOVA_REEL_MODEL_ID:-amazon.nova-reel-v1:1}"
 NOVA_REEL_OUTPUT_S3_URI="${NOVA_REEL_OUTPUT_S3_URI:-}"
 NOVA_REEL_ESTIMATED_USD_PER_SECOND="${NOVA_REEL_ESTIMATED_USD_PER_SECOND:-0.08}"
 NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK="${NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK:-2}"
-VIDEO_PROVIDER="${VIDEO_PROVIDER:-liblibai_star3}"
+VIDEO_PROVIDER="${VIDEO_PROVIDER:-toapis_seedance2}"
 VIDEO_OUTPUT_S3_URI="${VIDEO_OUTPUT_S3_URI:-$NOVA_REEL_OUTPUT_S3_URI}"
 LUMA_RAY2_AWS_REGION="${LUMA_RAY2_AWS_REGION:-us-west-2}"
 LUMA_RAY2_MODEL_ID="${LUMA_RAY2_MODEL_ID:-luma.ray-v2:0}"
@@ -49,6 +49,16 @@ LIBLIBAI_MAX_PROMPT_LENGTH="${LIBLIBAI_MAX_PROMPT_LENGTH:-1800}"
 LIBLIBAI_REFERENCE_CONTROL_TYPE="${LIBLIBAI_REFERENCE_CONTROL_TYPE:-depth}"
 LIBLIBAI_REFERENCE_MODE="${LIBLIBAI_REFERENCE_MODE:-img2img}"
 LIBLIBAI_FALLBACK_TO_CONTROLNET="${LIBLIBAI_FALLBACK_TO_CONTROLNET:-true}"
+TOAPIS_BASE_URL="${TOAPIS_BASE_URL:-https://toapis.com}"
+TOAPIS_VIDEO_MODEL="${TOAPIS_VIDEO_MODEL:-seedance-2}"
+TOAPIS_VIDEO_RESOLUTION="${TOAPIS_VIDEO_RESOLUTION:-1080p}"
+TOAPIS_VIDEO_RATIO="${TOAPIS_VIDEO_RATIO:-16:9}"
+TOAPIS_VIDEO_DURATION="${TOAPIS_VIDEO_DURATION:-5}"
+TOAPIS_REQUEST_TIMEOUT="${TOAPIS_REQUEST_TIMEOUT:-90}"
+TOAPIS_RESULT_TIMEOUT="${TOAPIS_RESULT_TIMEOUT:-180}"
+TOAPIS_API_KEY="${TOAPIS_API_KEY:-}"
+TOAPIS_API_KEY_SECRET_NAME="${TOAPIS_API_KEY_SECRET_NAME:-${APP_NAME}/toapis-api-key}"
+TOAPIS_API_KEY_SECRET_ARN="${TOAPIS_API_KEY_SECRET_ARN:-}"
 STORYBOARD_IMAGE_WORKERS="${STORYBOARD_IMAGE_WORKERS:-1}"
 STORYBOARD_IMAGE_RETRY_COUNT="${STORYBOARD_IMAGE_RETRY_COUNT:-2}"
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS="${STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS:-15}"
@@ -518,6 +528,39 @@ if [[ -z "$LIBLIBAI_SECRET_KEY" && -z "$LIBLIBAI_SECRET_KEY_SECRET_ARN" ]]; then
   fi
 fi
 
+if [[ -n "$TOAPIS_API_KEY" && -z "$TOAPIS_API_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$TOAPIS_API_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$TOAPIS_API_KEY_SECRET_NAME" \
+      --secret-string "$TOAPIS_API_KEY" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$TOAPIS_API_KEY_SECRET_NAME" \
+      --secret-string "$TOAPIS_API_KEY" >/dev/null
+  fi
+  TOAPIS_API_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$TOAPIS_API_KEY_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
+if [[ -z "$TOAPIS_API_KEY" && -z "$TOAPIS_API_KEY_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$TOAPIS_API_KEY_SECRET_NAME" >/dev/null 2>&1; then
+    TOAPIS_API_KEY_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$TOAPIS_API_KEY_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
 if ! aws iam get-role --role-name "$TASK_ROLE" >/dev/null 2>&1; then
   aws iam create-role \
     --role-name "$TASK_ROLE" \
@@ -658,6 +701,9 @@ fi
 if [[ -n "$LIBLIBAI_SECRET_KEY_SECRET_ARN" ]]; then
   SECRET_ARNS+=("$LIBLIBAI_SECRET_KEY_SECRET_ARN")
 fi
+if [[ -n "$TOAPIS_API_KEY_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$TOAPIS_API_KEY_SECRET_ARN")
+fi
 
 if [[ ${#SECRET_ARNS[@]} -gt 0 ]]; then
   SECRET_POLICY_DOC="$(mktemp)"
@@ -730,6 +776,13 @@ env = [
     {"name": "LIBLIBAI_REFERENCE_CONTROL_TYPE", "value": "${LIBLIBAI_REFERENCE_CONTROL_TYPE}"},
     {"name": "LIBLIBAI_REFERENCE_MODE", "value": "${LIBLIBAI_REFERENCE_MODE}"},
     {"name": "LIBLIBAI_FALLBACK_TO_CONTROLNET", "value": "${LIBLIBAI_FALLBACK_TO_CONTROLNET}"},
+    {"name": "TOAPIS_BASE_URL", "value": "${TOAPIS_BASE_URL}"},
+    {"name": "TOAPIS_VIDEO_MODEL", "value": "${TOAPIS_VIDEO_MODEL}"},
+    {"name": "TOAPIS_VIDEO_RESOLUTION", "value": "${TOAPIS_VIDEO_RESOLUTION}"},
+    {"name": "TOAPIS_VIDEO_RATIO", "value": "${TOAPIS_VIDEO_RATIO}"},
+    {"name": "TOAPIS_VIDEO_DURATION", "value": "${TOAPIS_VIDEO_DURATION}"},
+    {"name": "TOAPIS_REQUEST_TIMEOUT", "value": "${TOAPIS_REQUEST_TIMEOUT}"},
+    {"name": "TOAPIS_RESULT_TIMEOUT", "value": "${TOAPIS_RESULT_TIMEOUT}"},
     {"name": "STORYBOARD_IMAGE_WORKERS", "value": "${STORYBOARD_IMAGE_WORKERS}"},
     {"name": "STORYBOARD_IMAGE_RETRY_COUNT", "value": "${STORYBOARD_IMAGE_RETRY_COUNT}"},
     {"name": "STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "value": "${STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS}"},
@@ -763,6 +816,8 @@ if "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}":
     env.append({"name": "LIBLIBAI_ACCESS_KEY_SECRET_ID", "value": "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}"})
 if "${LIBLIBAI_SECRET_KEY_SECRET_ARN}":
     env.append({"name": "LIBLIBAI_SECRET_KEY_SECRET_ID", "value": "${LIBLIBAI_SECRET_KEY_SECRET_ARN}"})
+if "${TOAPIS_API_KEY_SECRET_ARN}":
+    env.append({"name": "TOAPIS_API_KEY_SECRET_ID", "value": "${TOAPIS_API_KEY_SECRET_ARN}"})
 secrets = []
 if "${APP_ACCESS_PASSWORD_SECRET_ARN}":
     secrets.append({"name": "APP_ACCESS_PASSWORD", "valueFrom": "${APP_ACCESS_PASSWORD_SECRET_ARN}"})
@@ -778,6 +833,8 @@ if "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}":
     secrets.append({"name": "LIBLIBAI_ACCESS_KEY", "valueFrom": "${LIBLIBAI_ACCESS_KEY_SECRET_ARN}"})
 if "${LIBLIBAI_SECRET_KEY_SECRET_ARN}":
     secrets.append({"name": "LIBLIBAI_SECRET_KEY", "valueFrom": "${LIBLIBAI_SECRET_KEY_SECRET_ARN}"})
+if "${TOAPIS_API_KEY_SECRET_ARN}":
+    secrets.append({"name": "TOAPIS_API_KEY", "valueFrom": "${TOAPIS_API_KEY_SECRET_ARN}"})
 
 doc = {
     "family": "${TASK_FAMILY}",

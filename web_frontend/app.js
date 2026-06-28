@@ -1852,7 +1852,9 @@ function renderStoryboardVideoJobs(jobs) {
         : "";
       const failure = job.failure_message ? `<div class="message error">${escapeHtml(job.failure_message)}</div>` : "";
       const modeLabel =
-        job.generation_mode === "liblibai-star3-keyframe"
+        job.generation_mode === "toapis-image-to-video"
+          ? "ToAPIs Seedance 2 · 高保真产品视频"
+          : job.generation_mode === "liblibai-star3-keyframe"
           ? "LibLibAI Star-3 · 高保真产品关键帧"
           : job.generation_mode === "luma-keyframes-frame0"
           ? `首帧驱动 · ${job.frame0_reference_kind === "single-frame-from-ninegrid" ? "九宫图裁单帧" : "单张首帧"}`
@@ -1873,13 +1875,13 @@ function renderStoryboardVideoJobs(jobs) {
           ${preview}
         </article>
       `;
-    }).join("") || '<div class="empty-state"><strong>暂无生成任务</strong><span>上传产品图并确认片段后，可提交 LibLibAI Star-3 高保真产品关键帧任务。</span></div>';
+    }).join("") || '<div class="empty-state"><strong>暂无生成任务</strong><span>上传产品图并确认片段后，可提交 ToAPIs Seedance 2 高保真产品视频任务。</span></div>';
 }
 
 async function submitStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在提交 LibLibAI Star-3 高保真产品关键帧任务：先验证产品外观一致性，不再使用 Luma Ray2 生成变形视频。");
+  setMessage("storyboardVideoMessage", "正在提交 ToAPIs Seedance 2 高保真产品视频任务：使用首帧/参考图锁定产品外观，不再停留在关键帧。");
   try {
     await api("/api/storyboard-video/submit", {
       method: "POST",
@@ -1890,7 +1892,7 @@ async function submitStoryboardVideoGeneration() {
         product_image_id: currentProductImageId(),
       }),
     });
-    setMessage("storyboardVideoMessage", "LibLibAI Star-3 关键帧任务已提交，完成后请刷新查看并人工复核产品一致性。", "ok");
+    setMessage("storyboardVideoMessage", "ToAPIs 高保真视频任务已提交，完成后会自动下载回平台并标记质检/人工复核结果。", "ok");
     await loadStoryboardVideoJobs(job.id);
   } catch (error) {
     setMessage("storyboardVideoMessage", error.message, "error");
@@ -1902,10 +1904,10 @@ async function submitStoryboardShotVideo(shotIndex) {
   if (!job) return;
   const shot = state.storyboardShots[shotIndex];
   if (!shot) return;
-  setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜的 Star-3 高保真关键帧...`);
+  setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜的 ToAPIs 高保真视频...`);
   try {
     await ensureCanvasImageForShot(shotIndex);
-    setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜的 LibLibAI Star-3 高保真产品关键帧任务。`);
+    setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜的 ToAPIs Seedance 2 高保真产品视频任务。`);
     await api("/api/storyboard-video/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1916,7 +1918,7 @@ async function submitStoryboardShotVideo(shotIndex) {
         product_image_id: currentProductImageId(),
       }),
     });
-    setMessage("productImageMessage", "LibLibAI Star-3 关键帧任务已提交，完成后会显示人工复核标记。", "ok");
+    setMessage("productImageMessage", "ToAPIs 高保真视频任务已提交，完成后会显示质检/人工复核标记。", "ok");
     await loadStoryboardVideoJobs(job.id);
   } catch (error) {
     setMessage("productImageMessage", error.message, "error");
@@ -1925,7 +1927,7 @@ async function submitStoryboardShotVideo(shotIndex) {
 async function refreshStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在刷新 Star-3 高保真生成状态...");
+  setMessage("storyboardVideoMessage", "正在刷新 ToAPIs 高保真视频生成状态...");
   try {
     const data = await api(
       `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}`,
@@ -1943,7 +1945,7 @@ async function refreshStoryboardVideoGeneration() {
 async function refreshStoryboardShotVideo(shotIndex) {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("productImageMessage", `正在刷新第 ${shotIndex + 1} 个分镜 Star-3 关键帧状态...`);
+  setMessage("productImageMessage", `正在刷新第 ${shotIndex + 1} 个分镜 ToAPIs 视频状态...`);
   try {
     await api(
       `/api/storyboard-video/refresh?script_job_id=${encodeURIComponent(job.id)}&variant_index=${state.activeVariantIndex}&shot_index=${shotIndex}`,

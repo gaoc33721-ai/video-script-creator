@@ -162,7 +162,7 @@ NOVA_REEL_AWS_REGION = os.getenv("NOVA_REEL_AWS_REGION", "us-east-1")
 NOVA_REEL_MODEL_ID = os.getenv("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
 NOVA_REEL_OUTPUT_S3_URI = os.getenv("NOVA_REEL_OUTPUT_S3_URI", "").rstrip("/")
 NOVA_REEL_ESTIMATED_USD_PER_SECOND = float(os.getenv("NOVA_REEL_ESTIMATED_USD_PER_SECOND", "0.08"))
-VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", os.getenv("MEDIA_VIDEO_PROVIDER", "liblibai_star3")).strip().lower().replace("-", "_")
+VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", os.getenv("MEDIA_VIDEO_PROVIDER", "toapis_seedance2")).strip().lower().replace("-", "_")
 VIDEO_OUTPUT_S3_URI = os.getenv("VIDEO_OUTPUT_S3_URI", NOVA_REEL_OUTPUT_S3_URI).rstrip("/")
 LUMA_RAY2_AWS_REGION = os.getenv("LUMA_RAY2_AWS_REGION", "us-west-2")
 LUMA_RAY2_MODEL_ID = os.getenv("LUMA_RAY2_MODEL_ID", "luma.ray-v2:0")
@@ -183,6 +183,13 @@ LIBLIBAI_TEMPLATE_UUID = os.getenv("LIBLIBAI_TEMPLATE_UUID", "5d7e67009b344550bc
 LIBLIBAI_IMG2IMG_TEMPLATE_UUID = os.getenv("LIBLIBAI_IMG2IMG_TEMPLATE_UUID", "07e00af4fc464c7ab55ff906f8acf1b7")
 LIBLIBAI_IMAGE_MODEL_LABEL = os.getenv("LIBLIBAI_IMAGE_MODEL_LABEL", "liblibai:star-3-alpha")
 LIBLIBAI_VIDEO_MODEL_LABEL = os.getenv("LIBLIBAI_VIDEO_MODEL_LABEL", "liblibai:star-3-keyframe")
+TOAPIS_BASE_URL = os.getenv("TOAPIS_BASE_URL", "https://toapis.com")
+TOAPIS_VIDEO_MODEL = os.getenv("TOAPIS_VIDEO_MODEL", "seedance-2")
+TOAPIS_VIDEO_RESOLUTION = os.getenv("TOAPIS_VIDEO_RESOLUTION", "1080p")
+TOAPIS_VIDEO_RATIO = os.getenv("TOAPIS_VIDEO_RATIO", "16:9")
+TOAPIS_VIDEO_DURATION = int(os.getenv("TOAPIS_VIDEO_DURATION", "5"))
+TOAPIS_REQUEST_TIMEOUT = int(os.getenv("TOAPIS_REQUEST_TIMEOUT", "90"))
+TOAPIS_RESULT_TIMEOUT = int(os.getenv("TOAPIS_RESULT_TIMEOUT", "180"))
 LIBLIBAI_IMAGE_ASPECT_RATIO = os.getenv("LIBLIBAI_IMAGE_ASPECT_RATIO", "landscape")
 LIBLIBAI_IMAGE_WIDTH = int(os.getenv("LIBLIBAI_IMAGE_WIDTH", "1280"))
 LIBLIBAI_IMAGE_HEIGHT = int(os.getenv("LIBLIBAI_IMAGE_HEIGHT", "720"))
@@ -219,6 +226,13 @@ _LIBLIBAI_SECRET_KEY_SECRET_ID = (
 )
 _liblibai_access_key_cache = {"value": _LIBLIBAI_ACCESS_KEY, "expires_at": 0.0}
 _liblibai_secret_key_cache = {"value": _LIBLIBAI_SECRET_KEY, "expires_at": 0.0}
+_TOAPIS_API_KEY = os.getenv("TOAPIS_API_KEY", "")
+_TOAPIS_API_KEY_SECRET_ID = (
+    os.getenv("TOAPIS_API_KEY_SECRET_ID")
+    or os.getenv("TOAPIS_API_KEY_SECRET_ARN")
+    or os.getenv("TOAPIS_API_KEY_SECRET_NAME")
+)
+_toapis_api_key_cache = {"value": _TOAPIS_API_KEY, "expires_at": 0.0}
 RAINFOREST_DEFAULT_AMAZON_DOMAIN = os.getenv("RAINFOREST_DEFAULT_AMAZON_DOMAIN", "amazon.com")
 RAINFOREST_SEARCH_TOP_N = int(os.getenv("RAINFOREST_SEARCH_TOP_N", "8"))
 RAINFOREST_DISCOVERY_REQUEST_LIMIT = int(os.getenv("RAINFOREST_DISCOVERY_REQUEST_LIMIT", "6"))
@@ -415,6 +429,14 @@ def _current_liblibai_secret_key() -> str:
         _LIBLIBAI_SECRET_KEY,
         _LIBLIBAI_SECRET_KEY_SECRET_ID,
         _liblibai_secret_key_cache,
+    )
+
+
+def _current_toapis_api_key() -> str:
+    return _current_external_secret(
+        _TOAPIS_API_KEY,
+        _TOAPIS_API_KEY_SECRET_ID,
+        _toapis_api_key_cache,
     )
 
 
@@ -4825,6 +4847,10 @@ def _video_provider_name() -> str:
         return "luma_ray2"
     if provider in {"liblib", "liblibai", "liblibai_star3", "star3", "star_3"}:
         return "liblibai_star3"
+    if provider in {"toapis", "toapi", "seedance", "seedance2", "seedance_2", "toapis_seedance2", "toapis_video"}:
+        return "toapis_seedance2"
+    if provider in {"happyhorse", "toapis_happyhorse", "happy_horse"}:
+        return "toapis_happyhorse"
     return "nova_reel"
 
 
@@ -4834,6 +4860,8 @@ def _video_model_id() -> str:
         return LUMA_RAY2_MODEL_ID
     if provider == "liblibai_star3":
         return LIBLIBAI_VIDEO_MODEL_LABEL
+    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+        return TOAPIS_VIDEO_MODEL
     return NOVA_REEL_MODEL_ID
 
 
@@ -4843,6 +4871,8 @@ def _video_region() -> str:
         return LUMA_RAY2_AWS_REGION
     if provider == "liblibai_star3":
         return ""
+    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+        return ""
     return NOVA_REEL_AWS_REGION
 
 
@@ -4851,6 +4881,8 @@ def _video_estimated_usd_per_second() -> float:
     if provider == "luma_ray2":
         return LUMA_RAY2_ESTIMATED_USD_PER_SECOND
     if provider == "liblibai_star3":
+        return 0.0
+    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
         return 0.0
     return NOVA_REEL_ESTIMATED_USD_PER_SECOND
 
@@ -5266,6 +5298,162 @@ def _run_liblibai_star3_keyframe_job(video_job_id: str):
         _save_storyboard_video_jobs(jobs)
 
 
+def _toapis_headers() -> dict[str, str]:
+    api_key = _current_toapis_api_key()
+    if not api_key:
+        raise RuntimeError("TOAPIS_API_KEY is not configured.")
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def _toapis_url(path: str) -> str:
+    return f"{TOAPIS_BASE_URL.rstrip('/')}/{str(path or '').lstrip('/')}"
+
+
+def _toapis_upload_image(image_bytes: bytes, filename: str = "product-reference.png") -> str:
+    import requests as _requests
+
+    if not image_bytes:
+        return ""
+    files = {"file": (filename, image_bytes, "image/png")}
+    response = _requests.post(
+        _toapis_url("/v1/uploads/images"),
+        headers=_toapis_headers(),
+        files=files,
+        timeout=max(10, int(TOAPIS_REQUEST_TIMEOUT)),
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"text": response.text[:500]}
+    if response.status_code >= 400:
+        raise RuntimeError(f"ToAPIs image upload HTTP {response.status_code}: {body}")
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    image_url = data.get("url") or data.get("image_url") or data.get("imageUrl")
+    if not image_url:
+        raise RuntimeError(f"ToAPIs image upload returned no URL: {body}")
+    return str(image_url)
+
+
+def _compose_toapis_video_prompt(category: str, model: str, manual_shots: list[dict]) -> str:
+    detail = " | ".join(str(shot.get("text") or "") for shot in (manual_shots or [])[:3] if shot.get("text"))
+    return (
+        f"Create a high-fidelity 16:9 product advertising video for one Hisense {_category_en(category)}, model {model}. "
+        "Use image 1 as the strict first-frame product identity source. Preserve the exact product "
+        "silhouette, glass/metal finish, door outline, handle or button layout, control-panel placement, logo position, "
+        "front proportions, and visible details. Do not redesign the product. Do not add a second same-category appliance. "
+        "Render realistic commercial footage in a clean home or kitchen environment with soft natural light, stable camera "
+        "movement, subtle product-use action, and no text overlay. "
+        f"Storyboard/action: {detail or 'product-use scene and benefit proof shot'}."
+    )[:1800]
+
+
+def _start_toapis_video_job(category, model, manual_shots: list[dict]):
+    import requests as _requests
+
+    source_key = _first_video_source_image_key(manual_shots)
+    reference_bytes = _reference_frame0_bytes(source_key) if source_key else b""
+    first_frame_url = _toapis_upload_image(reference_bytes, filename=f"{_safe_ascii_slug(model) or 'product'}-first-frame.png")
+    prompt = _compose_toapis_video_prompt(category, model, manual_shots)
+    provider = _video_provider_name()
+    model_name = TOAPIS_VIDEO_MODEL
+    if provider == "toapis_happyhorse" and not model_name.lower().startswith("happy"):
+        model_name = "happyhorse-1.0"
+    payload = {
+        "model": model_name,
+        "client_business_id": f"storyboard_{uuid.uuid4().hex[:20]}",
+        "prompt": prompt,
+        "duration": max(5, min(10, int(TOAPIS_VIDEO_DURATION or 5))),
+        "aspect_ratio": TOAPIS_VIDEO_RATIO,
+        "resolution": TOAPIS_VIDEO_RESOLUTION,
+    }
+    if provider == "toapis_happyhorse":
+        payload["action"] = "image-to-video"
+        payload["image_urls"] = [first_frame_url]
+    else:
+        payload["image_with_roles"] = [{"url": first_frame_url, "role": "first_frame"}]
+    response = _requests.post(
+        _toapis_url("/v1/videos/generations"),
+        headers={**_toapis_headers(), "Content-Type": "application/json"},
+        json={key: value for key, value in payload.items() if value not in ("", [], None)},
+        timeout=max(10, int(TOAPIS_REQUEST_TIMEOUT)),
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"text": response.text[:500]}
+    if response.status_code >= 400:
+        raise RuntimeError(f"ToAPIs video submit HTTP {response.status_code}: {body}")
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    task_id = (
+        data.get("task_id")
+        or data.get("taskId")
+        or data.get("id")
+        or body.get("task_id")
+        or body.get("id")
+    )
+    if not task_id:
+        raise RuntimeError(f"ToAPIs video submit returned no task id: {body}")
+    return str(task_id), "", {
+        "toapis_payload": payload,
+        "toapis_first_frame_url": first_frame_url,
+        "generation_prompt": prompt,
+        "toapis_submit_response": body,
+    }
+
+
+def _query_toapis_video_job(task_id: str) -> dict:
+    import requests as _requests
+
+    response = _requests.get(
+        _toapis_url(f"/v1/videos/generations/{urllib.parse.quote(str(task_id), safe='')}"),
+        headers=_toapis_headers(),
+        timeout=max(10, int(TOAPIS_REQUEST_TIMEOUT)),
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"text": response.text[:500]}
+    if response.status_code >= 400:
+        raise RuntimeError(f"ToAPIs video status HTTP {response.status_code}: {body}")
+    return body
+
+
+def _toapis_status(body: dict) -> tuple[str, str, str]:
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    raw_status = str(data.get("status") or body.get("status") or "").lower()
+    if raw_status in {"succeeded", "success", "completed", "complete", "done"}:
+        status = "Completed"
+    elif raw_status in {"failed", "failure", "error", "cancelled", "canceled"}:
+        status = "Failed"
+    else:
+        status = "InProgress"
+    failure = data.get("error") or data.get("message") or body.get("message") or ""
+    result = data.get("result") if isinstance(data.get("result"), dict) else data
+    videos = result.get("data") if isinstance(result.get("data"), list) else result.get("videos")
+    video_url = ""
+    if isinstance(videos, list) and videos:
+        first = videos[0]
+        if isinstance(first, dict):
+            video_url = first.get("url") or first.get("video_url") or first.get("videoUrl") or ""
+        elif isinstance(first, str):
+            video_url = first
+    video_url = video_url or result.get("url") or result.get("video_url") or result.get("videoUrl") or ""
+    return status, str(video_url or ""), str(failure or "")
+
+
+def _store_toapis_video(video_job_id: str, video_url: str) -> str:
+    import requests as _requests
+
+    if not video_url:
+        return ""
+    response = _requests.get(video_url, timeout=max(20, int(TOAPIS_RESULT_TIMEOUT)), headers={"User-Agent": "video-script-toapis/1.0"})
+    response.raise_for_status()
+    if len(response.content) < 1024:
+        raise RuntimeError("ToAPIs video download returned an empty or invalid file.")
+    key = f"storyboard_videos/toapis/{re.sub(r'[^A-Za-z0-9_-]+', '_', video_job_id)[:80]}.mp4"
+    return STORAGE.write_file_bytes(key, response.content, content_type="video/mp4")
+
+
 def _image_format_from_key(key: str) -> str:
     return "jpeg" if str(key or "").lower().endswith((".jpg", ".jpeg")) else "png"
 
@@ -5400,6 +5588,9 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
 
 
 def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
+    if _video_provider_name() in {"toapis_seedance2", "toapis_happyhorse"}:
+        return _start_toapis_video_job(category, model, manual_shots)
+
     if _video_provider_name() == "luma_ray2":
         prompt = _compose_ray2_storyboard_video_prompt(category, model, manual_shots)
         first_image = next((_ray2_image_payload_from_shot(shot) for shot in manual_shots if _ray2_image_payload_from_shot(shot)), None)
@@ -5454,6 +5645,8 @@ def _first_video_source_image_key(manual_shots: list[dict]) -> str:
 
 def _storyboard_video_generation_mode(manual_shots: list[dict]) -> str:
     provider = _video_provider_name()
+    if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+        return "toapis-image-to-video"
     if provider == "luma_ray2":
         return "luma-keyframes-frame0"
     if provider == "liblibai_star3":
@@ -7933,17 +8126,26 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
     provider = _video_provider_name()
     actual_duration_seconds = _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if provider == "luma_ray2" else duration_seconds
     frame0_source_image_key = _first_video_source_image_key(manual_shots)
+    start_metadata = {}
     if provider == "liblibai_star3":
         invocation_arn, output_s3_uri = "", ""
     else:
         try:
-            invocation_arn, output_s3_uri = _start_storyboard_video_job(
+            started = _start_storyboard_video_job(
                 request_payload.get("category", ""),
                 request_payload.get("model", ""),
                 manual_shots,
             )
+            if isinstance(started, tuple) and len(started) == 3:
+                invocation_arn, output_s3_uri, start_metadata = started
+            else:
+                invocation_arn, output_s3_uri = started
         except Exception as exc:
-            raise HTTPException(status_code=429 if "throttling" in str(exc).lower() else 400, detail=_friendly_video_submit_error(exc)) from exc
+            error_text = str(exc).lower()
+            raise HTTPException(
+                status_code=429 if "throttling" in error_text or "rate" in error_text else 400,
+                detail=_friendly_video_submit_error(exc),
+            ) from exc
 
     now = _utc_now()
     video_job = {
@@ -7972,6 +8174,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "status": "InProgress",
         "failure_message": "",
         "invocation_arn": invocation_arn,
+        "external_task_id": invocation_arn if provider in {"toapis_seedance2", "toapis_happyhorse"} else "",
         "output_s3_uri": output_s3_uri,
         "video_s3_uri": "",
         "provider": provider,
@@ -7985,9 +8188,12 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "qa_message": (
             "LibLibAI Star-3 正在生成高保真产品关键帧；完成后请人工复核产品外观一致性。"
             if provider == "liblibai_star3"
+            else "ToAPIs 正在生成高保真产品视频；完成后将下载回平台并进行首帧/中帧一致性质检。"
+            if provider in {"toapis_seedance2", "toapis_happyhorse"}
             else "生成完成后将进行首帧/中帧一致性质检；若环境无法自动抽帧，将标记为人工复核。"
         ),
     }
+    video_job.update(start_metadata)
     with job_lock:
         jobs = _load_storyboard_video_jobs()
         jobs.insert(0, video_job)
@@ -8010,23 +8216,37 @@ def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = 
             continue
         if item.get("status") in {"Completed", "Failed"}:
             continue
-        invocation_arn = item.get("invocation_arn", "")
+        provider = str(item.get("provider") or "nova_reel")
+        invocation_arn = item.get("invocation_arn", "") or item.get("external_task_id", "")
         if not invocation_arn:
             continue
         try:
-            result = _query_video_job(invocation_arn, provider=item.get("provider", "nova_reel"), region=item.get("region", ""))
-            status = result.get("status") or item.get("status", "")
-            item["status"] = status
-            item["updated_at"] = _utc_now()
-            item["failure_message"] = result.get("failureMessage") or result.get("failure_message") or ""
-            output_s3_uri = (
-                ((result.get("outputDataConfig") or {}).get("s3OutputDataConfig") or {}).get("s3Uri")
-                or item.get("output_s3_uri", "")
-            )
-            item["output_s3_uri"] = output_s3_uri
-            if status == "Completed":
-                item["video_s3_uri"] = _video_uri_from_bedrock_job(result, invocation_arn=invocation_arn)
-                item = _qa_storyboard_video_job(item)
+            if provider in {"toapis_seedance2", "toapis_happyhorse"}:
+                result = _query_toapis_video_job(invocation_arn)
+                status, video_url, failure = _toapis_status(result)
+                item["status"] = status
+                item["updated_at"] = _utc_now()
+                item["failure_message"] = failure
+                item["toapis_status_response"] = result
+                if status == "Completed" and video_url:
+                    item["toapis_video_url"] = video_url
+                    if not item.get("video_s3_uri"):
+                        item["video_s3_uri"] = _store_toapis_video(str(item.get("id") or invocation_arn), video_url)
+                    item = _qa_storyboard_video_job(item)
+            else:
+                result = _query_video_job(invocation_arn, provider=provider, region=item.get("region", ""))
+                status = result.get("status") or item.get("status", "")
+                item["status"] = status
+                item["updated_at"] = _utc_now()
+                item["failure_message"] = result.get("failureMessage") or result.get("failure_message") or ""
+                output_s3_uri = (
+                    ((result.get("outputDataConfig") or {}).get("s3OutputDataConfig") or {}).get("s3Uri")
+                    or item.get("output_s3_uri", "")
+                )
+                item["output_s3_uri"] = output_s3_uri
+                if status == "Completed":
+                    item["video_s3_uri"] = _video_uri_from_bedrock_job(result, invocation_arn=invocation_arn)
+                    item = _qa_storyboard_video_job(item)
             changed = True
         except Exception as exc:
             item["failure_message"] = str(exc)
