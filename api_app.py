@@ -207,7 +207,7 @@ STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
 STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED = os.getenv(
-    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "false"
+    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 STORYBOARD_IMAGE_BRAND_STAMP_ENABLED = os.getenv(
     "STORYBOARD_IMAGE_BRAND_STAMP_ENABLED", "true"
@@ -5345,12 +5345,29 @@ def _toapis_upload_image(image_bytes: bytes, filename: str = "product-reference.
     return str(image_url)
 
 
-def _compose_toapis_video_prompt(category: str, model: str, manual_shots: list[dict]) -> str:
+def _compose_toapis_video_prompt(
+    category: str,
+    model: str,
+    manual_shots: list[dict],
+    has_product_reference: bool = False,
+    has_storyboard_reference: bool = False,
+) -> str:
     detail = " | ".join(str(shot.get("text") or "") for shot in (manual_shots or [])[:3] if shot.get("text"))
     product_name = f"Hisense {model}".strip()
     category_name = _category_en(category)
+    reference_rule = (
+        "Reference priority: Image 1 is the bound product photo and is the absolute source of truth for product identity, "
+        "shape, finish, logo position, control layout, and proportions. Image 2 is only the storyboard/action reference; "
+        "use it for sequence and composition, but never override Image 1's product appearance. "
+        if has_product_reference and has_storyboard_reference
+        else "Reference priority: Image 1 is the bound product photo and is the absolute source of truth for product identity, "
+        "shape, finish, logo position, control layout, and proportions. "
+        if has_product_reference
+        else "Use the reference storyboard image as the visual basis. "
+    )
     return (
-        "Use the reference storyboard image as the visual basis. If it is a 3x3 grid, read it from left to right and "
+        f"{reference_rule}"
+        "If a reference image is a 3x3 grid, read it from left to right and "
         "top to bottom as one continuous action sequence. The final output must be a single full-screen video, never a "
         "grid, collage, split screen, border, or contact sheet. "
         f"Subject: exactly one core product, a {product_name} {category_name}. Preserve product identity with highest "
@@ -5378,7 +5395,7 @@ def _start_toapis_video_job(category, model, manual_shots: list[dict]):
     import requests as _requests
 
     source_key = _first_video_source_image_key(manual_shots)
-    prompt = _compose_toapis_video_prompt(category, model, manual_shots)
+    product_key = _first_video_product_image_key(manual_shots)
     provider = _video_provider_name()
     reference_bytes = (
         _reference_source_image_bytes(source_key)
@@ -5392,7 +5409,21 @@ def _start_toapis_video_job(category, model, manual_shots: list[dict]):
         if provider == "toapis_grok_video_3" and _source_image_is_ninegrid(source_key)
         else f"{_safe_ascii_slug(model) or 'product'}-first-frame.png"
     )
+    product_url = ""
+    if provider == "toapis_grok_video_3" and product_key:
+        product_url = _toapis_upload_image(
+            _reference_source_image_bytes(product_key),
+            filename=f"{_safe_ascii_slug(model) or 'product'}-bound-product.png",
+        )
     first_frame_url = _toapis_upload_image(reference_bytes, filename=reference_filename)
+    has_storyboard_reference = bool(first_frame_url and source_key and source_key != product_key)
+    prompt = _compose_toapis_video_prompt(
+        category,
+        model,
+        manual_shots,
+        has_product_reference=bool(product_url),
+        has_storyboard_reference=has_storyboard_reference,
+    )
     model_name = TOAPIS_VIDEO_MODEL
     if provider == "toapis_grok_video_3":
         model_name = "grok-video-3"
@@ -5409,7 +5440,12 @@ def _start_toapis_video_job(category, model, manual_shots: list[dict]):
         allowed_seconds = {6, 10, 15}
         seconds = int(TOAPIS_VIDEO_DURATION or 6)
         payload["seconds"] = str(seconds if seconds in allowed_seconds else 6)
-        payload["images"] = [first_frame_url]
+        reference_urls = []
+        if product_url:
+            reference_urls.append(product_url)
+        if first_frame_url and first_frame_url not in reference_urls:
+            reference_urls.append(first_frame_url)
+        payload["images"] = reference_urls[:3]
     elif provider == "toapis_happyhorse":
         payload["duration"] = max(5, min(10, int(TOAPIS_VIDEO_DURATION or 5)))
         payload["action"] = "image-to-video"
@@ -5442,6 +5478,8 @@ def _start_toapis_video_job(category, model, manual_shots: list[dict]):
     return str(task_id), "", {
         "toapis_payload": payload,
         "toapis_first_frame_url": first_frame_url,
+        "toapis_product_reference_url": product_url,
+        "toapis_reference_urls": payload.get("images") or [first_frame_url],
         "generation_prompt": prompt,
         "toapis_submit_response": body,
     }
@@ -5598,6 +5636,8 @@ def _build_storyboard_manual_shots(script_job: dict, variant_index: int, product
         if image_key:
             shot["image"] = _image_payload_from_storage_key(image_key)
             shot["source_image_key"] = image_key
+        if fallback_image_key:
+            shot["product_image_key"] = fallback_image_key
         shots.append(shot)
     return shots, rounded_duration, product_asset
 
@@ -5630,6 +5670,8 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
     if image_key:
         shot["image"] = _image_payload_from_storage_key(image_key)
         shot["source_image_key"] = image_key
+    if fallback_image_key:
+        shot["product_image_key"] = fallback_image_key
     return [shot], 6, product_asset
 
 
@@ -5684,6 +5726,14 @@ def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
 def _first_video_source_image_key(manual_shots: list[dict]) -> str:
     for shot in manual_shots or []:
         key = str((shot or {}).get("source_image_key") or "")
+        if key:
+            return key
+    return ""
+
+
+def _first_video_product_image_key(manual_shots: list[dict]) -> str:
+    for shot in manual_shots or []:
+        key = str((shot or {}).get("product_image_key") or "")
         if key:
             return key
     return ""
@@ -7910,7 +7960,8 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
                 model=request_payload.get("model", ""),
                 prompt=raw_prompt,
             )
-    if reference_policy.startswith("skip-"):
+    wants_local_ninegrid = bool(product_asset and _wants_local_product_ninegrid(raw_prompt))
+    if reference_policy.startswith("skip-") and not wants_local_ninegrid:
         reference_image_bytes = None
     with job_lock:
         existing_jobs = _load_nova_canvas_jobs()
@@ -7943,7 +7994,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
             shot_index=req.shot_index,
             reference_policy=reference_policy,
         )
-    use_local_ninegrid = bool(reference_image_bytes and _wants_local_product_ninegrid(raw_prompt))
+    use_local_ninegrid = bool(reference_image_bytes and wants_local_ninegrid)
     image_provider = "local" if use_local_ninegrid else _image_provider_name()
     image_model_id = "local-product-ninegrid" if use_local_ninegrid else _image_provider_model_id()
     image_job = {
@@ -8178,6 +8229,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
     provider = _video_provider_name()
     actual_duration_seconds = _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if provider == "luma_ray2" else duration_seconds
     frame0_source_image_key = _first_video_source_image_key(manual_shots)
+    product_source_image_key = _first_video_product_image_key(manual_shots)
     start_metadata = {}
     if provider == "liblibai_star3":
         invocation_arn, output_s3_uri = "", ""
@@ -8219,6 +8271,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
             {
                 "text": item.get("text", ""),
                 "source_image_key": item.get("source_image_key", ""),
+                "product_image_key": item.get("product_image_key", ""),
                 "has_image": bool(item.get("image")),
             }
             for item in manual_shots
@@ -8234,6 +8287,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "region": _video_region(),
         "generation_mode": _storyboard_video_generation_mode(manual_shots),
         "frame0_source_image_key": frame0_source_image_key,
+        "product_source_image_key": product_source_image_key,
         "frame0_reference_kind": _storyboard_video_frame0_kind(frame0_source_image_key) if frame0_source_image_key else "",
         "qa_status": "pending",
         "qa_score": None,
