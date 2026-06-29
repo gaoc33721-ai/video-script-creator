@@ -175,7 +175,7 @@ NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.sd3-5-large-
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
 NOVA_CANVAS_REFERENCE_STRENGTH = max(
     0.0,
-    min(1.0, float(os.getenv("NOVA_CANVAS_REFERENCE_STRENGTH", "0.9"))),
+    min(1.0, float(os.getenv("NOVA_CANVAS_REFERENCE_STRENGTH", "0.65"))),
 )
 MEDIA_IMAGE_PROVIDER = os.getenv("MEDIA_IMAGE_PROVIDER", os.getenv("IMAGE_GENERATION_PROVIDER", "nova_canvas")).strip().lower()
 LIBLIBAI_BASE_URL = os.getenv("LIBLIBAI_BASE_URL", "https://openapi.liblibai.cloud")
@@ -207,7 +207,7 @@ STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
 STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED = os.getenv(
-    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "true"
+    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "false"
 ).strip().lower() in {"1", "true", "yes", "on"}
 STORYBOARD_IMAGE_BRAND_STAMP_ENABLED = os.getenv(
     "STORYBOARD_IMAGE_BRAND_STAMP_ENABLED", "true"
@@ -4271,7 +4271,8 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         "Output format: one 16:9 nine-panel 3x3 storyboard contact sheet. Each panel is a sequential keyframe from "
         "the same 5-6 second product video clip: panel 1-2 establish the scene, panel 3-5 show hand/food/door/control "
         "interaction, panel 6-8 show the benefit process, panel 9 shows the result or product beauty close-up. Keep the "
-        "same product and same environment across all nine panels. Do not create nine similar product packshots, white "
+        "same product and same environment across all nine panels. Photorealistic camera footage in every panel, not "
+        "illustration, not cartoon, not vector art, not flat design. Do not create nine similar product packshots, white "
         "background catalog images, isolated product variants, or repeated near-identical appliance poses. Every panel "
         "must advance the story with visible action changes, props/food/user-hand interaction, appliance door/control "
         "state changes, or before-to-after result changes."
@@ -4331,6 +4332,15 @@ def _image_negative_prompt(prompt, category="", model=""):
         "low quality",
         "blurry",
         "cartoon",
+        "illustration",
+        "flat illustration",
+        "vector art",
+        "flat design",
+        "icon style",
+        "diagram",
+        "line art",
+        "painted hands",
+        "clipart",
         "cgi look",
         "deformed product",
         "extra products",
@@ -4368,10 +4378,12 @@ def _bedrock_image_request_body(prompt, seed, category="", model="", reference_i
         encoded_reference = base64.b64encode(reference_image_bytes).decode("utf-8")
         if model_id.startswith("stability.sd3-5"):
             reference_prompt = (
-                "Use the uploaded product image only as a weak identity reference. Generate a new storyboard scene "
-                "from the prompt, with realistic environment, props, hands/action, and camera angle. Do not recreate "
-                "the uploaded catalog image or its white background/sticker/composition.\n\n"
-                f"{prompt_text}"
+            "Use the uploaded product image only as an identity reference for the appliance. Generate a new photorealistic "
+            "3x3 storyboard scene "
+            "from the prompt, with realistic environment, props, hands/action, and camera angle. Do not recreate "
+            "the uploaded catalog image or its white background/sticker/composition. Avoid illustration, cartoon, vector, "
+            "flat design, diagram, and clipart styles.\n\n"
+            f"{prompt_text}"
             )
             return {
                 "mode": "image-to-image",
