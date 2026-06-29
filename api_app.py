@@ -207,7 +207,7 @@ STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
 STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED = os.getenv(
-    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "false"
+    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 STORYBOARD_IMAGE_BRAND_STAMP_ENABLED = os.getenv(
     "STORYBOARD_IMAGE_BRAND_STAMP_ENABLED", "true"
@@ -527,6 +527,10 @@ class NovaCanvasSubmitRequest(BaseModel):
     shot_index: int = Field(default=0, ge=0)
     prompt: str = Field(min_length=10, max_length=6000)
     product_image_id: str = ""
+
+
+class StoryboardImageReviewRequest(BaseModel):
+    approved: bool = True
 
 
 class StoryboardVideoSubmitRequest(BaseModel):
@@ -5581,7 +5585,7 @@ def _image_payload_from_storage_key(key: str) -> dict | None:
     }
 
 
-def _latest_canvas_image_key_by_shot(script_job_id: str, variant_index: int) -> dict[int, str]:
+def _latest_canvas_job_by_shot(script_job_id: str, variant_index: int, approved_only: bool = False) -> dict[int, dict]:
     by_shot = {}
     for item in _load_nova_canvas_jobs():
         if item.get("status") != "succeeded" or not item.get("image_key"):
@@ -5590,10 +5594,38 @@ def _latest_canvas_image_key_by_shot(script_job_id: str, variant_index: int) -> 
             continue
         if int(item.get("variant_index", -1)) != int(variant_index):
             continue
+        if approved_only and item.get("review_status") != "approved":
+            continue
         shot_index = int(item.get("shot_index", -1))
         if shot_index >= 0 and shot_index not in by_shot:
-            by_shot[shot_index] = item.get("image_key")
+            by_shot[shot_index] = item
     return by_shot
+
+
+def _latest_canvas_image_key_by_shot(script_job_id: str, variant_index: int, approved_only: bool = False) -> dict[int, str]:
+    return {
+        shot_index: item["image_key"]
+        for shot_index, item in _latest_canvas_job_by_shot(script_job_id, variant_index, approved_only=approved_only).items()
+    }
+
+
+def _require_approved_storyboard_images(script_job: dict, variant_index: int, shot_index: int) -> None:
+    script_job_id = script_job.get("id", "")
+    variants = script_job.get("variants") or []
+    variant = variants[variant_index] if variant_index < len(variants) else {}
+    rows = _storyboard_rows_from_variant(variant.get("content", ""))
+    if not rows:
+        raise HTTPException(status_code=400, detail="当前方案未解析到分镜脚本表格，无法生成视频。")
+    approved = _latest_canvas_job_by_shot(script_job_id, variant_index, approved_only=True)
+    if shot_index >= 0:
+        if shot_index not in approved:
+            raise HTTPException(status_code=400, detail="请先预览并确认该分镜九宫格参考图后再生成视频。")
+        return
+    missing = [int(row.get("row_index", -1)) + 1 for row in rows if int(row.get("row_index", -1)) not in approved]
+    if missing:
+        preview = "、".join(str(item) for item in missing[:6])
+        suffix = "等" if len(missing) > 6 else ""
+        raise HTTPException(status_code=400, detail=f"请先预览并确认所有九宫格参考图后再生成视频，未确认分镜：{preview}{suffix}。")
 
 
 def _build_storyboard_manual_shots(script_job: dict, variant_index: int, product_image_id: str = "") -> tuple[list[dict], int, dict | None]:
@@ -5626,7 +5658,7 @@ def _build_storyboard_manual_shots(script_job: dict, variant_index: int, product
 
     product_asset = _product_image_by_id(product_image_id, script_job_id=script_job.get("id", ""))
     fallback_image_key = (product_asset or {}).get("normalized_key", "")
-    canvas_keys = _latest_canvas_image_key_by_shot(script_job.get("id", ""), variant_index)
+    canvas_keys = _latest_canvas_image_key_by_shot(script_job.get("id", ""), variant_index, approved_only=True)
     shots = []
     for index, group in enumerate(groups):
         image_key = ""
@@ -5669,7 +5701,7 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
     row = rows[shot_index]
     product_asset = _product_image_by_id(product_image_id, script_job_id=script_job.get("id", ""))
     fallback_image_key = (product_asset or {}).get("normalized_key", "")
-    image_key = _latest_canvas_image_key_by_shot(script_job.get("id", ""), variant_index).get(shot_index) or fallback_image_key
+    image_key = _latest_canvas_image_key_by_shot(script_job.get("id", ""), variant_index, approved_only=True).get(shot_index) or fallback_image_key
     shot = {
         "text": _compose_manual_shot_prompt(
             [row],
@@ -8025,6 +8057,8 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
         "prompt": raw_prompt,
         "generation_prompt": generation_prompt,
         "status": "queued",
+        "review_status": "pending_review",
+        "review_decision_at": "",
         "failure_message": "",
         "image_key": "",
         "image_uri": "",
@@ -8077,6 +8111,27 @@ def nova_canvas_image(image_job_id: str):
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Image not found.") from exc
     return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
+
+
+@app.post("/api/nova-canvas/jobs/{image_job_id}/review", dependencies=[Depends(_verify_access)])
+def review_nova_canvas_image(image_job_id: str, req: StoryboardImageReviewRequest):
+    with job_lock:
+        jobs = _load_nova_canvas_jobs()
+        updated = None
+        for item in jobs:
+            if item.get("id") != image_job_id:
+                continue
+            if item.get("status") != "succeeded" or not item.get("image_key"):
+                raise HTTPException(status_code=400, detail="参考图尚未生成成功，暂不能确认。")
+            item["review_status"] = "approved" if req.approved else "pending_review"
+            item["review_decision_at"] = _utc_now()
+            item["updated_at"] = item["review_decision_at"]
+            updated = item
+            break
+        if not updated:
+            raise HTTPException(status_code=404, detail="Image job not found.")
+        _save_nova_canvas_jobs(jobs)
+    return {"job": _public_nova_canvas_job(updated)}
 
 
 @app.post("/api/nova-reel/submit", dependencies=[Depends(_verify_access)])
@@ -8208,6 +8263,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         raise HTTPException(status_code=400, detail="Script variant not found.")
     if req.product_image_id and not _product_image_by_id(req.product_image_id, script_job_id=req.script_job_id):
         raise HTTPException(status_code=404, detail="Product image not found.")
+    _require_approved_storyboard_images(script_job, req.variant_index, req.shot_index)
 
     existing_active = _active_storyboard_video_job(script_job.get("id", ""), req.variant_index, req.shot_index)
     if existing_active:

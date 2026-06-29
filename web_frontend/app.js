@@ -1155,6 +1155,22 @@ function renderStoryboardCards(content) {
       state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, duration, prompt });
       const videoJob = storyboardVideoJobForShot(index);
       const isVideoGenerating = isActiveStoryboardVideoJob(videoJob);
+      const canvasJob = canvasJobForShot(index);
+      const isCanvasApproved = isCanvasJobApproved(canvasJob);
+      const isCanvasGenerating = state.canvasGenerating.has(index) || isActiveCanvasJob(canvasJob);
+      const videoDisabled = isVideoGenerating || !isCanvasApproved;
+      const imageLabel = isCanvasGenerating ? "九宫格生成中..." : canvasJob?.preview_url ? "重新生成九宫格" : "生成九宫格";
+      const videoLabel = isVideoGenerating
+        ? "正在生成视频..."
+        : !canvasJob
+        ? "先生成并确认九宫格"
+        : canvasJob.status !== "succeeded"
+        ? "等待九宫格完成"
+        : !isCanvasApproved
+        ? "确认九宫格后生成"
+        : videoJob?.preview_url
+        ? "重新生成视频"
+        : "生成视频";
       return `
         <article class="storyboard-card">
           <div class="storyboard-meta">
@@ -1170,8 +1186,11 @@ function renderStoryboardCards(content) {
             <div><dt>旁白/字幕</dt><dd>${escapeHtml([voiceover, subtitle].filter(Boolean).join(" / "))}</dd></div>
           </dl>
           <div class="storyboard-actions">
-            <button class="storyboard-generate storyboard-video-generate" type="button" data-shot-index="${index}" ${isVideoGenerating ? "disabled" : ""}>
-              ${isVideoGenerating ? "正在生成视频..." : videoJob?.preview_url ? "重新生成视频" : "生成视频"}
+            <button class="storyboard-generate storyboard-image-generate secondary" type="button" data-shot-index="${index}" ${isCanvasGenerating ? "disabled" : ""}>
+              ${imageLabel}
+            </button>
+            <button class="storyboard-generate storyboard-video-generate" type="button" data-shot-index="${index}" ${videoDisabled ? "disabled" : ""}>
+              ${videoLabel}
             </button>
             <button class="storyboard-video-refresh secondary" type="button" data-shot-index="${index}">
               刷新状态
@@ -1303,6 +1322,15 @@ function hasSucceededCanvasJobForShot(shotIndex) {
   return Boolean(job && job.status === "succeeded" && (job.preview_url || job.image_uri));
 }
 
+function isCanvasJobApproved(job = {}) {
+  return String(job.review_status || "").toLowerCase() === "approved";
+}
+
+function hasApprovedCanvasJobForShot(shotIndex) {
+  const job = canvasJobForShot(shotIndex);
+  return Boolean(job && job.status === "succeeded" && isCanvasJobApproved(job));
+}
+
 function storyboardSubmitPrompt(shot = {}) {
   return [
     "以参考产品图为唯一产品身份来源，生成一张 16:9 九宫格连续分镜参考图，用于后续生成 5-6 秒产品视频片段。",
@@ -1332,6 +1360,7 @@ function canvasJobsRenderSignature(jobs = state.canvasJobs, provider = state.can
       attempt: Number(item.attempt || 0),
       preview_url: item.preview_url || "",
       image_uri: item.image_uri || "",
+      review_status: item.review_status || "",
       failure_message: formatErrorDetail(item.failure_message, ""),
       updated_at: item.updated_at || "",
     }))
@@ -1364,12 +1393,21 @@ function renderCanvasJobForShot(shotIndex) {
   const image = imageUrl
     ? renderProtectedImage(imageUrl)
     : '<div class="storyboard-image-placeholder">图片已生成，预览链接暂不可用。</div>';
+  const approved = isCanvasJobApproved(job);
+  const reviewText = approved ? "已确认，可生成视频" : "待确认：请预览九宫格效果";
+  const reviewAction = approved
+    ? '<button class="secondary" type="button" disabled>已确认</button>'
+    : `<button class="storyboard-image-approve" type="button" data-canvas-job-id="${escapeAttr(job.id || "")}" data-shot-index="${shotIndex}">确认可生成视频</button>`;
   return `
     <div class="storyboard-image-slot ready">
       ${image}
       <div class="storyboard-image-meta">
         <span>${escapeHtml(storyboardImageModelLabel(job))}</span>
         <span>${escapeHtml(formatDateTime(job.updated_at || job.created_at))}</span>
+      </div>
+      <div class="storyboard-actions storyboard-review-actions">
+        <span class="${approved ? "message ok" : "message"}">${escapeHtml(reviewText)}</span>
+        ${reviewAction}
       </div>
     </div>
   `;
@@ -1503,6 +1541,33 @@ async function ensureCanvasImageForShot(shotIndex) {
     return generated;
   }
   throw new Error(formatErrorDetail(generated?.failure_message, "九宫格参考图未生成成功，请稍后刷新状态或重试。"));
+}
+
+async function approveCanvasImageForShot(imageJobId, shotIndex) {
+  const job = state.currentResultJob;
+  if (!job || !imageJobId) return;
+  setMessage("productImageMessage", `正在确认第 ${shotIndex + 1} 个分镜九宫格参考图...`);
+  try {
+    const data = await api(`/api/nova-canvas/jobs/${encodeURIComponent(imageJobId)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved: true }),
+    });
+    const updated = data.job;
+    if (updated) {
+      const existingIndex = state.canvasJobs.findIndex((item) => item.id === updated.id);
+      if (existingIndex >= 0) {
+        state.canvasJobs.splice(existingIndex, 1, updated);
+      } else {
+        state.canvasJobs.unshift(updated);
+      }
+    }
+    await loadCanvasJobs(job.id).catch(() => {});
+    rerenderStoryboardCards();
+    setMessage("productImageMessage", "九宫格参考图已确认，现在可以生成视频。", "ok");
+  } catch (error) {
+    setMessage("productImageMessage", error.message, "error");
+  }
 }
 
 async function submitCanvasImage(shotIndex, options = {}) {
@@ -1881,7 +1946,14 @@ function renderStoryboardVideoJobs(jobs) {
 async function submitStoryboardVideoGeneration() {
   const job = state.currentResultJob;
   if (!job) return;
-  setMessage("storyboardVideoMessage", "正在提交 ToAPIs Grok Video 3 产品视频任务：使用参考图锁定产品外观，不再停留在关键帧。");
+  const missing = (state.storyboardShots || [])
+    .map((_, index) => (hasApprovedCanvasJobForShot(index) ? null : index + 1))
+    .filter(Boolean);
+  if (missing.length) {
+    setMessage("storyboardVideoMessage", `请先生成并确认所有九宫格参考图。未确认分镜：${missing.slice(0, 6).join("、")}${missing.length > 6 ? "等" : ""}。`, "error");
+    return;
+  }
+  setMessage("storyboardVideoMessage", "正在提交 ToAPIs Grok Video 3 产品视频任务：使用已确认九宫格锁定产品外观，不再使用未确认图片。");
   try {
     await api("/api/storyboard-video/submit", {
       method: "POST",
@@ -1906,7 +1978,12 @@ async function submitStoryboardShotVideo(shotIndex) {
   if (!shot) return;
   setMessage("productImageMessage", `正在准备第 ${shotIndex + 1} 个分镜的 ToAPIs 高保真视频...`);
   try {
-    await ensureCanvasImageForShot(shotIndex);
+    const canvasJob = await ensureCanvasImageForShot(shotIndex);
+    if (!isCanvasJobApproved(canvasJob)) {
+      setMessage("productImageMessage", `第 ${shotIndex + 1} 个分镜九宫格已生成，请先预览确认效果，再点击生成视频。`, "error");
+      rerenderStoryboardCards();
+      return;
+    }
     setMessage("productImageMessage", `参考图已就绪，正在提交第 ${shotIndex + 1} 个分镜的 ToAPIs Grok Video 3 产品视频任务。`);
     await api("/api/storyboard-video/submit", {
       method: "POST",
@@ -2137,6 +2214,11 @@ $("resultTabs").addEventListener("click", async (event) => {
   renderResult(job, Number(tab.dataset.index || 0));
 });
 $("storyboardCards").addEventListener("click", (event) => {
+  const approveButton = event.target.closest(".storyboard-image-approve");
+  if (approveButton) {
+    approveCanvasImageForShot(approveButton.dataset.canvasJobId || "", Number(approveButton.dataset.shotIndex || 0));
+    return;
+  }
   const image = event.target.closest("[data-storyboard-preview]");
   if (image) {
     openStoryboardImagePreview(image);
