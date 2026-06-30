@@ -175,7 +175,7 @@ NOVA_CANVAS_MODEL_ID = os.getenv("NOVA_CANVAS_MODEL_ID", "stability.sd3-5-large-
 NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE = float(os.getenv("NOVA_CANVAS_ESTIMATED_USD_PER_IMAGE", "0.08"))
 NOVA_CANVAS_REFERENCE_STRENGTH = max(
     0.0,
-    min(1.0, float(os.getenv("NOVA_CANVAS_REFERENCE_STRENGTH", "0.65"))),
+    min(1.0, float(os.getenv("NOVA_CANVAS_REFERENCE_STRENGTH", "0.38"))),
 )
 MEDIA_IMAGE_PROVIDER = os.getenv("MEDIA_IMAGE_PROVIDER", os.getenv("IMAGE_GENERATION_PROVIDER", "nova_canvas")).strip().lower()
 LIBLIBAI_BASE_URL = os.getenv("LIBLIBAI_BASE_URL", "https://openapi.liblibai.cloud")
@@ -207,7 +207,7 @@ STORYBOARD_IMAGE_WORKERS = max(1, int(os.getenv("STORYBOARD_IMAGE_WORKERS", "1")
 STORYBOARD_IMAGE_RETRY_COUNT = max(0, int(os.getenv("STORYBOARD_IMAGE_RETRY_COUNT", "2")))
 STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS = max(1.0, float(os.getenv("STORYBOARD_IMAGE_RETRY_BACKOFF_SECONDS", "15")))
 STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED = os.getenv(
-    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "true"
+    "STORYBOARD_LOCAL_PRODUCT_NINEGRID_ENABLED", "false"
 ).strip().lower() in {"1", "true", "yes", "on"}
 STORYBOARD_IMAGE_BRAND_STAMP_ENABLED = os.getenv(
     "STORYBOARD_IMAGE_BRAND_STAMP_ENABLED", "true"
@@ -4279,7 +4279,9 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         "illustration, not cartoon, not vector art, not flat design. Do not create nine similar product packshots, white "
         "background catalog images, isolated product variants, or repeated near-identical appliance poses. Every panel "
         "must advance the story with visible action changes, props/food/user-hand interaction, appliance door/control "
-        "state changes, or before-to-after result changes."
+        "state changes, or before-to-after result changes. The visual standard is a realistic commercial photo contact "
+        "sheet: detailed countertop texture, real hands, real food surfaces, natural shadows, depth of field, reflections "
+        "on black glass, and thin white grid dividers only between panels."
         if wants_contact_sheet
         else "Output format: one 16:9 photorealistic storyboard keyframe for a 5-6 second product video clip."
     )
@@ -4308,7 +4310,7 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         ),
         (
             f"{output_format} "
-            "Style/Rendering: premium photorealistic e-commerce storyboard reference, high detail, sharp and "
+            "Style/Rendering: premium photorealistic e-commerce storyboard reference, DSLR commercial photography, high detail, sharp and "
             "physically plausible handles, buttons, knobs, display area, door seams, drum/cavity shape, and panel geometry; "
             "readable logo text must be exactly 'Hisense' with complete sharp letters; no text overlay, no watermark, "
             "no discount badge, no round sticker, no competitor brands, no wrong product category; "
@@ -4382,11 +4384,15 @@ def _bedrock_image_request_body(prompt, seed, category="", model="", reference_i
         encoded_reference = base64.b64encode(reference_image_bytes).decode("utf-8")
         if model_id.startswith("stability.sd3-5"):
             reference_prompt = (
-            "Use the uploaded product image only as an identity reference for the appliance. Generate a new photorealistic "
-            "3x3 storyboard scene "
-            "from the prompt, with realistic environment, props, hands/action, and camera angle. Do not recreate "
-            "the uploaded catalog image or its white background/sticker/composition. Avoid illustration, cartoon, vector, "
-            "flat design, diagram, and clipart styles.\n\n"
+            "Use the uploaded product image only as an appliance identity reference. Generate a NEW realistic commercial "
+            "photo contact sheet: one 16:9 image containing a 3x3 nine-panel storyboard with thin white dividers. Each "
+            "panel must look like real camera footage from a premium home-appliance ad, with detailed kitchen surfaces, "
+            "real hands or props when the script calls for them, food texture, natural shadows, depth of field, and clear "
+            "product contours. Preserve product identity cues from the reference: black glass finish, door outline, handle "
+            "or control-panel placement, display/button layout, logo position, and proportions. Do not recreate the uploaded "
+            "catalog image, white background, sticker/badge, crop, or packshot composition. Do not output one single product "
+            "photo. Do not output cartoons, illustrations, vector art, diagrams, flat design, clipart, CGI render, or repeated "
+            "near-identical product poses. The nine panels must tell a sequential story with visible action changes.\n\n"
             f"{prompt_text}"
             )
             return {
