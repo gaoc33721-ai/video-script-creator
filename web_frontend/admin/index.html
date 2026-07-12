@@ -239,6 +239,11 @@
                 <h2>产品卖点库</h2>
                 <p>后台维护新版或旧版 Excel，系统会校验字段并保存为当前知识库；前台用户不开放更新入口。</p>
               </div>
+              <div class="catalog-actions">
+                <button id="testProductCatalog" type="button" class="secondary">测试连接</button>
+                <button id="syncProductCatalog" type="button" class="secondary">同步并启用</button>
+                <button id="rollbackProductCatalog" type="button" class="secondary danger">恢复同步前版本</button>
+              </div>
               <label class="upload">
                 <input id="uploadInput" type="file" accept=".xlsx,.xls" />
                 上传 Excel
@@ -299,6 +304,6 @@
     <script>
       window.APP_BASE_PATH = "__APP_BASE_PATH__";
     </script>
-    <script src="__BASE_PATH__/static/app.js?v=20260627-auto-ninegrid-before-video"></script>
+    <script src="__BASE_PATH__/static/app.js?v=20260712-product-catalog-rollback"></script>
   </body>
 </html>

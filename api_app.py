@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from product_catalog_client import ProductCatalogApiError, ProductCatalogClient, product_catalog_rows_to_features
 from product_feature_store import ProductFeatureStore, filter_product_features
 from fridge_assistant import register_fridge_routes
 from rainforest_competitor import (
@@ -77,6 +78,12 @@ COMPETITOR_CONFIGS_KEY = "competitor_configs.json"
 COMPETITOR_COLLECTION_RUNS_KEY = "competitor_collection_runs.json"
 SOCIAL_COLLECTION_SOURCES_KEY = "social_collection_sources.json"
 COMPETITOR_ANALYSIS_RUNS_KEY = "competitor_analysis_runs.json"
+PRODUCT_CATALOG_MODEL_ROWS_KEY = "product_catalog_model_rows.json"
+PRODUCT_CATALOG_SELLING_POINT_ROWS_KEY = "product_catalog_selling_point_rows.json"
+PRODUCT_CATALOG_SELLING_POINT_COPY_ROWS_KEY = "product_catalog_selling_point_copy_rows.json"
+PRODUCT_CATALOG_SYNC_META_KEY = "product_catalog_sync_meta.json"
+PRODUCT_CATALOG_BASELINE_FEATURES_KEY = "backups/product_catalog_baseline_features.pkl"
+PRODUCT_CATALOG_BASELINE_META_KEY = "backups/product_catalog_baseline_meta.json"
 ADMIN_JSON_CACHE_TTL = max(0, int(os.getenv("ADMIN_JSON_CACHE_TTL", "45")))
 ADMIN_JSON_CACHE_KEYS = {
     COMPETITOR_ASSETS_KEY,
@@ -540,6 +547,25 @@ class StoryboardVideoSubmitRequest(BaseModel):
     shot_index: int = Field(default=-1, ge=-1)
 
 
+class ProductCatalogSyncRequest(BaseModel):
+    country: int | None = None
+    brandId: int | None = None
+    model: str = ""
+    pointName: str = ""
+    productLineId: int | None = None
+    status: int | None = 1
+    startTime: str = ""
+    endTime: str = ""
+    pageNum: int = Field(default=1, ge=1)
+    pageSize: int = Field(default=100, ge=1, le=500)
+    max_pages: int = Field(default=0, ge=0, le=1000)
+    include_model_details: bool = True
+    include_selling_points: bool = True
+    include_selling_point_copies: bool = True
+    include_parameter_fallbacks: bool = True
+    activate: bool = True
+
+
 class RainforestDiscoverRequest(BaseModel):
     category: str = ""
     target_market: str = "北美 (US/CA)"
@@ -762,6 +788,178 @@ def _write_json(key, payload):
             _json_cache.pop(key, None)
     return ok
 
+
+PRODUCT_CATALOG_MODEL_FILTER_KEYS = ("country", "brandId", "model", "productLineId", "status", "startTime", "endTime")
+PRODUCT_CATALOG_SELLING_FILTER_KEYS = PRODUCT_CATALOG_MODEL_FILTER_KEYS
+PRODUCT_CATALOG_COPY_FILTER_KEYS = ("pointName", "productLineId", "status", "startTime", "endTime")
+
+
+def _product_catalog_filters(req: ProductCatalogSyncRequest, keys: tuple[str, ...]) -> dict:
+    payload = req.model_dump()
+    filters = {}
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        filters[key] = value
+    return filters
+
+
+def _product_catalog_excel_bytes(df: pd.DataFrame) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="product_catalog_features")
+    return output.getvalue()
+
+
+def _product_catalog_baseline_exists() -> bool:
+    parquet_key = PRODUCT_CATALOG_BASELINE_FEATURES_KEY.replace(".pkl", ".parquet")
+    return STORAGE.exists(parquet_key) or STORAGE.exists(PRODUCT_CATALOG_BASELINE_FEATURES_KEY)
+
+
+def _ensure_product_catalog_baseline() -> dict:
+    existing = _read_json(PRODUCT_CATALOG_BASELINE_META_KEY, {})
+    if _product_catalog_baseline_exists():
+        return existing
+
+    active_df = PRODUCT_FEATURE_STORE.load()
+    if active_df.empty:
+        raise HTTPException(status_code=409, detail="Cannot activate product catalog sync without an active feature library to back up.")
+    if not STORAGE.write_dataframe(PRODUCT_CATALOG_BASELINE_FEATURES_KEY, active_df):
+        raise HTTPException(status_code=500, detail="Failed to create the pre-sync product feature backup.")
+
+    baseline_meta = {
+        "created_at": _utc_now(),
+        "row_count": int(len(active_df)),
+        "model_count": int(active_df["model"].nunique()) if "model" in active_df.columns else 0,
+        "category_count": int(active_df["Category"].nunique()) if "Category" in active_df.columns else 0,
+        "active_feature_meta": _read_json("cache_meta.json", {}),
+    }
+    if not _write_json(PRODUCT_CATALOG_BASELINE_META_KEY, baseline_meta):
+        raise HTTPException(status_code=500, detail="Failed to save the pre-sync product feature backup metadata.")
+    return baseline_meta
+
+
+def _restore_product_catalog_baseline() -> dict:
+    if not _product_catalog_baseline_exists():
+        raise HTTPException(status_code=404, detail="No pre-sync product feature backup is available.")
+    baseline_df = STORAGE.read_dataframe(PRODUCT_CATALOG_BASELINE_FEATURES_KEY)
+    if baseline_df.empty:
+        raise HTTPException(status_code=500, detail="The pre-sync product feature backup is empty or unreadable.")
+
+    store_meta = PRODUCT_FEATURE_STORE.save(
+        "product_catalog_baseline_rollback.xlsx",
+        _product_catalog_excel_bytes(baseline_df),
+        baseline_df,
+    )
+    rollback_meta = {
+        "restored_at": _utc_now(),
+        "row_count": int(len(baseline_df)),
+        "model_count": int(baseline_df["model"].nunique()) if "model" in baseline_df.columns else 0,
+        "category_count": int(baseline_df["Category"].nunique()) if "Category" in baseline_df.columns else 0,
+        "active_feature_meta": store_meta,
+    }
+    sync_meta = _read_json(PRODUCT_CATALOG_SYNC_META_KEY, {})
+    sync_meta["rollback"] = rollback_meta
+    _write_json(PRODUCT_CATALOG_SYNC_META_KEY, sync_meta)
+    return rollback_meta
+
+
+def _product_catalog_sync_meta(
+    model_filters: dict,
+    selling_filters: dict,
+    copy_filters: dict,
+    model_result: dict,
+    selling_result: dict,
+    copy_result: dict,
+    feature_df: pd.DataFrame,
+    store_meta: dict,
+    activated: bool,
+) -> dict:
+    return {
+        "source": "product_catalog",
+        "updated_at": _utc_now(),
+        "filters": {
+            "model_details": model_filters,
+            "model_selling_points": selling_filters,
+            "selling_point_copies": copy_filters,
+        },
+        "activated": bool(activated),
+        "model_details_total": int(model_result.get("total") or 0),
+        "model_details_rows": len(model_result.get("rows") or []),
+        "model_details_pages": int(model_result.get("page_count") or 0),
+        "selling_points_total": int(selling_result.get("total") or 0),
+        "selling_points_rows": len(selling_result.get("rows") or []),
+        "selling_points_pages": int(selling_result.get("page_count") or 0),
+        "selling_point_copies_total": int(copy_result.get("total") or 0),
+        "selling_point_copies_rows": len(copy_result.get("rows") or []),
+        "selling_point_copies_pages": int(copy_result.get("page_count") or 0),
+        "feature_row_count": int(len(feature_df)),
+        "model_count": int(feature_df["model"].nunique()) if not feature_df.empty else 0,
+        "category_count": int(feature_df["Category"].nunique()) if not feature_df.empty else 0,
+        "active_feature_meta": store_meta or {},
+    }
+
+
+def _run_product_catalog_sync(req: ProductCatalogSyncRequest) -> dict:
+    if not req.include_model_details and not req.include_selling_points and not req.include_selling_point_copies:
+        raise HTTPException(status_code=400, detail="Enable at least one product catalog source.")
+
+    client = ProductCatalogClient.from_env()
+    model_filters = _product_catalog_filters(req, PRODUCT_CATALOG_MODEL_FILTER_KEYS)
+    selling_filters = _product_catalog_filters(req, PRODUCT_CATALOG_SELLING_FILTER_KEYS)
+    copy_filters = _product_catalog_filters(req, PRODUCT_CATALOG_COPY_FILTER_KEYS)
+    model_result = {"rows": [], "total": 0, "page_count": 0}
+    selling_result = {"rows": [], "total": 0, "page_count": 0}
+    copy_result = {"rows": [], "total": 0, "page_count": 0}
+
+    if req.include_model_details:
+        model_result = client.fetch_model_details(filters=model_filters, page_size=req.pageSize, max_pages=req.max_pages)
+        _write_json(PRODUCT_CATALOG_MODEL_ROWS_KEY, model_result.get("rows") or [])
+    if req.include_selling_points:
+        selling_result = client.fetch_selling_points(filters=selling_filters, page_size=req.pageSize, max_pages=req.max_pages)
+        _write_json(PRODUCT_CATALOG_SELLING_POINT_ROWS_KEY, selling_result.get("rows") or [])
+    if req.include_selling_point_copies:
+        copy_result = client.fetch_selling_point_copies(filters=copy_filters, page_size=req.pageSize, max_pages=req.max_pages)
+        _write_json(PRODUCT_CATALOG_SELLING_POINT_COPY_ROWS_KEY, copy_result.get("rows") or [])
+
+    feature_df = product_catalog_rows_to_features(
+        model_result.get("rows") or [],
+        selling_result.get("rows") or [],
+        copy_result.get("rows") or [],
+        include_parameter_fallbacks=req.include_parameter_fallbacks,
+    )
+    if req.activate and feature_df.empty:
+        raise HTTPException(status_code=502, detail="Product catalog sync returned no usable feature rows.")
+
+    store_meta = {}
+    if req.activate:
+        _ensure_product_catalog_baseline()
+        store_meta = PRODUCT_FEATURE_STORE.save(
+            "product_catalog_sync.xlsx",
+            _product_catalog_excel_bytes(feature_df),
+            feature_df,
+        )
+
+    meta = _product_catalog_sync_meta(
+        model_filters,
+        selling_filters,
+        copy_filters,
+        model_result,
+        selling_result,
+        copy_result,
+        feature_df,
+        store_meta,
+        req.activate,
+    )
+    _write_json(PRODUCT_CATALOG_SYNC_META_KEY, meta)
+    return {
+        "ok": True,
+        "meta": meta,
+        "preview": feature_df.head(20).to_dict(orient="records"),
+    }
 
 def _load_products() -> pd.DataFrame:
     return PRODUCT_FEATURE_STORE.load()
@@ -6974,6 +7172,32 @@ async def upload_product_features(file: UploadFile = File(...)):
         return {"ok": True, "meta": meta}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"解析文件失败：{exc}") from exc
+
+
+@app.get("/api/product-catalog/sync-meta", dependencies=[Depends(_verify_access)])
+def product_catalog_sync_meta():
+    return {
+        "meta": _read_json(PRODUCT_CATALOG_SYNC_META_KEY, {}),
+        "baseline": _read_json(PRODUCT_CATALOG_BASELINE_META_KEY, {}),
+        "rollback_available": _product_catalog_baseline_exists(),
+    }
+
+
+@app.post("/api/product-catalog/sync", dependencies=[Depends(_verify_access)])
+def sync_product_catalog(req: ProductCatalogSyncRequest):
+    try:
+        return _run_product_catalog_sync(req)
+    except ProductCatalogApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Product catalog sync failed: {exc}") from exc
+
+
+@app.post("/api/product-catalog/rollback", dependencies=[Depends(_verify_access)])
+def rollback_product_catalog():
+    return {"ok": True, "rollback": _restore_product_catalog_baseline()}
 
 
 @app.post("/api/product-images", dependencies=[Depends(_verify_access)])

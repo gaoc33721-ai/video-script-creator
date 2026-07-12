@@ -1850,6 +1850,69 @@ async function uploadFile(event) {
   }
 }
 
+async function runProductCatalogSync({ activate }) {
+  if (activate && !window.confirm("系统会先备份当前卖点库，再同步商品库并启用。是否继续？")) return;
+  const button = $(activate ? "syncProductCatalog" : "testProductCatalog");
+  if (button) button.disabled = true;
+  setMessage("uploadMessage", activate ? "正在备份当前卖点库并同步商品库..." : "正在测试商品库接口和数据映射，不会修改当前卖点库...");
+  try {
+    const data = await api("/api/product-catalog/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: 1,
+        pageSize: 500,
+        activate,
+        include_model_details: true,
+        include_selling_points: true,
+        include_selling_point_copies: true,
+        include_parameter_fallbacks: true,
+      }),
+    });
+    const meta = data.meta || {};
+    setMessage(
+      "uploadMessage",
+      `${activate ? "商品库同步并启用完成" : "商品库测试通过，当前卖点库未修改"}：${meta.feature_row_count || 0} 条卖点，${meta.model_count || 0} 个型号，${meta.category_count || 0} 个品类。`,
+      "ok"
+    );
+    if ($("metrics")) await loadSummary();
+    await loadOptions();
+  } catch (error) {
+    setMessage("uploadMessage", error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function syncProductCatalog() {
+  return runProductCatalogSync({ activate: true });
+}
+
+async function testProductCatalog() {
+  return runProductCatalogSync({ activate: false });
+}
+
+async function rollbackProductCatalog() {
+  if (!window.confirm("将恢复首次商品库同步前的卖点库版本，是否继续？")) return;
+  const button = $("rollbackProductCatalog");
+  if (button) button.disabled = true;
+  setMessage("uploadMessage", "正在恢复同步前卖点库...");
+  try {
+    const data = await api("/api/product-catalog/rollback", { method: "POST" });
+    const rollback = data.rollback || {};
+    setMessage(
+      "uploadMessage",
+      `已恢复同步前版本：${rollback.row_count || 0} 条卖点，${rollback.model_count || 0} 个型号，${rollback.category_count || 0} 个品类。`,
+      "ok"
+    );
+    if ($("metrics")) await loadSummary();
+    await loadOptions();
+  } catch (error) {
+    setMessage("uploadMessage", error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
 async function loadJobs() {
   const data = await api("/api/jobs");
   const jobs = filterJobs(data.jobs || []);
@@ -2760,6 +2823,9 @@ on("videoTypePicker", "click", (event) => {
 });
 on("generateForm", "submit", submitGeneration);
 on("uploadInput", "change", uploadFile);
+on("testProductCatalog", "click", testProductCatalog);
+on("syncProductCatalog", "click", syncProductCatalog);
+on("rollbackProductCatalog", "click", rollbackProductCatalog);
 on("refreshJobs", "click", loadJobs);
 on("jobFilters", "click", (event) => {
   const button = event.target.closest("button[data-filter]");
