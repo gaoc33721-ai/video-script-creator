@@ -1842,7 +1842,7 @@ async function uploadFile(event) {
     await api("/api/upload", { method: "POST", body });
     setMessage("uploadMessage", "卖点库已更新。", "ok");
     if ($("metrics")) await loadSummary();
-    await loadOptions();
+    if ($("categorySelect")) await loadOptions();
   } catch (error) {
     setMessage("uploadMessage", error.message, "error");
   } finally {
@@ -1876,7 +1876,7 @@ async function runProductCatalogSync({ activate }) {
       "ok"
     );
     if ($("metrics")) await loadSummary();
-    await loadOptions();
+    if ($("categorySelect")) await loadOptions();
   } catch (error) {
     setMessage("uploadMessage", error.message, "error");
   } finally {
@@ -1906,7 +1906,7 @@ async function rollbackProductCatalog() {
       "ok"
     );
     if ($("metrics")) await loadSummary();
-    await loadOptions();
+    if ($("categorySelect")) await loadOptions();
   } catch (error) {
     setMessage("uploadMessage", error.message, "error");
   } finally {
