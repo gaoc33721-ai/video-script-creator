@@ -32,6 +32,7 @@ const state = {
   competitorResearchTimer: null,
   lastDiscoveredAsins: [],
   lastDiscoveredVideoIds: [],
+  initialJobs: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -270,18 +271,36 @@ async function loadSummary() {
     .join("");
 }
 
-async function loadOptions() {
+function latestTaskProductSelection(jobs) {
+  for (const job of jobs || []) {
+    const request = job && job.request ? job.request : {};
+    const category = String(request.category || "").trim();
+    const model = String(request.model || "").trim();
+    if (category && model) {
+      return {
+        category,
+        model,
+        selectedFeatures: Array.isArray(request.selected_features) ? request.selected_features : [],
+      };
+    }
+  }
+  return {};
+}
+
+async function loadOptions(preferredSelection = {}) {
   state.options = await api("/api/options");
   const category = $("categorySelect");
   category.innerHTML = state.options.categories.map((item) => optionHtml(item)).join("");
-  updateModels();
+  if (state.options.categories.includes(preferredSelection.category)) {
+    category.value = preferredSelection.category;
+  }
+  await updateModels(preferredSelection);
 }
 
-function updateModels() {
+async function updateModels(preferredSelection = {}) {
   $("modelSearch").value = "";
-  renderModelOptions();
-  loadFeatures();
-  updateSelectionSummary();
+  renderModelOptions(preferredSelection.model || "");
+  await loadFeatures(preferredSelection.selectedFeatures || []);
 }
 
 function filterModels() {
@@ -291,7 +310,7 @@ function filterModels() {
   updateSelectionSummary();
 }
 
-async function loadFeatures() {
+async function loadFeatures(preferredFeatures = []) {
   const requestId = ++state.featuresRequestId;
   const category = $("categorySelect").value;
   const model = $("modelSelect").value;
@@ -304,7 +323,9 @@ async function loadFeatures() {
   const data = await api(`/api/features?category=${encodeURIComponent(category)}&model=${encodeURIComponent(model)}`);
   if (requestId !== state.featuresRequestId) return;
   state.features = data.features;
-  state.selectedFeatures = data.features.slice(0, DEFAULT_FEATURE_COUNT);
+  const requestedFeatures = new Set((preferredFeatures || []).map((item) => String(item).trim()).filter(Boolean));
+  const matchingFeatures = data.features.filter((item) => requestedFeatures.has(item));
+  state.selectedFeatures = matchingFeatures.length ? matchingFeatures : data.features.slice(0, DEFAULT_FEATURE_COUNT);
   renderFeaturePicker();
   updateSelectionSummary();
 }
@@ -783,6 +804,7 @@ async function loadJobs() {
   try {
     const data = await api("/api/jobs");
     const jobs = data.jobs || [];
+    state.initialJobs = jobs;
     if (!jobs.length) {
       $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>暂无任务</strong><span>提交脚本后会显示在这里。</span></div>';
       return;
@@ -2119,7 +2141,8 @@ async function startApp() {
   state.appReady = true;
   renderVideoTypePicker();
   try {
-    await Promise.all([loadOptions(), loadJobs()]);
+    await loadJobs();
+    await loadOptions(latestTaskProductSelection(state.initialJobs));
     if (!state.jobsTimer) {
       state.jobsTimer = setInterval(loadJobs, 5000);
     }
