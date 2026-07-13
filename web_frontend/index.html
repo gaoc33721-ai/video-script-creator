@@ -48,6 +48,10 @@
             <label>方案数<select name="variant_count"><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
           </div>
           <label>核心卖点<div id="featurePicker" class="check-list"></div></label>
+          <div class="field-row audience-scenario-row">
+            <label>目标受众<input name="target_audience" placeholder="如：忙碌上班族、年轻家庭、独居用户" maxlength="200" /></label>
+            <label>具体场景<input name="usage_scenario" placeholder="如：工作日晚归后快速复热一人晚餐" maxlength="300" /></label>
+          </div>
           <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
           <label>脚本方向<div id="videoTypePicker" class="check-list compact"></div></label>
           <div class="context-toggles">
@@ -126,6 +130,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260628-toapis-grok-video-3"></script>
+    <script src="/static/app.js?v=20260713-audience-scenario"></script>
   </body>
 </html>

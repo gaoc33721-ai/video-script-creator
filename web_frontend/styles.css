@@ -197,6 +197,10 @@ label {
   gap: 14px;
 }
 
+.audience-scenario-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 form {
   display: flex;
   flex-direction: column;

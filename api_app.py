@@ -510,7 +510,8 @@ class GenerateRequest(BaseModel):
     video_type: list[str] = Field(default_factory=list)
     expected_duration: int = Field(default=30, ge=6, le=90)
     project_type: str = "常规上新"
-    target_audience: str = ""
+    target_audience: str = Field(default="", max_length=200)
+    usage_scenario: str = Field(default="", max_length=300)
     pain_points: str = ""
     custom_requirements: str = ""
     use_competitor_context: bool = True
@@ -2202,6 +2203,8 @@ def _request_text_blob(req: GenerateRequest, features: list[dict]) -> str:
         req.category,
         req.model,
         req.custom_requirements,
+        req.target_audience,
+        req.usage_scenario,
         req.pain_points,
         req.video_usage,
         req.project_type,
@@ -2323,6 +2326,14 @@ def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
         "- 每套必须至少出现 1 个感官/状态细节：蒸汽、水汽、声音、纹理、屏幕数字反馈、食物质地、地面污渍变化、衣物/餐具状态变化等任选。",
         "- 不要使用模板化分段名堆叠，例如“产品切入/功能展示/功能展示2/清洁效果展示1/清洁效果展示2”；要写成具体生活任务和画面动作。",
     ]
+    if req.target_audience:
+        lines.append(
+            f"- 目标受众是“{_clean_prompt_value(req.target_audience)}”：旁白措辞、生活任务、时间压力和结果价值必须符合这类人群，不得写成泛化消费者广告。"
+        )
+    if req.usage_scenario:
+        lines.append(
+            f"- 用户指定具体场景是“{_clean_prompt_value(req.usage_scenario)}”：开场、产品切入、核心操作和结果验证必须保持在该场景中，不得在修复或改写时换成其他场景。"
+        )
     if _is_microwave_request(req, features):
         lines.extend(
             [
@@ -3389,6 +3400,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 英文列格式强约束：旁白和字幕两列不得带任何字段名/标签/括号前缀，直接输出纯英文句子。
 - 标签泄漏强约束：任何表格单元格都不得出现 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro、“开头：”“结尾：”“字幕：”“卖点：”等制作结构标签；这些只用于内部构思，不能进入成片文案。
 - 卖点事实强约束：不得加入核心卖点中没有出现的功能概念或参数。
+- 具体场景约束：若输入了具体场景，开场、产品自然切入、核心操作与结果验证必须发生在该场景中；可以补充合理的生活细节，但不得擅自换成另一个泛化场景。
 
 {direction_guidance}
 
@@ -3408,6 +3420,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 期望时长：{req.expected_duration} 秒
 - 项目类型：{req.project_type}
 - 目标受众：{req.target_audience or "通用海外消费者"}
+- 具体场景：{req.usage_scenario or "结合目标受众和产品卖点选择一个具体生活场景"}
 - 用户痛点：{req.pain_points or "结合产品卖点自行提炼"}
 - 补充要求：{req.custom_requirements or "无"}
 - 建议视频类型：{direction}
@@ -6418,6 +6431,8 @@ def _repair_to_expected_table(
 产品信息：
 - 产品品类：{req.category}
 - 产品型号：{req.model}
+- 目标受众：{req.target_audience or "通用海外消费者"}
+- 具体场景：{req.usage_scenario or "未指定"}
 - 期望时长：{req.expected_duration} 秒
 - 脚本方向：{direction}
 - 核心卖点：

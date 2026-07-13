@@ -1,4 +1,4 @@
-const DEFAULT_FEATURE_COUNT = 6;
+const DEFAULT_FEATURE_COUNT = 3;
 
 const state = {
   authEnabled: true,
@@ -345,7 +345,8 @@ function formPayload(form) {
     project_type: "常规上新",
     use_competitor_context: data.get("use_competitor_context") === "on",
     use_hotspot_context: data.get("use_hotspot_context") === "on",
-    target_audience: "",
+    target_audience: data.get("target_audience") || "",
+    usage_scenario: data.get("usage_scenario") || "",
     pain_points: "",
     custom_requirements: data.get("custom_requirements") || "",
   };
