@@ -49,9 +49,30 @@
           </div>
           <label>核心卖点<div id="featurePicker" class="check-list"></div></label>
           <div class="field-row audience-scenario-row">
-            <label>目标受众<input name="target_audience" placeholder="如：忙碌上班族、年轻家庭、独居用户" maxlength="200" /></label>
-            <label>具体场景<input name="usage_scenario" placeholder="如：工作日晚归后快速复热一人晚餐" maxlength="300" /></label>
+            <label>目标受众<input name="target_audience" list="targetAudienceOptions" placeholder="选择或输入目标受众" maxlength="200" /></label>
+            <label>具体场景<input name="usage_scenario" list="usageScenarioOptions" placeholder="选择或输入具体场景" maxlength="300" /></label>
           </div>
+          <datalist id="targetAudienceOptions">
+            <option value="忙碌上班族"></option>
+            <option value="年轻家庭"></option>
+            <option value="有婴幼儿的家庭"></option>
+            <option value="独居用户"></option>
+            <option value="厨房新手"></option>
+            <option value="健康饮食人群"></option>
+            <option value="咖啡爱好者"></option>
+            <option value="小户型租房用户"></option>
+            <option value="银发家庭"></option>
+          </datalist>
+          <datalist id="usageScenarioOptions">
+            <option value="工作日晚归后快速准备晚餐"></option>
+            <option value="早晨赶时间制作早餐"></option>
+            <option value="深夜一人食快速加热"></option>
+            <option value="周末家庭聚餐备餐"></option>
+            <option value="育儿间隙快速完成烹饪"></option>
+            <option value="健身后准备轻食"></option>
+            <option value="朋友来访前准备饮品和小食"></option>
+            <option value="小户型厨房的日常使用"></option>
+          </datalist>
           <label>期望时长<input name="expected_duration" type="number" value="30" min="6" max="90" /></label>
           <label>脚本方向<div id="videoTypePicker" class="check-list compact"></div></label>
           <div class="context-toggles">
@@ -130,6 +151,6 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260713-recent-task-default"></script>
+    <script src="/static/app.js?v=20260713-audience-scenario-presets"></script>
   </body>
 </html>
