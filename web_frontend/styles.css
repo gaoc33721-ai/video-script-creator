@@ -654,6 +654,30 @@ button,
   padding-left: 24px;
 }
 
+.script-markdown.is-editing .table-wrap {
+  border-color: rgba(0, 170, 166, 0.48);
+}
+
+.script-cell-editor {
+  display: block;
+  width: 100%;
+  min-width: 150px;
+  min-height: 92px;
+  padding: 8px;
+  resize: vertical;
+  border: 1px solid rgba(0, 170, 166, 0.28);
+  border-radius: 8px;
+  background: #fbffff;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+}
+
+.script-cell-editor:focus {
+  outline: 2px solid rgba(0, 170, 166, 0.22);
+  border-color: var(--brand);
+}
+
 .table-wrap {
   width: 100%;
   overflow-x: auto;

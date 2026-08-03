@@ -520,6 +520,10 @@ class GenerateRequest(BaseModel):
     hotspot_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
+class ScriptVariantUpdateRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=120000)
+
+
 class AuthLoginRequest(BaseModel):
     password: str = Field(default="", max_length=256)
 
@@ -7363,6 +7367,27 @@ def job(job_id: str):
     found = next((item for item in _load_jobs() if item.get("id") == job_id), None)
     if not found:
         raise HTTPException(status_code=404, detail="任务不存在。")
+    return found
+
+
+@app.patch("/api/jobs/{job_id}/variants/{variant_index}", dependencies=[Depends(_verify_access)])
+def update_script_variant(job_id: str, variant_index: int, req: ScriptVariantUpdateRequest):
+    content = req.content.strip()
+    if not _has_expected_table(content):
+        raise HTTPException(status_code=400, detail="Script must retain the complete storyboard table format.")
+    with job_lock:
+        jobs = _load_jobs()
+        found = next((item for item in jobs if item.get("id") == job_id), None)
+        if not found:
+            raise HTTPException(status_code=404, detail="Task not found.")
+        if found.get("status") != "succeeded":
+            raise HTTPException(status_code=400, detail="Only completed scripts can be edited.")
+        variants = found.get("variants") or []
+        if variant_index < 0 or variant_index >= len(variants):
+            raise HTTPException(status_code=404, detail="Script variant not found.")
+        variants[variant_index]["content"] = content
+        found["updated_at"] = _utc_now()
+        _save_jobs(jobs)
     return found
 
 

@@ -109,11 +109,15 @@
             <p>生成完成后会自动显示在这里，样式与旧版脚本预览保持一致。</p>
           </div>
           <div class="result-actions">
+            <button id="editResult" type="button" class="secondary">编辑修改</button>
+            <button id="saveResult" type="button" class="hidden">保存修改</button>
+            <button id="cancelResultEdit" type="button" class="secondary hidden">取消</button>
             <button id="toggleMediaPanel" type="button" class="secondary">上传产品图/生成视频</button>
             <a id="downloadResult" class="download-link" href="#">下载 Excel（含多套方案）</a>
           </div>
         </div>
         <div id="resultTabs" class="result-tabs"></div>
+        <div id="resultEditMessage" class="message"></div>
         <div id="resultBody" class="result-body"></div>
         <section id="storyboardSection" class="storyboard-section">
           <div class="storyboard-head">

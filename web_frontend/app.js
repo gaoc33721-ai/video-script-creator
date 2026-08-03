@@ -15,6 +15,7 @@ const state = {
   activeJobId: "",
   renderedJobId: "",
   activeVariantIndex: 0,
+  isEditingResult: false,
   currentResultJob: null,
   videoJobs: [],
   storyboardVideoJobs: [],
@@ -875,6 +876,7 @@ function hideResults() {
   state.productImageAsset = null;
   state.canvasJobsSignature = "";
   state.currentResultJob = null;
+  state.isEditingResult = false;
 }
 
 function renderResult(job, variantIndex = 0) {
@@ -882,6 +884,7 @@ function renderResult(job, variantIndex = 0) {
   if (!variants.length) return;
   state.renderedJobId = job.id;
   state.activeVariantIndex = Math.max(0, Math.min(variantIndex, variants.length - 1));
+  state.isEditingResult = false;
   $("resultSection").classList.remove("hidden");
   $("mediaPanel").classList.remove("hidden");
   $("downloadResult").href = "#";
@@ -896,6 +899,8 @@ function renderResult(job, variantIndex = 0) {
   const current = variants[state.activeVariantIndex];
   $("resultBody").innerHTML = renderVariantContent(current);
   state.currentResultJob = job;
+  setMessage("resultEditMessage", "");
+  renderResultContent();
   state.canvasJobs = [];
   state.canvasJobsSignature = "";
   state.canvasProvider = "";
@@ -917,6 +922,15 @@ function renderResult(job, variantIndex = 0) {
   $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function renderResultContent() {
+  const variants = (state.currentResultJob && state.currentResultJob.variants) || [];
+  const current = variants[state.activeVariantIndex] || {};
+  $("resultBody").innerHTML = renderVariantContent(current, state.isEditingResult);
+  $("editResult").classList.toggle("hidden", state.isEditingResult);
+  $("saveResult").classList.toggle("hidden", !state.isEditingResult);
+  $("cancelResultEdit").classList.toggle("hidden", !state.isEditingResult);
+}
+
 function rerenderStoryboardCards() {
   const job = state.currentResultJob;
   const variants = (job && job.variants) || [];
@@ -926,9 +940,9 @@ function rerenderStoryboardCards() {
   hydrateProtectedImages();
 }
 
-function renderVariantContent(variant) {
+function renderVariantContent(variant, editable = false) {
   const label = variant.label ? `<div class="result-label">方案定位：${escapeHtml(variant.label)}</div>` : "";
-  return `${label}<div class="script-markdown">${markdownToHtml(stripOverallVideoPrompt(variant.content || ""))}</div>`;
+  return `${label}<div class="script-markdown${editable ? " is-editing" : ""}">${markdownToHtml(stripOverallVideoPrompt(variant.content || ""), editable)}</div>`;
 }
 
 function stripOverallVideoPrompt(content) {
@@ -2058,7 +2072,81 @@ async function refreshStoryboardShotVideo(shotIndex) {
   }
 }
 
-function markdownToHtml(markdown) {
+function editCurrentResult() {
+  if (!state.currentResultJob) return;
+  state.isEditingResult = true;
+  setMessage("resultEditMessage", "可直接修改表格内容；保存后，下载的 Excel 会使用修改后的脚本。", "");
+  renderResultContent();
+}
+
+function cancelResultEdit() {
+  state.isEditingResult = false;
+  setMessage("resultEditMessage", "已取消修改。", "");
+  renderResultContent();
+}
+
+function scriptCellToMarkdown(value) {
+  return String(value || "")
+    .replace(/\r?\n/g, " ")
+    .replace(/\|/g, "｜")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function replaceFirstMarkdownTable(content, replacement) {
+  const lines = String(content || "").split(/\r?\n/);
+  const start = lines.findIndex((_, index) => isMarkdownTableStart(lines, index));
+  if (start < 0) return replacement;
+  let end = start;
+  while (end < lines.length && lines[end].trim().startsWith("|")) end++;
+  return [...lines.slice(0, start), replacement, ...lines.slice(end)].join("\n").trim();
+}
+
+function editedVariantContent() {
+  const table = $("resultBody").querySelector("table");
+  if (!table) throw new Error("未找到可编辑的脚本表格。");
+  const header = [...table.querySelectorAll("thead th")].map((cell) => scriptCellToMarkdown(cell.textContent));
+  const rows = [...table.querySelectorAll("tbody tr")].map((row) => {
+    const cells = [...row.querySelectorAll("textarea[data-script-cell]")];
+    if (cells.length !== header.length) throw new Error("脚本表格格式不完整，请取消后重试。");
+    return `| ${cells.map((cell) => scriptCellToMarkdown(cell.value)).join(" | ")} |`;
+  });
+  if (!rows.length) throw new Error("请至少保留一行脚本内容。");
+  const tableMarkdown = [
+    `| ${header.join(" | ")} |`,
+    `| ${header.map(() => ":---").join(" | ")} |`,
+    ...rows,
+  ].join("\n");
+  const current = state.currentResultJob.variants[state.activeVariantIndex] || {};
+  return replaceFirstMarkdownTable(current.content, tableMarkdown);
+}
+
+async function saveResultEdit() {
+  const job = state.currentResultJob;
+  if (!job) return;
+  const saveButton = $("saveResult");
+  try {
+    const content = editedVariantContent();
+    saveButton.disabled = true;
+    setMessage("resultEditMessage", "正在保存修改...");
+    const updated = await api(`/api/jobs/${encodeURIComponent(job.id)}/variants/${state.activeVariantIndex}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    state.currentResultJob = updated;
+    state.isEditingResult = false;
+    renderResultContent();
+    rerenderStoryboardCards();
+    setMessage("resultEditMessage", "修改已保存，下载 Excel 将包含最新内容。", "ok");
+  } catch (error) {
+    setMessage("resultEditMessage", error.message, "error");
+  } finally {
+    saveButton.disabled = false;
+  }
+}
+
+function markdownToHtml(markdown, editable = false) {
   const lines = String(markdown || "").split(/\r?\n/);
   const html = [];
   for (let index = 0; index < lines.length; index++) {
@@ -2070,7 +2158,7 @@ function markdownToHtml(markdown) {
         index++;
       }
       index--;
-      html.push(renderMarkdownTable(tableLines));
+      html.push(renderMarkdownTable(tableLines, editable));
     } else if (!line.trim()) {
       html.push("");
     } else if (/^#{1,4}\s+/.test(line)) {
@@ -2099,7 +2187,12 @@ function isMarkdownTableStart(lines, index) {
   );
 }
 
-function renderMarkdownTable(lines) {
+function renderMarkdownCell(value, column, rowIndex, editable) {
+  if (!editable) return `<td>${escapeHtml(value)}</td>`;
+  return `<td><textarea class="script-cell-editor" data-script-cell aria-label="Row ${rowIndex + 1} ${escapeAttr(column)}">${escapeHtml(value)}</textarea></td>`;
+}
+
+function renderMarkdownTable(lines, editable = false) {
   const rows = lines
     .filter((line, index) => index !== 1)
     .map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()));
@@ -2109,7 +2202,7 @@ function renderMarkdownTable(lines) {
     <div class="table-wrap">
       <table>
         <thead><tr>${header.map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead>
-        <tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody>
+        <tbody>${body.map((row, rowIndex) => `<tr>${header.map((column, cellIndex) => renderMarkdownCell(row[cellIndex] || "", column, rowIndex, editable)).join("")}</tr>`).join("")}</tbody>
       </table>
     </div>
   `;
@@ -2179,6 +2272,9 @@ $("jobs").addEventListener("click", async (event) => {
   state.activeJobId = job.id;
   renderResult(job);
 });
+$("editResult").addEventListener("click", editCurrentResult);
+$("saveResult").addEventListener("click", saveResultEdit);
+$("cancelResultEdit").addEventListener("click", cancelResultEdit);
 $("downloadResult").addEventListener("click", async (event) => {
   event.preventDefault();
   try {
