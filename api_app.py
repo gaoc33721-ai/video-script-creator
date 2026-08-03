@@ -4502,12 +4502,27 @@ def _storyboard_switching_laundry(prompt):
     return False
 
 
+def _storyboard_micro_shot_plan() -> str:
+    return (
+        "Non-negotiable continuity plan for the 3x3 grid: all nine panels are consecutive micro-shots from ONE "
+        "5-6 second clip, never nine alternative product photos. Panel 1 (0.0-0.6s): establish the single appliance "
+        "and its starting state. Panel 2 (0.6-1.3s): move closer to the same appliance. Panel 3 (1.3-2.0s): show "
+        "the hand, ingredient, door, control, or relevant prop approaching. Panel 4 (2.0-2.7s): show the action "
+        "starting. Panel 5 (2.7-3.3s): show the action in progress. Panel 6 (3.3-4.0s): show the visible product "
+        "response. Panel 7 (4.0-4.7s): show the benefit developing. Panel 8 (4.7-5.3s): show the completed result. "
+        "Panel 9 (5.3-6.0s): finish on the result or a beauty close-up of that same appliance. Every panel may show "
+        "only one target appliance: a full view or detail crop of the same physical unit. A second appliance, duplicated "
+        "appliance, appliance pair, lineup, array, reflection, or background appliance is an invalid result."
+    )
+
+
 def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0, reference_policy="use-product-reference"):
     raw_prompt = str(prompt or "").strip()[:900]
     context = _storyboard_category_context(category, model, detection_text=raw_prompt)
     focus = _storyboard_visual_focus(raw_prompt, category=category, model=model)
     action_constraints = _storyboard_action_constraints(raw_prompt)
-    wants_contact_sheet = any(token in raw_prompt.lower() for token in ("九宫格", "9-grid", "3x3", "contact sheet", "storyboard contact"))
+    # This endpoint always returns a nine-panel storyboard, even when a user customizes the prompt.
+    wants_contact_sheet = True
     scene_instruction = focus["constraint"] if str(reference_policy or "").startswith("skip-") else context["must"]
     reference_text = (
         "preserve the supplied reference only for product identity, silhouette, color, finish, door outline, "
@@ -4515,26 +4530,19 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
         if not str(reference_policy or "").startswith("skip-")
         else "no product reference image is used; obey the storyboard action/result instead of making a product packshot"
     )
+    timeline_instruction = _storyboard_micro_shot_plan() if wants_contact_sheet else ""
     output_format = (
-        "Output format: one 16:9 nine-panel 3x3 storyboard contact sheet. Each panel is a sequential keyframe from "
-        "the same 5-6 second product video clip: panel 1-2 establish the scene, panel 3-5 show hand/food/door/control "
-        "interaction, panel 6-8 show the benefit process, panel 9 shows the result or product beauty close-up. Keep the "
-        "same product and same environment across all nine panels. Photorealistic camera footage in every panel, not "
-        "illustration, not cartoon, not vector art, not flat design. Do not create nine similar product packshots, white "
-        "background catalog images, isolated product variants, or repeated near-identical appliance poses. Every panel "
-        "must advance the story with visible action changes, props/food/user-hand interaction, appliance door/control "
-        "state changes, or before-to-after result changes. The visual standard is a realistic commercial photo contact "
-        "sheet: detailed countertop texture, real hands, real food surfaces, natural shadows, depth of field, reflections "
-        "on black glass, and thin white grid dividers only between panels."
+        "Output format: one 16:9 nine-panel 3x3 storyboard contact sheet with thin dividers. "
+        f"{timeline_instruction}"
         if wants_contact_sheet
         else "Output format: one 16:9 photorealistic storyboard keyframe for a 5-6 second product video clip."
     )
     lines = [
         (
-            "Subject: exactly one physical Hisense appliance as the core object; "
-            f"{context['subject']}; model Hisense {model or 'from brief'}; {reference_text}; "
-            "no duplicate product, no second unit, no side-by-side appliances, no showroom lineup, "
-            "no same-category background appliance."
+            "ABSOLUTE PRODUCT IDENTITY AND COUNT: every panel must show exactly one physical target appliance; "
+            f"the product is {context['subject']}; model Hisense {model or 'from brief'}; {reference_text}. "
+            "All panels reuse the same one physical unit. A close-up may crop that unit, but it must never show a second "
+            "appliance, duplicate, pair, lineup, array, reflection, or same-category background appliance."
         ),
         (
             "Action/Pose: depict the exact storyboard row before any generic product pose; "
@@ -4594,6 +4602,7 @@ def _image_negative_prompt(prompt, category="", model=""):
         "cgi look",
         "deformed product",
         "extra products",
+        "multiple appliances, appliance lineup, appliance pair, duplicated appliance, repeated appliance, appliance array, appliance reflection",
         _SINGLE_PRODUCT_NEGATIVE,
         "cluttered composition",
         context["negative"],
@@ -4732,14 +4741,14 @@ def _stability_safe_storyboard_prompt(prompt: str, category: str = "", model: st
     context = _storyboard_category_context(category, "", detection_text=detail)
     subject = re.sub(r"(?i)hisense", "selected", str(context.get("subject") or "home appliance"))
     return (
-        "Create a single 16:9 photorealistic commercial storyboard contact sheet with nine sequential panels. "
-        f"Show one {subject} in {context.get('setting') or 'a realistic home setting'}. "
-        "Keep the same product, environment, and action progression across all panels. "
+        "Create one 16:9 photorealistic commercial storyboard contact sheet. "
+        f"Every panel contains exactly one physical {subject}; it is the same sole unit in all nine panels. "
+        "Never show a second appliance, duplicate, appliance pair, lineup, array, reflection, or background appliance. "
+        f"{_storyboard_micro_shot_plan()} "
         "Use real hands or relevant props only when required by the scene. No readable brand text, no text overlay, "
-        "no watermark, no duplicated appliance, no illustration or cartoon. "
+        "no watermark, no illustration or cartoon. "
         f"Creative direction: {detail or 'show the requested product action and result clearly'}"
-    )[:1800]
-
+    )[:2600]
 
 def _image_provider_name() -> str:
     provider = str(MEDIA_IMAGE_PROVIDER or "nova_canvas").strip().lower().replace("-", "_")
