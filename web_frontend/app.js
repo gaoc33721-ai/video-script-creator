@@ -1174,12 +1174,13 @@ function renderStoryboardCards(content) {
   const request = (state.currentResultJob && state.currentResultJob.request) || {};
   const productCategory = request.category || ($("categorySelect") ? $("categorySelect").value : "");
   const productModel = request.model || ($("modelSelect") ? $("modelSelect").value : "");
+  const promptOverrides = (((state.currentResultJob || {}).variants || [])[state.activeVariantIndex] || {}).storyboard_prompt_overrides || {};
   return shotRows
     .slice(0, 12)
     .map((row, index) => {
       const { shotLabel, segment, feature, method, voiceover, subtitle, angle, movement, duration, sellingPoint } =
         storyboardRowFromCells(row, index);
-      const prompt = buildStoryboardImagePrompt({
+      const defaultPrompt = buildStoryboardImagePrompt({
         category: productCategory,
         model: productModel,
         segment,
@@ -1189,6 +1190,7 @@ function renderStoryboardCards(content) {
         movement,
         subtitle,
       });
+      const prompt = String(promptOverrides[String(index)] || defaultPrompt).trim();
       state.storyboardShots.push({ segment, feature, method, angle, movement, subtitle, duration, prompt });
       const videoJob = storyboardVideoJobForShot(index);
       const isVideoGenerating = isActiveStoryboardVideoJob(videoJob);
@@ -1235,9 +1237,14 @@ function renderStoryboardCards(content) {
           </div>
           ${renderStoryboardVideoForShot(index)}
           ${renderCanvasJobForShot(index)}
-          <details>
-            <summary>片段生成 Prompt</summary>
-            <p>${escapeHtml(prompt)}</p>
+          <details class="storyboard-prompt-panel">
+            <summary>\u7247\u6bb5\u751f\u6210 Prompt\uff08\u53ef\u7f16\u8f91\uff09</summary>
+            <p>\u4fdd\u5b58\u540e\u4ec5\u5f53\u524d\u7247\u6bb5\u7684\u65e7\u4e5d\u5bab\u683c\u4f1a\u5931\u6548\uff1b\u91cd\u65b0\u751f\u6210\u5e76\u786e\u8ba4\u540e\uff0c\u89c6\u9891\u5c06\u4f7f\u7528\u8fd9\u6761\u6307\u4ee4\u3002</p>
+            <textarea class="storyboard-prompt-editor" data-storyboard-prompt="${index}" aria-label="\u7b2c ${index + 1} \u4e2a\u7247\u6bb5\u751f\u6210 Prompt">${escapeHtml(prompt)}</textarea>
+            <div class="storyboard-actions">
+              <button class="storyboard-prompt-save" type="button" data-shot-index="${index}">\u4fdd\u5b58\u6307\u4ee4\u5e76\u91cd\u65b0\u751f\u6210</button>
+              <button class="storyboard-prompt-reset secondary" type="button" data-shot-index="${index}">\u6062\u590d\u811a\u672c\u9ed8\u8ba4\u6307\u4ee4</button>
+            </div>
           </details>
         </article>
       `;
@@ -1346,7 +1353,7 @@ function isActiveCanvasJob(job = {}) {
 
 function canvasJobForShot(shotIndex) {
   return (state.canvasJobs || []).find((item) => {
-    return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex);
+    return Number(item.shot_index) === Number(shotIndex) && Number(item.variant_index || 0) === Number(state.activeVariantIndex) && String(item.review_status || "").toLowerCase() !== "stale";
   });
 }
 
@@ -1369,6 +1376,7 @@ function hasApprovedCanvasJobForShot(shotIndex) {
 }
 
 function storyboardSubmitPrompt(shot = {}) {
+  if (shot.prompt) return String(shot.prompt).trim().slice(0, 6000);
   return [
     "以参考产品图为唯一产品身份来源，生成一张 16:9 九宫格连续分镜参考图，用于后续生成 5-6 秒产品视频片段。",
     "九宫格必须表现同一个真实 Hisense 产品在同一场景中的连续动作阶段，不是 9 个不同产品或无关素材。",
@@ -1602,6 +1610,34 @@ async function approveCanvasImageForShot(imageJobId, shotIndex) {
     await loadCanvasJobs(job.id).catch(() => {});
     rerenderStoryboardCards();
     setMessage("productImageMessage", "九宫格参考图已确认，现在可以生成视频。", "ok");
+  } catch (error) {
+    setMessage("productImageMessage", error.message, "error");
+  }
+}
+
+async function saveStoryboardPromptOverride(shotIndex, reset = false) {
+  const job = state.currentResultJob;
+  if (!job) return;
+  const editor = $("storyboardCards").querySelector(`[data-storyboard-prompt="${shotIndex}"]`);
+  const prompt = reset ? "" : String(editor?.value || "").trim();
+  if (!reset && prompt.length < 10) {
+    setMessage("productImageMessage", "\u8bf7\u81f3\u5c11\u8f93\u5165 10 \u4e2a\u5b57\u7b26\u7684\u7247\u6bb5\u751f\u6210\u6307\u4ee4\u3002", "error");
+    return;
+  }
+  try {
+    const updated = await api(`/api/jobs/${encodeURIComponent(job.id)}/variants/${state.activeVariantIndex}/storyboard-prompts/${shotIndex}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    state.currentResultJob = updated;
+    state.canvasJobs = (state.canvasJobs || []).filter((item) => Number(item.shot_index) !== Number(shotIndex));
+    rerenderStoryboardCards();
+    setMessage(
+      "productImageMessage",
+      reset ? "\u5df2\u6062\u590d\u811a\u672c\u9ed8\u8ba4\u6307\u4ee4\uff1b\u8bf7\u91cd\u65b0\u751f\u6210\u5e76\u786e\u8ba4\u8be5\u7247\u6bb5\u4e5d\u5bab\u683c\u3002" : "\u63a7\u5236\u6307\u4ee4\u5df2\u4fdd\u5b58\uff1b\u8bf7\u91cd\u65b0\u751f\u6210\u5e76\u786e\u8ba4\u8be5\u7247\u6bb5\u4e5d\u5bab\u683c\u540e\u518d\u751f\u6210\u89c6\u9891\u3002",
+      "ok"
+    );
   } catch (error) {
     setMessage("productImageMessage", error.message, "error");
   }
@@ -2135,10 +2171,11 @@ async function saveResultEdit() {
       body: JSON.stringify({ content }),
     });
     state.currentResultJob = updated;
+    state.canvasJobs = [];
     state.isEditingResult = false;
     renderResultContent();
     rerenderStoryboardCards();
-    setMessage("resultEditMessage", "修改已保存，下载 Excel 将包含最新内容。", "ok");
+    setMessage("resultEditMessage", "修改已保存，旧九宫格已失效；请按新脚本重新生成并确认。", "ok");
   } catch (error) {
     setMessage("resultEditMessage", error.message, "error");
   } finally {
@@ -2334,6 +2371,16 @@ $("resultTabs").addEventListener("click", async (event) => {
   renderResult(job, Number(tab.dataset.index || 0));
 });
 $("storyboardCards").addEventListener("click", (event) => {
+  const promptSaveButton = event.target.closest(".storyboard-prompt-save");
+  if (promptSaveButton) {
+    saveStoryboardPromptOverride(Number(promptSaveButton.dataset.shotIndex || 0));
+    return;
+  }
+  const promptResetButton = event.target.closest(".storyboard-prompt-reset");
+  if (promptResetButton) {
+    saveStoryboardPromptOverride(Number(promptResetButton.dataset.shotIndex || 0), true);
+    return;
+  }
   const approveButton = event.target.closest(".storyboard-image-approve");
   if (approveButton) {
     approveCanvasImageForShot(approveButton.dataset.canvasJobId || "", Number(approveButton.dataset.shotIndex || 0));

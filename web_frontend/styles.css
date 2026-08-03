@@ -1085,6 +1085,41 @@ button,
   background: rgba(255, 255, 255, 0.66);
 }
 
+.storyboard-prompt-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed rgba(0, 170, 166, 0.42);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.storyboard-prompt-panel > p {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.storyboard-prompt-editor {
+  display: block;
+  width: 100%;
+  min-height: 168px;
+  padding: 10px;
+  resize: vertical;
+  border: 1px solid rgba(0, 170, 166, 0.3);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.storyboard-prompt-editor:focus {
+  outline: 2px solid rgba(0, 170, 166, 0.2);
+  border-color: var(--brand);
+}
+
 .storyboard-card summary {
   color: var(--brand-dark);
   font-weight: 800;

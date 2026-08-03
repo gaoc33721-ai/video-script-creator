@@ -545,6 +545,10 @@ class StoryboardImageReviewRequest(BaseModel):
     approved: bool = True
 
 
+class StoryboardPromptUpdateRequest(BaseModel):
+    prompt: str = Field(default="", max_length=6000)
+
+
 class StoryboardVideoSubmitRequest(BaseModel):
     script_job_id: str
     variant_index: int = Field(default=0, ge=0)
@@ -3486,6 +3490,29 @@ def _save_nova_canvas_jobs(jobs):
     return _write_json(NOVA_CANVAS_JOBS_KEY, jobs[:500])
 
 
+def _invalidate_storyboard_canvas_jobs(script_job_id: str, variant_index: int, shot_index: int | None = None) -> int:
+    with job_lock:
+        jobs = _load_nova_canvas_jobs()
+        changed = 0
+        now = _utc_now()
+        for item in jobs:
+            if str(item.get("script_job_id") or "") != str(script_job_id):
+                continue
+            if int(item.get("variant_index", -1)) != int(variant_index):
+                continue
+            if shot_index is not None and int(item.get("shot_index", -1)) != int(shot_index):
+                continue
+            if item.get("review_status") == "stale":
+                continue
+            item["review_status"] = "stale"
+            item["review_decision_at"] = ""
+            item["updated_at"] = now
+            changed += 1
+        if changed:
+            _save_nova_canvas_jobs(jobs)
+    return changed
+
+
 def _utc_now_iso() -> str:
     return dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
@@ -5399,7 +5426,12 @@ def _storyboard_rows_from_variant(content: str) -> list[dict]:
     return rows
 
 
-def _compose_manual_shot_prompt(group_rows: list[dict], category: str, model: str, shot_index: int, shot_count: int) -> str:
+def _storyboard_prompt_override(variant: dict, shot_index: int) -> str:
+    overrides = variant.get("storyboard_prompt_overrides") or {}
+    return str(overrides.get(str(shot_index)) or "").strip()
+
+
+def _compose_manual_shot_prompt(group_rows: list[dict], category: str, model: str, shot_index: int, shot_count: int, prompt_override: str = "") -> str:
     detail_parts = []
     for row in group_rows:
         detail_parts.append(
@@ -5431,6 +5463,8 @@ def _compose_manual_shot_prompt(group_rows: list[dict], category: str, model: st
         "禁止文字叠加、水印、价格贴、竞品品牌、第二台同类产品、电视屏幕或无关家电。"
         f"分镜内容：{details or '产品使用场景和卖点验证镜头'}。"
     )
+    if prompt_override:
+        prompt = f"Creator control instruction (highest priority): {prompt_override}. " + prompt
     return re.sub(r"\s+", " ", prompt).strip()[:1200]
 
 
@@ -5896,6 +5930,7 @@ def _build_storyboard_manual_shots(script_job: dict, variant_index: int, product
                 request_payload.get("model", ""),
                 index,
                 shot_count,
+                prompt_override=" ".join(_storyboard_prompt_override(variant, int(row.get("row_index", -1))) for row in group if _storyboard_prompt_override(variant, int(row.get("row_index", -1)))),
             )
         }
         if image_key:
@@ -5930,6 +5965,7 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
             request_payload.get("model", ""),
             0,
             1,
+            prompt_override=_storyboard_prompt_override(variant, shot_index),
         )
     }
     if image_key:
@@ -7385,9 +7421,38 @@ def update_script_variant(job_id: str, variant_index: int, req: ScriptVariantUpd
         variants = found.get("variants") or []
         if variant_index < 0 or variant_index >= len(variants):
             raise HTTPException(status_code=404, detail="Script variant not found.")
-        variants[variant_index]["content"] = content
+        variant = variants[variant_index]
+        variant["content"] = content
+        variant["storyboard_prompt_overrides"] = {}
         found["updated_at"] = _utc_now()
         _save_jobs(jobs)
+    _invalidate_storyboard_canvas_jobs(job_id, variant_index)
+    return found
+
+
+@app.patch("/api/jobs/{job_id}/variants/{variant_index}/storyboard-prompts/{shot_index}", dependencies=[Depends(_verify_access)])
+def update_storyboard_prompt(job_id: str, variant_index: int, shot_index: int, req: StoryboardPromptUpdateRequest):
+    if shot_index < 0:
+        raise HTTPException(status_code=400, detail="Shot index must not be negative.")
+    prompt = req.prompt.strip()
+    with job_lock:
+        jobs = _load_jobs()
+        found = next((item for item in jobs if item.get("id") == job_id), None)
+        if not found:
+            raise HTTPException(status_code=404, detail="Task not found.")
+        variants = found.get("variants") or []
+        if found.get("status") != "succeeded" or variant_index < 0 or variant_index >= len(variants):
+            raise HTTPException(status_code=400, detail="Completed script variant not found.")
+        variant = variants[variant_index]
+        overrides = dict(variant.get("storyboard_prompt_overrides") or {})
+        if prompt:
+            overrides[str(shot_index)] = prompt
+        else:
+            overrides.pop(str(shot_index), None)
+        variant["storyboard_prompt_overrides"] = overrides
+        found["updated_at"] = _utc_now()
+        _save_jobs(jobs)
+    _invalidate_storyboard_canvas_jobs(job_id, variant_index, shot_index=shot_index)
     return found
 
 
@@ -8286,6 +8351,7 @@ def submit_nova_canvas(req: NovaCanvasSubmitRequest):
                 if item.get("script_job_id") == req.script_job_id
                 and int(item.get("variant_index", -1)) == int(req.variant_index)
                 and int(item.get("shot_index", -1)) == int(req.shot_index)
+                and item.get("review_status") != "stale"
                 and _is_active_storyboard_image_status(item.get("status", ""))
             ),
             None,
@@ -8391,6 +8457,8 @@ def review_nova_canvas_image(image_job_id: str, req: StoryboardImageReviewReques
         for item in jobs:
             if item.get("id") != image_job_id:
                 continue
+            if item.get("review_status") == "stale":
+                raise HTTPException(status_code=409, detail="This storyboard reference is stale. Regenerate it before approval.")
             if item.get("status") != "succeeded" or not item.get("image_key"):
                 raise HTTPException(status_code=400, detail="参考图尚未生成成功，暂不能确认。")
             item["review_status"] = "approved" if req.approved else "pending_review"
