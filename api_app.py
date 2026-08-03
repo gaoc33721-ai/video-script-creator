@@ -3616,6 +3616,8 @@ def _video_submit_wait_seconds(jobs: list[dict]) -> int:
 def _friendly_storyboard_image_error(message: str) -> str:
     raw = str(message or "")
     lowered = raw.lower()
+    if "filter reason" in lowered or "prompt filtered" in lowered:
+        return "????????????????????????????????????????????? Prompt ??????"
     if "429" in lowered or "100054" in lowered or "rate" in lowered or "limit" in lowered:
         return "LibLibAI 生成服务繁忙或达到频率限制，系统已自动重试但仍未成功。请稍后重新生成该镜头。"
     if "timeout" in lowered or "timed out" in lowered or "gateway" in lowered:
@@ -4712,6 +4714,33 @@ def _decode_bedrock_image_payload(payload):
     return None
 
 
+def _bedrock_payload_is_prompt_filtered(payload: dict) -> bool:
+    try:
+        detail = json.dumps(payload or {}, ensure_ascii=False).lower()
+    except Exception:
+        detail = str(payload or "").lower()
+    return "filter reason" in detail or "prompt filtered" in detail or "filtered prompt" in detail
+
+
+def _stability_safe_storyboard_prompt(prompt: str, category: str = "", model: str = "") -> str:
+    """Keep visual direction while removing brand/model tokens that can trip SD prompt filters."""
+    detail = re.sub(r"(?i)hisense", "selected", str(prompt or ""))
+    if model:
+        detail = re.sub(re.escape(str(model)), "selected model", detail, flags=re.IGNORECASE)
+    detail = re.sub(r"(?i)(brand text|logo rule|readable logo).{0,180}", "", detail)
+    detail = re.sub(r"\s+", " ", detail).strip()[:700]
+    context = _storyboard_category_context(category, "", detection_text=detail)
+    subject = re.sub(r"(?i)hisense", "selected", str(context.get("subject") or "home appliance"))
+    return (
+        "Create a single 16:9 photorealistic commercial storyboard contact sheet with nine sequential panels. "
+        f"Show one {subject} in {context.get('setting') or 'a realistic home setting'}. "
+        "Keep the same product, environment, and action progression across all panels. "
+        "Use real hands or relevant props only when required by the scene. No readable brand text, no text overlay, "
+        "no watermark, no duplicated appliance, no illustration or cartoon. "
+        f"Creative direction: {detail or 'show the requested product action and result clearly'}"
+    )[:1800]
+
+
 def _image_provider_name() -> str:
     provider = str(MEDIA_IMAGE_PROVIDER or "nova_canvas").strip().lower().replace("-", "_")
     if provider in {"liblib", "liblibai", "liblibai_star3", "star3"}:
@@ -4874,35 +4903,26 @@ def _start_nova_canvas_image(
     model="",
     reference_image_bytes: bytes | None = None,
 ):
-    """Generate a storyboard reference image.
-
-    Strategy:
-    1. Try Bedrock image model (Nova Canvas / Titan Image Generator) if configured.
-    2. Fall back to Pollinations.ai (free, no auth required) if Bedrock fails.
-    """
-    import time as _time
-    import requests as _requests
-
+    """Generate a storyboard reference image with a safety-aware Bedrock retry."""
     seed = random.randint(0, 858993459)
     image_bytes = None
     failures = []
 
-    # --- Attempt 1: Bedrock image model ---
     if NOVA_CANVAS_MODEL_ID and NOVA_CANVAS_MODEL_ID != "none":
         try:
             from botocore.config import Config
 
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=NOVA_CANVAS_AWS_REGION,
+                config=Config(connect_timeout=5, read_timeout=180, retries={"max_attempts": 2, "mode": "adaptive"}),
+            )
             body = _bedrock_image_request_body(
                 prompt,
                 seed,
                 category=category,
                 model=model,
                 reference_image_bytes=reference_image_bytes,
-            )
-            client = boto3.client(
-                "bedrock-runtime",
-                region_name=NOVA_CANVAS_AWS_REGION,
-                config=Config(connect_timeout=5, read_timeout=180, retries={"max_attempts": 2, "mode": "adaptive"}),
             )
             response = client.invoke_model(
                 modelId=NOVA_CANVAS_MODEL_ID,
@@ -4912,66 +4932,39 @@ def _start_nova_canvas_image(
             )
             payload = json.loads(response["body"].read())
             image_bytes = _decode_bedrock_image_payload(payload)
-            if not image_bytes:
+            if not image_bytes and _bedrock_payload_is_prompt_filtered(payload) and str(NOVA_CANVAS_MODEL_ID).startswith("stability."):
+                safe_prompt = _stability_safe_storyboard_prompt(prompt, category=category, model=model)
+                safe_body = _bedrock_image_request_body(
+                    safe_prompt,
+                    seed,
+                    category=category,
+                    model="",
+                    reference_image_bytes=reference_image_bytes,
+                )
+                safe_body["negative_prompt"] = "text overlay, watermark, duplicate appliance, illustration, cartoon"
+                safe_response = client.invoke_model(
+                    modelId=NOVA_CANVAS_MODEL_ID,
+                    body=json.dumps(safe_body).encode("utf-8"),
+                    contentType="application/json",
+                    accept="application/json",
+                )
+                safe_payload = json.loads(safe_response["body"].read())
+                image_bytes = _decode_bedrock_image_payload(safe_payload)
+                if not image_bytes:
+                    failures.append(f"Bedrock prompt filtered after safety retry: {str(safe_payload)[:300]}")
+            elif not image_bytes:
                 failures.append(f"Bedrock returned no image: {str(payload)[:300]}")
         except Exception as exc:
             failures.append(f"Bedrock {NOVA_CANVAS_MODEL_ID} in {NOVA_CANVAS_AWS_REGION}: {exc}")
-
-    # --- Attempt 2: Pollinations.ai (free, always available from public internet) ---
-    if image_bytes is None and reference_image_bytes:
-        detail = " | ".join(failures[-3:]) if failures else "no image provider configured"
-        raise RuntimeError(f"产品图参考分镜图生成失败：{detail}")
-
-    if image_bytes is None:
-        encoded_prompt = urllib.parse.quote(str(prompt or "product photo")[:500])
-        pollinations_url = (
-            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-            f"?width=1280&height=720&seed={seed}&nologo=true"
-        )
-        for attempt in range(2):
-            try:
-                resp = _requests.get(pollinations_url, timeout=90, verify=False)
-                if resp.status_code == 200 and len(resp.content) > 1000:
-                    image_bytes = resp.content
-                    break
-                failures.append(f"Pollinations HTTP {resp.status_code}")
-            except Exception as exc:
-                failures.append(f"Pollinations: {exc}")
-            if attempt < 1:
-                _time.sleep(3)
 
     if image_bytes is None:
         detail = " | ".join(failures[-3:]) if failures else "no image provider configured"
         raise RuntimeError(f"Storyboard image generation failed: {detail}")
 
-    # --- Attempt 3: Generate a simple placeholder with text overlay ---
-    if image_bytes is None:
-        try:
-            from PIL import Image as _PILImage, ImageDraw as _PILDraw, ImageFont as _PILFont
-            img = _PILImage.new("RGB", (1280, 720), color=(245, 245, 247))
-            draw = _PILDraw.Draw(img)
-            # Draw centered text
-            short_text = str(prompt or "Storyboard")[:80]
-            try:
-                font = _PILFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
-            except Exception:
-                font = _PILFont.load_default()
-            draw.text((80, 320), short_text, fill=(100, 100, 100), font=font)
-            draw.text((80, 370), f"[Placeholder - image service unavailable]", fill=(180, 180, 180), font=font)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            image_bytes = buf.getvalue()
-        except Exception:
-            pass
-
-    if not image_bytes:
-        raise RuntimeError("分镜图生成失败：所有图像生成方式均不可用。请检查网络连接或稍后重试。")
-
     image_bytes = _storyboard_image_with_hisense_brand_stamp(image_bytes)
     image_key = _nova_canvas_image_key(script_job_id, variant_index, shot_index)
     image_uri = STORAGE.write_file_bytes(image_key, image_bytes, content_type="image/png")
     return image_key, image_uri, seed
-
 
 def _start_storyboard_image(
     prompt,
