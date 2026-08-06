@@ -137,7 +137,7 @@ SYSTEM_PROMPT = f"""##角色
 
 ##外部机构口令稿参考结构
 你需要输出的表格要像专业 AI 视频机构的分镜口令，而不是普通脚本文案：
-- “镜头分段”参考样例里的“镜头”字段：必须连续写出时间段、具体动作和阶段说明，例如“0-4s 面板预约制冰（家中开场）”“20-26s 回家开门 & 冰箱美学（Pureflat）”，不得只写“镜头01/功能展示/痛点开场”。
+- “镜头分段”参考样例里的“镜头”字段：必须连续写出时间段、具体动作和阶段说明，例如“0-4s 面板预约制冰（家中开场）”“20-26s 回家开门 & 冰箱美学（Pureflat）”，不得只写“镜头01/功能展示/明亮任务开场”。
 - “画面示意&表现手法”要合并画面示意与执行方式：写清前景/中景/背景、产品比例、产品位置、道具、被处理物品、手部动作、光影和构图；不要写“见图”“参考图”。
 - “镜头运动&运动轨迹”参考样例里的“镜头运动/运镜轨迹”字段：必须像机构稿一样具体，例如“近景特写（CU）｜推进至面板｜手指按键特写”“快速切换（快剪）｜家门→换装→车内｜节奏上场”“俯视滑动 + 特写｜抽屉滑动轨迹｜取冰盒特写”；不要只写“特写/俯拍”。
 - “功能卖点（英文）”必须优先使用卖点库 Feature Name 原文；没有直接卖点的开场/收尾镜头该列留空，或写真实产品/场景短语，不得写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。
@@ -146,6 +146,8 @@ SYSTEM_PROMPT = f"""##角色
 
 ##输出边界
 只输出分镜脚本表格，不再输出整段 AI 视频生成 Prompt、Negative Prompt 或 Recommended Settings。
+13. GLOBAL TONE RULE (highest priority): Every future script must keep a bright, optimistic, sunny and uplifting mood from the opening through the ending. Open with a pleasant lifestyle moment, an inviting product action, a satisfying result preview, or a cheerful sensory detail. Never use a dark, gloomy, frustrated, anxious, disappointing, failure-based, or "low mood then reversal" opening or narrative structure. If pain points are supplied, translate them into positive aspirations and smooth, confident product use rather than showing distress or failure.
+
 """
 
 BEDROCK_AWS_REGION = (
@@ -2255,26 +2257,26 @@ def _segment_examples_for_request(req: GenerateRequest | None, features: list[di
     raw = _request_text_blob(req, features or []).lower() if req else ""
     if any(token in raw for token in ("microwave", "微波", "flatbed", "wave stirrer", "preset menus")):
         return (
-            "“冰箱取出冷饭盒｜复热痛点开场”“整盘餐食直接放上平板腔体｜Flatbed 空间证据”“长方形餐盒不用转盘也能放平｜Flatbed 尺寸证据”“取出冒热气意面/汤碗｜均匀加热结果验证”",
+            "“冰箱取出冷饭盒｜复热明亮任务开场”“整盘餐食直接放上平板腔体｜Flatbed 空间证据”“长方形餐盒不用转盘也能放平｜Flatbed 尺寸证据”“取出冒热气意面/汤碗｜均匀加热结果验证”",
             "冷饭盒、汤碗、咖啡杯、爆米花袋、早餐燕麦杯、长方形便当盒、整盘晚餐、微波炉门体/腔体/控制面板/蒸汽/热气",
         )
     if any(token in raw for token in ("dishwasher", "洗碗", "dish washer")):
         return (
-            "“晚餐后水槽堆满｜痛点开场”“半篮餐具入仓｜Half Load 证据”“开门取出干燥杯碗｜结果验证”",
+            "“晚餐后水槽堆满｜明亮任务开场”“半篮餐具入仓｜Half Load 证据”“开门取出干燥杯碗｜结果验证”",
             "晚餐盘、咖啡杯、玻璃杯、餐具篮、锅具、水渍、干燥杯碗、洗碗机门体/内腔/喷淋臂",
         )
     if any(token in raw for token in ("laundry", "washer", "washing", "洗衣", "洗烘")):
         return (
-            "“运动衣物堆在篮中｜换洗痛点开场”“把衬衫和毛巾放入滚筒｜容量/程序证据”“取出蓬松衣物｜洁净结果验证”",
+            "“运动衣物堆在篮中｜换洗明亮任务开场”“把衬衫和毛巾放入滚筒｜容量/程序证据”“取出蓬松衣物｜洁净结果验证”",
             "运动衣、毛巾、衬衫、洗衣篮、滚筒内筒、控制面板、衣物纹理、洗后蓬松状态",
         )
     if any(token in raw for token in ("refrigerator", "fridge", "freezer", "冰箱", "冷藏", "冷冻")):
         return (
-            "“周末采购袋放上台面｜囤货痛点开场”“不同食材分区入仓｜空间/保鲜证据”“开门看到整齐食材｜结果验证”",
+            "“周末采购袋放上台面｜囤货明亮任务开场”“不同食材分区入仓｜空间/保鲜证据”“开门看到整齐食材｜结果验证”",
             "蔬果盒、牛奶、饮料瓶、保鲜盒、冷冻抽屉、门架、层板、冰箱内灯、食材新鲜状态",
         )
     return (
-        "“生活任务出现｜痛点开场”“产品介入处理物品｜核心卖点证据”“前后状态对比｜结果验证”",
+        "“生活任务出现｜明亮任务开场”“产品介入处理物品｜核心卖点证据”“前后状态对比｜结果验证”",
         "台面道具、被处理物品、产品局部、操作面板、使用前后状态、成品质感特写",
     )
 
@@ -2323,8 +2325,9 @@ def _feature_focus_targets(req: GenerateRequest, features: list[dict]) -> list[d
 
 def _script_quality_guidance(req: GenerateRequest, features: list[dict]) -> str:
     lines = [
+        "- GLOBAL TONE RULE: all generated scripts must stay bright, optimistic, sunny and uplifting from first frame to last. Start with a pleasant lifestyle task, inviting action, satisfying preview or cheerful sensory detail. Never use a dark, gloomy, frustrated, anxious, disappointing, failure-based, or low-mood-then-reversal opening; translate user pain points into positive aspirations and smooth product use.",
         "产品与卖点质量硬要求：",
-        "- 功能卖点（英文）列必须优先逐字使用下方 Feature Name，不要改写成泛泛的“痛点开场/功能展示”。没有直接功能卖点的开场/收尾行，该列留空或写真实产品/场景短语，严禁写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。",
+        "- 功能卖点（英文）列必须优先逐字使用下方 Feature Name，不要改写成泛泛的“明亮任务开场/功能展示”。没有直接功能卖点的开场/收尾行，该列留空或写真实产品/场景短语，严禁写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。",
         "- 字幕-显示卖点名及描述（英文）列必须使用“Feature Name: Tagline”或从 Feature Description 摘取原文专业短句；不得写成 generic benefit。",
         "- 旁白和字幕是成片文案，严禁出现 Pain-point opening、Brand closing、Opening、Closing、Hook、Intro、Outro 等制作结构标签，也不要写成“开头：/结尾：/字幕：/卖点：”这种字段标签。",
         "- 旁白（英文）可以更口语，但必须围绕卖点库里的专业词：Feature Name、Tagline、Feature Description 至少命中其一。",
@@ -2421,9 +2424,9 @@ def _duration_structure_guidance(expected_duration, req: GenerateRequest | None 
     return f"""分段密度硬要求：
 - 正文镜头行（不含表头、分隔行和“总时长”行）必须控制在 {min_segments}-{MAX_SCRIPT_SEGMENTS} 行，绝对不得超过 {MAX_SCRIPT_SEGMENTS} 行；所有行时长相加必须精确等于 {expected} 秒，“总时长”行也必须写 {expected}秒。
 - 单行时长以 4-8 秒为主，最长不超过 {max_segment_seconds} 秒；除 12 秒以内的短视频外，不要生成 1-2 秒碎片段。
-- “镜头分段”必须从 0 秒开始连续推进，例如“0-3s 冷饭盒拿出（复热痛点开场）”“3-6s 餐盒放入平板腔体（Flatbed 证据）”；每行时间段必须与“时长”列一致，不能重叠、跳秒或只写镜头编号。
+- “镜头分段”必须从 0 秒开始连续推进，例如“0-3s 冷饭盒拿出（复热明亮任务开场）”“3-6s 餐盒放入平板腔体（Flatbed 证据）”；每行时间段必须与“时长”列一致，不能重叠、跳秒或只写镜头编号。
 - “镜头分段”不能只写“功能展示1/功能展示2/产品切入/收尾”，必须写成“时间段 + 生活场景任务 + 括号内阶段/卖点证据”的具体名称。适合当前产品的示例：{segment_examples}。
-- 结构顺序用最多 {MAX_SCRIPT_SEGMENTS} 段合并覆盖：生活化痛点开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；不要为了覆盖环节拆成很多 2 秒短段。
+- 结构顺序用最多 {MAX_SCRIPT_SEGMENTS} 段合并覆盖：生活化明亮任务开场、环境/物品状态铺垫、产品切入、核心功能操作、卖点证据特写、结果验证、品牌收尾；不要为了覆盖环节拆成很多 2 秒短段。
 - 每套至少出现 {min_lifestyle_details} 个生活化物品/场景细节（优先从这些当前品类细节中选择：{detail_examples}），人物只允许手部、手臂、背影、越肩视角或生活痕迹。"""
 
 
@@ -2539,21 +2542,8 @@ def _script_formula_issues(body: pd.DataFrame, direction: str) -> list[str]:
     first_rows = " ".join(_row_text(row) for _, row in body.head(2).iterrows())
     issues = []
     if direction == "问题解决/痛点挖掘型":
-        stage_issue = _ordered_stage_issue(
-            text,
-            [
-                ["痛点", "烦恼", "困扰", "麻烦", "崩溃", "为什么"],
-                ["浪费", "低效", "麻烦放大", "尴尬", "不稳定", "反复"],
-                ["发现", "换成", "试试", "这个时候", "产品切入", "解决方案"],
-                ["因为", "卖点", "功能", "解决", "改善", "省事"],
-                ["CTA", "可以试试", "值得参考", "建议", "别再"],
-            ],
-            direction,
-        )
-        if stage_issue:
-            issues.append(stage_issue)
-        if not _content_contains_any(first_rows, ["痛点", "烦恼", "困扰", "麻烦", "崩溃", "why", "problem"]):
-            issues.append("问题解决/痛点挖掘型必须开头即痛点，前两镜不能先讲产品参数或品牌。")
+        # Global positive-tone rule overrides the legacy pain-point validation path.
+        pass
     elif direction == "产品展示/功能介绍型":
         stage_issue = _ordered_stage_issue(
             text,
@@ -2725,7 +2715,7 @@ def _script_quality_issues(content: str, req: GenerateRequest, features: list[di
             issues.append(f"镜头运动&运动轨迹有 {weak_motion} 行缺少运动路径或方向，需按机构稿写成可执行轨迹。")
         first_timecode = str(body.iloc[0].get("镜头分段", "") or "")
         if not re.search(r"0\s*[-~—–至到]\s*\d+|0\s*s|0\s*秒", first_timecode, flags=re.IGNORECASE):
-            issues.append("镜头分段未从 0 秒开始连续标注，例如“0-3s 冷饭盒拿出（复热痛点开场）”。")
+            issues.append("镜头分段未从 0 秒开始连续标注，例如“0-3s 冷饭盒拿出（复热明亮任务开场）”。")
 
     for item in (features or [])[:5]:
         name = _clean_prompt_value(item.get("name"))
@@ -3083,15 +3073,15 @@ SCRIPT_DIRECTION_ALIASES = {
 
 SCRIPT_DIRECTION_FORMULAS = {
     "问题解决/痛点挖掘型": {
-        "formula": "痛点出现 → 麻烦放大 → 产品切入 → 对应卖点 → CTA",
-        "stages": ["痛点抛出", "问题放大", "解决方案引入", "卖点证明", "结尾行动引导"],
+        "formula": "Bright lifestyle task -> natural product action -> visual benefit evidence -> satisfying result -> CTA",
+        "stages": ["Bright lifestyle task", "Natural product entry", "Core action evidence", "Satisfying result", "Warm CTA"],
         "must": [
-            "开头先让用户意识到“这就是我正在遇到的问题”，不要先讲参数或品牌。",
-            "痛点必须具体到真实场景、具体麻烦或具体损失，避免“体验不好/不方便”这类空话。",
-            "一个痛点对应一个解决逻辑，一个卖点对应一个结果逻辑；只讲最相关的 1-2 个卖点。",
-            "从痛点到产品必须有自然过渡，例如发现、替代方案、顺手换用，不得硬切广告。",
+            "Open with a pleasant, sunny lifestyle moment, an inviting product action, or a satisfying result preview; never start from frustration, failure, darkness, anxiety, or a low-mood reversal.",
+            "Translate any user pain point into a positive aspiration, a smooth task flow, or a delightful use moment instead of depicting distress or failure.",
+            "Each selected selling point must be proven by a visible product action and a positive result.",
+            "Move naturally from the bright lifestyle moment into product use without a hard-sell interruption.",
         ],
-        "output": ["核心痛点", "痛点场景", "产品切入句", "对应卖点", "结尾 CTA"],
+        "output": ["Positive lifestyle moment", "Product action", "Visual selling-point evidence", "Satisfying result", "Warm CTA"],
     },
     "产品展示/功能介绍型": {
         "formula": "产品亮相 → 功能演示 → 补充功能 → 使用结果 → CTA",
@@ -3395,7 +3385,7 @@ def _build_prompt(req: GenerateRequest, features: list[dict], variant_index: int
 - 与其他方案保持明显差异：开场 hook、产品视角、物品状态、画面口令、镜头运动、故事推进至少两处不同。
 - 参考外部机构 AI 视频口令稿的结构：每一行都必须同时写清“镜头分段、可拍画面示意与表现手法、镜头运动&运动轨迹、功能卖点植入、英文旁白/字幕”。这些信息不能互相重复，也不能空泛。
 - 镜头设计必须先服务故事推进，再服务卖点露出：开场负责吸引注意，中段用产品动作证明卖点，后段用结果/品牌记忆收束。
-- 镜头分段必须参考上传样例的“镜头”字段：用“时间段 + 具体动作 + 括号内阶段/卖点证据”，例如“0-4s 冷饭盒拿出（复热痛点开场）”，不得只写镜头编号。
+- 镜头分段必须参考上传样例的“镜头”字段：用“时间段 + 具体动作 + 括号内阶段/卖点证据”，例如“0-4s 冷饭盒拿出（复热明亮任务开场）”，不得只写镜头编号。
 - 画面示意&表现手法必须像制作口令：包含主体比例、前景/中景/背景、产品位置、道具、被处理物品、手部动作和光影；严禁只写“产品特写”“功能展示”“见示意图”。
 - 镜头运动&运动轨迹必须参考上传样例的“镜头运动/运镜轨迹”字段：写运动路径和方向，例如“近景特写（CU）｜推进至面板｜手指按键特写”“横移跟拍（左→右）｜手部动作入画”“俯拍切到腔体｜红点锁定食物中心”。不得只写“特写/俯拍/全景”。
 - 功能卖点（英文）列必须优先逐字使用卖点库 Feature Name；没有直接卖点的开场/收尾行该列留空，或写真实产品/场景短语，严禁写 Pain-point opening、Brand closing、Opening、Closing 等结构标签。
@@ -4204,7 +4194,10 @@ _HISENSE_BRAND_NEGATIVE = (
 
 def _storyboard_category_context(category, model, detection_text=""):
     raw = f"{category or ''} {model or ''} {detection_text or ''}".lower()
-    if _is_laundry_storyboard(raw):
+    selected_category = f"{category or ''} {model or ''}".strip().lower()
+    # A chosen product category is authoritative; script text must never switch the appliance type.
+    category_signal = selected_category or raw
+    if _is_laundry_storyboard(category_signal):
         return {
             "subject": "one Hisense front-loading washing machine or washer-dryer combo",
             "setting": "a modern laundry room or utility room, never a kitchen",
@@ -4219,8 +4212,22 @@ def _storyboard_category_context(category, model, detection_text=""):
             ),
         }
 
+    if _has_any_storyboard_token(category_signal, ("coffee machine", "coffee maker", "espresso", "latte", "cappuccino")):
+        return {
+            "subject": f"one countertop coffee machine with a portafilter, steam wand, drip tray, and control panel; model {model or 'from brief'}".strip(),
+            "setting": "a real kitchen coffee station or breakfast counter, never a laundry room",
+            "must": (
+                "The frame must clearly show one coffee machine as the only target appliance. Keep the portafilter, "
+                "steam wand, milk pitcher, cup, beans, crema, foam, or control interaction relevant to the shot visible."
+            ),
+            "negative": (
+                "washing machine, washer, dryer, washer-dryer, laundry room, laundry basket, clothes, dishwasher, "
+                "refrigerator, microwave, oven, air fryer, television, unrelated appliance, product absent, empty room"
+            ),
+        }
+
     if _has_any_storyboard_token(
-        raw,
+        category_signal,
         (
   "空气炸锅",
   "air fryer",
@@ -4247,7 +4254,7 @@ def _storyboard_category_context(category, model, detection_text=""):
       "unrelated appliance, product absent, empty room"
   ),
         }
-    if _has_any_storyboard_token(raw, ("微波", "microwave", "reheat", "defrost", "popcorn")):
+    if _has_any_storyboard_token(category_signal, ("微波", "microwave", "reheat", "defrost", "popcorn")):
         return {
   "subject": f"Hisense {model or ''} countertop microwave oven with visible door, cavity, and control panel".strip(),
   "setting": "a modern kitchen countertop, never a living room",
@@ -4260,7 +4267,7 @@ def _storyboard_category_context(category, model, detection_text=""):
       "refrigerator as main subject, unrelated appliance, product absent"
   ),
         }
-    if _has_any_storyboard_token(raw, ("烤箱", "oven", "bake", "roast", "pizza")):
+    if _has_any_storyboard_token(category_signal, ("烤箱", "oven", "bake", "roast", "pizza")):
         return {
   "subject": f"Hisense {model or ''} kitchen oven with visible door, cavity, tray, and control area".strip(),
   "setting": "a modern kitchen or kitchen countertop, never a living room",
@@ -4273,7 +4280,7 @@ def _storyboard_category_context(category, model, detection_text=""):
       "unrelated appliance, product absent"
   ),
         }
-    if _has_any_storyboard_token(raw, ("冰箱", "refrigerator", "fridge", "freezer", "freshness", "fresh food")):
+    if _has_any_storyboard_token(category_signal, ("冰箱", "refrigerator", "fridge", "freezer", "freshness", "fresh food")):
         return {
   "subject": f"Hisense {model or ''} refrigerator with visible doors, shelves, drawers, and stored food".strip(),
   "setting": "a modern kitchen, never a living room TV wall",
@@ -4286,7 +4293,7 @@ def _storyboard_category_context(category, model, detection_text=""):
       "unrelated appliance, product absent"
   ),
         }
-    if _has_any_storyboard_token(raw, ("洗碗", "dishwasher", "dishes", "tableware", "餐具")):
+    if _has_any_storyboard_token(category_signal, ("洗碗", "dishwasher", "dishes", "tableware", "餐具")):
         return {
   "subject": f"Hisense {model or ''} dishwasher with visible racks, door, dishes, and control panel".strip(),
   "setting": "a modern kitchen beside cabinets or a sink, never a living room",
@@ -4307,18 +4314,27 @@ def _storyboard_category_context(category, model, detection_text=""):
     }
 
 
-def _storyboard_action_constraints(prompt):
+def _storyboard_category_contract(category: str, model: str = "") -> str:
+    selected = " ".join(item for item in (str(category or "").strip(), str(model or "").strip()) if item)
+    return (
+        f"CATEGORY LOCK (highest priority): the selected target appliance category is {selected or 'the selected product category'}. "
+        "Do not substitute, introduce, or imply any other appliance category, even if the script mentions another appliance."
+    )
+
+
+def _storyboard_action_constraints(prompt, category="", model=""):
     raw = str(prompt or "")
     lower = raw.lower()
     constraints = []
-    focus = _storyboard_visual_focus(raw)
+    focus = _storyboard_visual_focus(raw, category=category, model=model)
     if focus.get("constraint"):
         constraints.append(focus["constraint"])
     if _storyboard_requires_user(raw):
         constraints.append(
             "A visible adult user must be present in the foreground and actively interacting with the product or the laundry task."
         )
-    if _storyboard_switching_laundry(raw):
+    selected_identity = f"{category or ''} {model or ''}".strip()
+    if (not selected_identity or _is_laundry_storyboard(selected_identity)) and _storyboard_switching_laundry(raw):
         constraints.append(
             "Show the laundry pain point with one front-loading washer-dryer combo: the user holds a laundry basket or wet clothes near the open drum, implying avoided washer-to-dryer transfer without showing a second machine."
         )
@@ -4353,7 +4369,8 @@ def _storyboard_requires_user(prompt):
 def _storyboard_visual_focus(prompt, category="", model=""):
     raw = str(prompt or "")
     lower = raw.lower()
-    is_laundry = _is_laundry_storyboard(f"{category} {model} {raw}")
+    selected_identity = f"{category or ''} {model or ''}".strip()
+    is_laundry = _is_laundry_storyboard(selected_identity) if selected_identity else _is_laundry_storyboard(raw)
     result_tokens = (
         "clean clothes",
         "clean laundry",
@@ -4520,10 +4537,11 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
     raw_prompt = str(prompt or "").strip()[:900]
     context = _storyboard_category_context(category, model, detection_text=raw_prompt)
     focus = _storyboard_visual_focus(raw_prompt, category=category, model=model)
-    action_constraints = _storyboard_action_constraints(raw_prompt)
+    action_constraints = _storyboard_action_constraints(raw_prompt, category=category, model=model)
     # This endpoint always returns a nine-panel storyboard, even when a user customizes the prompt.
     wants_contact_sheet = True
     scene_instruction = focus["constraint"] if str(reference_policy or "").startswith("skip-") else context["must"]
+    category_contract = _storyboard_category_contract(category, model)
     reference_text = (
         "preserve the supplied reference only for product identity, silhouette, color, finish, door outline, "
         "handle/buttons, logo placement, control-panel layout, cavity/drum shape, and proportions"
@@ -4539,7 +4557,7 @@ def _enhance_storyboard_image_prompt(prompt, category="", model="", shot_index=0
     )
     lines = [
         (
-            "ABSOLUTE PRODUCT IDENTITY AND COUNT: every panel must show exactly one physical target appliance; "
+            f"{category_contract} ABSOLUTE PRODUCT IDENTITY AND COUNT: every panel must show exactly one physical target appliance; "
             f"the product is {context['subject']}; model Hisense {model or 'from brief'}; {reference_text}. "
             "All panels reuse the same one physical unit. A close-up may crop that unit, but it must never show a second "
             "appliance, duplicate, pair, lineup, array, reflection, or same-category background appliance."
@@ -4740,8 +4758,9 @@ def _stability_safe_storyboard_prompt(prompt: str, category: str = "", model: st
     detail = re.sub(r"\s+", " ", detail).strip()[:700]
     context = _storyboard_category_context(category, "", detection_text=detail)
     subject = re.sub(r"(?i)hisense", "selected", str(context.get("subject") or "home appliance"))
+    category_contract = _storyboard_category_contract(category, model)
     return (
-        "Create one 16:9 photorealistic commercial storyboard contact sheet. "
+        f"{category_contract} Create one 16:9 photorealistic commercial storyboard contact sheet. "
         f"Every panel contains exactly one physical {subject}; it is the same sole unit in all nine panels. "
         "Never show a second appliance, duplicate, appliance pair, lineup, array, reflection, or background appliance. "
         f"{_storyboard_micro_shot_plan()} "
