@@ -5,9 +5,11 @@ from PIL import Image, ImageDraw
 
 from image_motion_service import (
     analyze_creative_image,
+    assess_component_motion,
     build_motion_prompt,
     enhance_image_resolution,
     prepare_motion_source,
+    render_stable_motion_video,
     validate_motion_plan,
 )
 
@@ -61,6 +63,30 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertIn("cooking basket or front drawer slides outward", prompt)
         self.assertIn("absolutely no zoom", prompt)
         self.assertIn("outer cabinet remain fixed", prompt)
+
+    def test_flow_plan_locks_camera_and_renders_localized_hot_air_motion(self):
+        plan = validate_motion_plan({"preset": "flow", "focus": "effect", "intensity": "standard"})
+        self.assertEqual("locked", plan["camera_motion"])
+        source = Image.new("RGB", (320, 180), (12, 32, 38))
+        draw = ImageDraw.Draw(source)
+        draw.arc((70, 35, 250, 155), 20, 340, fill=(255, 135, 20), width=10)
+        draw.line((100, 130, 100, 55), fill=(255, 185, 40), width=8)
+        draw.line((220, 55, 220, 130), fill=(255, 185, 40), width=8)
+        video = render_stable_motion_video(
+            image_bytes(source),
+            preset="flow",
+            intensity="standard",
+            duration_seconds=5,
+            fps=24,
+        )
+        qa = assess_component_motion(
+            video,
+            target_region={"x": 0.10, "y": 0.10, "width": 0.80, "height": 0.80},
+            motion_name="\u70ed\u6d41",
+        )
+        self.assertEqual("passed", qa["status"], qa)
+        self.assertFalse(qa["global_zoom_explains_motion"])
+
 
 
     def test_source_ratio_is_preserved(self):

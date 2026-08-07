@@ -107,7 +107,7 @@ function motionResultHtml(asset) {
   const versionButtons = versions
     .map(
       (item) =>
-        `<button type="button" class="motion-version ${job?.id === item.id ? "active" : ""}" data-motion-version="${escapeAttr(item.id)}" data-asset-id="${escapeAttr(asset.id)}">v${Number(item.version || 1)} \u00b7 ${escapeHtml(item.status)}</button>`
+        `<button type="button" class="motion-version ${job?.id === item.id ? "active" : ""}" data-motion-version="${escapeAttr(item.id)}" data-asset-id="${escapeAttr(asset.id)}">\u7248\u672c ${Number(item.version || 1)} \u00b7 ${escapeHtml(item.status)}</button>`
     )
     .join("");
   const status = job?.current_step || job?.status || "";
@@ -346,7 +346,7 @@ async function regenerateMotionJob(jobId, action) {
       body: JSON.stringify({ action }),
     });
     state.motionActiveVersions.set(data.job.creative_asset_id, data.job.id);
-    setMessage("motionMessage", `\u5df2\u521b\u5efa v${data.job.version} \u7248\u672c\u3002`, "ok");
+    setMessage("motionMessage", `\u5df2\u521b\u5efa\u7248\u672c ${data.job.version}\u3002`, "ok");
     await loadMotionWorkspace();
     await loadJobs();
   } catch (error) {

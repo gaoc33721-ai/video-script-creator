@@ -361,21 +361,69 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds": duration,
         "fps": 24,
         "quality": "1080p",
-        "camera_motion": "locked" if normalized_preset == "component" else "gentle_push_in",
+        "camera_motion": "locked" if normalized_preset in {"component", "flow"} else "gentle_push_in",
     }
 
 
-def _motion_overlay(size: tuple[int, int], frame: int, frame_count: int, preset: str, intensity: str):
-    from PIL import Image, ImageDraw, ImageFilter
+def _warm_effect_mask(image):
+    """Locate baked orange/yellow airflow graphics without redrawing the source."""
+    from PIL import ImageChops, ImageFilter
+
+    hue, saturation, value = image.convert("HSV").split()
+    warm_hue = hue.point([255 if item <= 34 or item >= 248 else 0 for item in range(256)])
+    saturated = saturation.point([255 if item >= 92 else 0 for item in range(256)])
+    bright = value.point([255 if item >= 118 else 0 for item in range(256)])
+    mask = ImageChops.multiply(ImageChops.multiply(warm_hue, saturated), bright)
+    return mask.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(1.6))
+
+
+def _motion_overlay(
+    size: tuple[int, int],
+    frame: int,
+    frame_count: int,
+    preset: str,
+    intensity: str,
+    warm_mask=None,
+):
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
     width, height = size
     layer = Image.new("RGBA", size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     alpha = {"subtle": 55, "standard": 90, "strong": 135}.get(intensity, 90)
-    phase = frame / max(1, frame_count - 1)
+    phase = frame / max(1, frame_count)
     pulse = 0.55 + 0.45 * math.sin(phase * math.pi)
-    if preset in {"flow", "steam", "liquid"}:
-        color = (255, 190, 70, int(alpha * pulse)) if preset == "flow" else (235, 245, 255, int(alpha * pulse)) if preset == "steam" else (90, 190, 255, int(alpha * pulse))
+    if preset == "flow":
+        if warm_mask is not None and warm_mask.getbbox():
+            gradient = Image.linear_gradient("L").resize(size).rotate(-18, resample=Image.Resampling.BICUBIC)
+            shift = int(phase * 510)
+            sweep = gradient.point(
+                [
+                    int(28 + 227 * max(0.0, 1.0 - abs(((item + shift) % 256) - 128) / 42.0))
+                    for item in range(256)
+                ]
+            )
+            moving_alpha = ImageChops.multiply(warm_mask, sweep).point(
+                [min(255, int(item * alpha / 90.0)) for item in range(256)]
+            )
+            glow_alpha = moving_alpha.filter(ImageFilter.GaussianBlur(max(4, width // 120)))
+            glow = Image.new("RGBA", size, (255, 112, 18, 0))
+            glow.putalpha(glow_alpha.point([int(item * 0.48) for item in range(256)]))
+            layer = Image.alpha_composite(layer, glow)
+            highlight = Image.new("RGBA", size, (255, 226, 92, 0))
+            highlight.putalpha(moving_alpha)
+            layer = Image.alpha_composite(layer, highlight)
+
+        draw = ImageDraw.Draw(layer)
+        line_width = max(5, width // 150)
+        color = (255, 190, 70, alpha)
+        box = (int(width * 0.18), int(height * 0.12), int(width * 0.82), int(height * 0.70))
+        angle = int(phase * 360)
+        for offset in (0, 180):
+            start = angle + offset
+            draw.arc(box, start, start + 68, fill=color, width=line_width)
+    elif preset in {"steam", "liquid"}:
+        color = (235, 245, 255, int(alpha * pulse)) if preset == "steam" else (90, 190, 255, int(alpha * pulse))
         line_width = max(5, width // 150)
         for index in range(5):
             x = int(width * (0.22 + index * 0.14))
@@ -391,10 +439,6 @@ def _motion_overlay(size: tuple[int, int], frame: int, frame_count: int, preset:
                 y1 = int(height * 0.20 + offset)
                 y2 = min(int(height * 0.82), y1 + int(height * 0.22))
                 draw.line((x, y1, x, y2), fill=color, width=line_width)
-        if preset == "flow":
-            box = (int(width * 0.18), int(height * 0.10), int(width * 0.82), int(height * 0.48))
-            draw.arc(box, 190, 350, fill=color, width=line_width)
-            draw.arc(box, 10, 170, fill=color, width=line_width)
     elif preset in {"glow", "component"}:
         margin = int(min(width, height) * (0.18 - 0.03 * pulse))
         color = (75, 225, 255, int(alpha * pulse))
@@ -422,11 +466,12 @@ def render_stable_motion_video(
     base = ImageOps.exif_transpose(Image.open(io.BytesIO(prepared_image_bytes))).convert("RGB")
     frame_count = max(1, int(round(duration_seconds * fps)))
     chosen_preset = preset if preset in ALLOWED_PRESETS else "camera"
+    warm_mask = _warm_effect_mask(base) if chosen_preset == "flow" else None
     chosen_intensity = intensity if intensity in ALLOWED_INTENSITIES else "standard"
     with tempfile.TemporaryDirectory() as tmpdir:
         for frame_index in range(frame_count):
             progress = frame_index / max(1, frame_count - 1)
-            max_zoom = 1.02 if text_policy == "preserve_title_logo" else {"subtle": 1.04, "standard": 1.075, "strong": 1.11}.get(chosen_intensity, 1.075)
+            max_zoom = 1.0 if chosen_preset == "flow" else 1.02 if text_policy == "preserve_title_logo" else {"subtle": 1.04, "standard": 1.075, "strong": 1.11}.get(chosen_intensity, 1.075)
             zoom = 1.0 + (max_zoom - 1.0) * progress
             if max_zoom > 1.0201:
                 resized = base.resize((int(base.width * zoom), int(base.height * zoom)), Image.Resampling.LANCZOS)
@@ -436,7 +481,10 @@ def render_stable_motion_video(
             else:
                 frame_image = base.convert("RGBA")
             if chosen_preset != "camera":
-                frame_image = Image.alpha_composite(frame_image, _motion_overlay(base.size, frame_index, frame_count, chosen_preset, chosen_intensity))
+                frame_image = Image.alpha_composite(
+                    frame_image,
+                    _motion_overlay(base.size, frame_index, frame_count, chosen_preset, chosen_intensity, warm_mask),
+                )
             if text_policy == "preserve_title_logo":
                 for region in protected_regions or []:
                     try:
@@ -537,7 +585,11 @@ def assess_video_fidelity(source_image_bytes: bytes, video_bytes: bytes) -> dict
 
 
 
-def assess_component_motion(video_bytes: bytes, target_region: dict[str, Any] | None = None) -> dict[str, Any]:
+def assess_component_motion(
+    video_bytes: bytes,
+    target_region: dict[str, Any] | None = None,
+    motion_name: str = "\u90e8\u4ef6",
+) -> dict[str, Any]:
     """Reject static/global-camera results when articulated local motion was requested."""
     from PIL import Image, ImageChops, ImageOps, ImageStat
 
@@ -633,9 +685,9 @@ def assess_component_motion(video_bytes: bytes, target_region: dict[str, Any] | 
             "best_global_zoom_scale": round(best_scale, 3),
             "global_zoom_explains_motion": zoom_explains_motion,
             "message": (
-                "\u68c0\u6d4b\u5230\u76ee\u6807\u533a\u57df\u5b58\u5728\u72ec\u7acb\u90e8\u4ef6\u8fd0\u52a8\uff0c\u4e14\u955c\u5934\u6574\u4f53\u8fd0\u52a8\u53d7\u63a7\u3002"
+                f"\u68c0\u6d4b\u5230\u76ee\u6807\u533a\u57df\u5b58\u5728\u72ec\u7acb{motion_name}\u8fd0\u52a8\uff0c\u4e14\u955c\u5934\u6574\u4f53\u8fd0\u52a8\u53d7\u63a7\u3002"
                 if passed
-                else "\u672a\u68c0\u6d4b\u5230\u8db3\u591f\u7684\u72ec\u7acb\u90e8\u4ef6\u8fd0\u52a8\uff0c\u6216\u7ed3\u679c\u4e3b\u8981\u662f\u5168\u5c40\u63a8\u955c/\u753b\u9762\u6f02\u79fb\u3002"
+                else f"\u672a\u68c0\u6d4b\u5230\u8db3\u591f\u7684\u72ec\u7acb{motion_name}\u8fd0\u52a8\uff0c\u6216\u7ed3\u679c\u4e3b\u8981\u662f\u5168\u5c40\u63a8\u955c/\u753b\u9762\u6f02\u79fb\u3002"
             ),
         }
 

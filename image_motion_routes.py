@@ -370,6 +370,16 @@ class ImageMotionWorkflow:
             protected_regions=(asset.get("analysis") or {}).get("protected_regions") or [],
             metadata={"AssetId": asset["id"], "JobId": job_id, "Version": job.get("version")},
         )
+        motion_qa = None
+        if preset == "flow":
+            motion_qa = assess_component_motion(
+                video,
+                target_region={"x": 0.10, "y": 0.16, "width": 0.80, "height": 0.72},
+                motion_name="\u70ed\u6d41",
+            )
+            if motion_qa.get("status") != "passed":
+                self.fail_job(job_id, f"\u70ed\u6d41\u52a8\u6548\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{motion_qa.get('message')}", qa_result=motion_qa)
+                return
         video_key = f"image-motion/videos/{job_id}_v{job.get('version', 1)}.mp4"
         self.storage.write_file_bytes(video_key, video, content_type="video/mp4")
         self.update_job(
@@ -378,7 +388,7 @@ class ImageMotionWorkflow:
             progress=100,
             current_step="生成完成",
             completed_at=self.now(),
-            generation_mode="stable_template",
+            generation_mode="stable_flow_overlay" if preset == "flow" else "stable_template",
             fallback_reason=reason,
             prepared_image_key=prepared_key,
             prepared_metadata=prepared_meta,
