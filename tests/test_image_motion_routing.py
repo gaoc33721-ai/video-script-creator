@@ -181,11 +181,30 @@ class ImageMotionRoutingTests(unittest.TestCase):
             preset="flow",
         )
         workflow.run_job("job-flow")
-
         job = storage.json[IMAGE_MOTION_JOBS_KEY][0]
         self.assertEqual("failed", job["status"])
         self.assertEqual("failed", job["qa_status"])
         self.assertNotIn("video_key", job)
+
+    def test_failed_job_does_not_block_a_new_idempotent_submission(self):
+        workflow, storage = self.workflow(
+            lambda **kwargs: {"task_id": "ray-flow-retry"},
+            lambda task_id: {"status": "processing"},
+            preset="flow",
+        )
+        asset = flow_asset()
+        plan = flow_job()["motion_plan"]
+        first, first_reused = workflow.create_job(asset, plan, "same-click-key")
+        workflow.update_job(first["id"], status="failed")
+
+        second, second_reused = workflow.create_job(asset, plan, "same-click-key")
+
+        self.assertFalse(first_reused)
+        self.assertFalse(second_reused)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(first["version"] + 1, second["version"])
+
+
 
 
     def test_component_poll_failure_is_not_downgraded(self):

@@ -284,7 +284,13 @@ class ImageMotionWorkflow:
         fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()
         with self.lock:
             jobs = self.jobs()
-            existing = next((item for item in jobs if item.get("idempotency_fingerprint") == fingerprint), None)
+            existing = next(
+                (
+                    item for item in jobs
+                    if item.get("idempotency_fingerprint") == fingerprint and item.get("status") != "failed"
+                ),
+                None,
+            )
             if existing:
                 return existing, True
             now = self.now()
