@@ -1658,6 +1658,28 @@ button.secondary {
   font-size: 13px;
 }
 
+.motion-resolution.enhanced {
+  color: var(--brand-dark);
+  font-weight: 700;
+}
+
+.motion-generate-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(0, 170, 166, 0.24);
+  border-radius: 14px;
+  background: var(--brand-tint);
+}
+
+.motion-generate-action span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .motion-result {
   margin-top: 4px;
   padding-top: 14px;

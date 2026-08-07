@@ -21,6 +21,7 @@ from image_motion_service import (
     analyze_creative_image,
     assess_video_fidelity,
     build_motion_prompt,
+    enhance_image_resolution,
     mute_video,
     normalize_generated_video,
     prepare_motion_source,
@@ -103,12 +104,110 @@ class ImageMotionWorkflow:
     def asset(self, asset_id: str) -> dict | None:
         return next((item for item in self.assets() if item.get("id") == asset_id), None)
 
+    @staticmethod
+    def working_image_key(asset: dict) -> str:
+        return str(asset.get("working_key") or asset.get("original_key") or "")
+
+    def enhance_asset_record(self, asset: dict, *, force: bool = False) -> tuple[dict, bool]:
+        current = dict(asset.get("resolution_enhancement") or {})
+        if current.get("status") and not force:
+            return asset, False
+        source_bytes = self.storage.read_file_bytes(asset["original_key"])
+        working_bytes, enhancement = enhance_image_resolution(source_bytes)
+        working_key = asset["original_key"]
+        working_content_type = asset.get("content_type") or "image/png"
+        if enhancement.get("applied"):
+            working_key = f"creative-assets/{asset['id']}/enhanced.png"
+            working_content_type = "image/png"
+            self.storage.write_file_bytes(working_key, working_bytes, content_type=working_content_type)
+
+        analysis = analyze_creative_image(
+            working_bytes,
+            filename=asset.get("filename") or "",
+            category=asset.get("category") or "",
+            model=asset.get("model") or "",
+            feature=asset.get("feature") or "",
+        )
+        if enhancement.get("applied"):
+            analysis["warnings"] = [
+                item for item in (analysis.get("warnings") or []) if "960" not in str(item)
+            ]
+            analysis["warnings"].insert(
+                0,
+                f"原图 {enhancement['source_width']}×{enhancement['source_height']}，"
+                f"已自动保真增强至 {enhancement['output_width']}×{enhancement['output_height']}。",
+            )
+        elif enhancement.get("status") == "too_small":
+            analysis["blocking_issues"] = [
+                "素材短边低于360像素，无法安全自动增强，请上传更清晰的卖点图。"
+                if "720" in str(item)
+                else item
+                for item in (analysis.get("blocking_issues") or [])
+            ]
+        elif enhancement.get("status") == "fidelity_failed":
+            analysis["blocking_issues"] = [
+                "素材自动增强未通过保真检查，请上传更清晰的卖点图。"
+                if "720" in str(item)
+                else item
+                for item in (analysis.get("blocking_issues") or [])
+            ]
+        analysis["ready"] = not (analysis.get("blocking_issues") or [])
+        analysis["resolution_enhancement"] = enhancement
+
+        updated = dict(asset)
+        updated.update(
+            {
+                "source_width": enhancement.get("source_width"),
+                "source_height": enhancement.get("source_height"),
+                "working_width": enhancement.get("output_width"),
+                "working_height": enhancement.get("output_height"),
+                "working_key": working_key,
+                "working_content_type": working_content_type,
+                "working_file_hash": hashlib.sha256(working_bytes).hexdigest(),
+                "resolution_enhancement": enhancement,
+                "analysis": analysis,
+                "updated_at": self.now(),
+            }
+        )
+        return updated, True
+
+    def ensure_resolution_enhancements(self, category: str = "", model: str = "") -> list[dict]:
+        with self.lock:
+            assets = self.assets()
+            changed = False
+            for index, asset in enumerate(assets):
+                if category and asset.get("category") != category:
+                    continue
+                if model and asset.get("model") != model:
+                    continue
+                if (asset.get("resolution_enhancement") or {}).get("status"):
+                    continue
+                short_side = min(int(asset.get("source_width") or 0), int(asset.get("source_height") or 0))
+                if not short_side or short_side >= 720:
+                    continue
+                try:
+                    assets[index], enhanced = self.enhance_asset_record(asset)
+                    changed = changed or enhanced
+                except Exception as exc:
+                    failed = dict(asset)
+                    failed["resolution_enhancement"] = {
+                        "applied": False,
+                        "status": "error",
+                        "message": str(exc),
+                    }
+                    assets[index] = failed
+                    changed = True
+            if changed:
+                self.write_list(CREATIVE_ASSETS_KEY, assets, 1000)
+            return assets
+
     def plan(self, asset_id: str) -> dict | None:
         return next((item for item in self.plans() if item.get("creative_asset_id") == asset_id), None)
 
     def public_asset(self, asset: dict) -> dict:
         result = dict(asset)
         result.pop("original_key", None)
+        result.pop("working_key", None)
         result["preview_url"] = f"/api/creative-assets/{urllib.parse.quote(str(asset.get('id') or ''), safe='')}/image"
         result["motion_plan"] = self.plan(str(asset.get("id") or ""))
         return result
@@ -230,7 +329,7 @@ class ImageMotionWorkflow:
         if not job or not asset:
             raise RuntimeError("动效任务关联的素材不存在。")
         plan = validate_motion_plan(job.get("motion_plan") or {})
-        source_bytes = self.storage.read_file_bytes(asset["original_key"])
+        source_bytes = self.storage.read_file_bytes(self.working_image_key(asset))
         prepared, prepared_meta = prepare_motion_source(
             source_bytes,
             asset.get("analysis") or {},
@@ -291,7 +390,7 @@ class ImageMotionWorkflow:
             if not use_provider:
                 self.render_fallback(job_id)
                 return
-            source_bytes = self.storage.read_file_bytes(asset["original_key"])
+            source_bytes = self.storage.read_file_bytes(self.working_image_key(asset))
             prepared, prepared_meta = prepare_motion_source(
                 source_bytes,
                 analysis,
@@ -393,7 +492,7 @@ def register_image_motion_routes(
 
     @app.get("/api/creative-assets", dependencies=protected)
     def list_creative_assets(category: str = "", model: str = ""):
-        assets = workflow.assets()
+        assets = workflow.ensure_resolution_enhancements(category=category, model=model)
         if category:
             assets = [item for item in assets if item.get("category") == category]
         if model:
@@ -422,10 +521,6 @@ def register_image_motion_routes(
             data = await upload.read()
             if not data or len(data) > MAX_FILE_BYTES:
                 raise HTTPException(status_code=400, detail=f"{upload.filename} 为空或超过 20MB。")
-            try:
-                analysis = analyze_creative_image(data, filename=upload.filename or "", category=category, model=model, feature=feature)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=f"{upload.filename} 无法识别：{exc}") from exc
             asset_id = uuid.uuid4().hex[:12]
             extension = "jpg" if media_type == "image/jpeg" else "webp" if media_type == "image/webp" else "png"
             source_key = f"creative-assets/{asset_id}/original.{extension}"
@@ -435,17 +530,19 @@ def register_image_motion_routes(
                 "id": asset_id,
                 "category": category,
                 "model": model,
-                "feature": feature or analysis.get("selling_point_summary") or "",
+                "feature": feature,
                 "filename": upload.filename or f"{asset_id}.{extension}",
                 "content_type": media_type,
-                "source_width": analysis.get("width"),
-                "source_height": analysis.get("height"),
-                "file_hash": analysis.get("sha256"),
+                "file_hash": hashlib.sha256(data).hexdigest(),
                 "original_key": source_key,
-                "analysis": analysis,
                 "created_at": now,
                 "updated_at": now,
             }
+            try:
+                asset, _ = workflow.enhance_asset_record(asset, force=True)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"{upload.filename} 无法识别或增强：{exc}") from exc
+            asset["feature"] = feature or (asset.get("analysis") or {}).get("selling_point_summary") or ""
             created.append(asset)
         with workflow.lock:
             assets = created + workflow.assets()
@@ -459,7 +556,10 @@ def register_image_motion_routes(
         asset = workflow.asset(asset_id)
         if not asset:
             raise HTTPException(status_code=404, detail="卖点图素材不存在。")
-        return Response(storage.read_file_bytes(asset["original_key"]), media_type=asset.get("content_type") or "image/png")
+        return Response(
+            storage.read_file_bytes(workflow.working_image_key(asset)),
+            media_type=asset.get("working_content_type") or asset.get("content_type") or "image/png",
+        )
 
     @app.post("/api/creative-assets/{asset_id}/motion-plan", dependencies=protected)
     def save_motion_plan(asset_id: str, request: MotionPlanRequest):

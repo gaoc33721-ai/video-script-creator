@@ -23,6 +23,64 @@ ALLOWED_TEXT_POLICIES = {"visual_only", "preserve_title_logo"}
 ALLOWED_PRESETS = {"auto", "flow", "liquid", "steam", "glow", "component", "camera"}
 ALLOWED_INTENSITIES = {"subtle", "standard", "strong"}
 
+def enhance_image_resolution(
+    image_bytes: bytes,
+    *,
+    target_short_side: int = 720,
+    minimum_source_short_side: int = 360,
+) -> tuple[bytes, dict[str, Any]]:
+    """Create a deterministic fidelity-first upscale without redrawing pixels."""
+    from PIL import Image, ImageChops, ImageFilter, ImageOps, ImageStat
+
+    source = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
+    width, height = source.size
+    short_side = min(width, height)
+    metadata = {
+        "applied": False,
+        "status": "not_needed",
+        "method": "lanczos-denoise-unsharp-v1",
+        "source_width": width,
+        "source_height": height,
+        "output_width": width,
+        "output_height": height,
+        "scale": 1.0,
+        "fidelity_score": 100.0,
+    }
+    if short_side >= target_short_side:
+        return image_bytes, metadata
+    if short_side < minimum_source_short_side:
+        metadata["status"] = "too_small"
+        return image_bytes, metadata
+
+    scale = target_short_side / float(short_side)
+    target_width = max(2, int(round(width * scale / 2) * 2))
+    target_height = max(2, int(round(height * scale / 2) * 2))
+    denoised = source.filter(ImageFilter.GaussianBlur(radius=0.25))
+    enhanced = denoised.resize((target_width, target_height), Image.Resampling.LANCZOS)
+    enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=1.1, percent=110, threshold=3))
+
+    comparison = enhanced.resize(source.size, Image.Resampling.LANCZOS)
+    difference = ImageChops.difference(source, comparison)
+    mean_difference = sum(float(value) for value in ImageStat.Stat(difference).mean) / 3.0
+    fidelity_score = round(max(0.0, 100.0 - mean_difference * 2.0), 1)
+    if fidelity_score < 72.0:
+        metadata.update({"status": "fidelity_failed", "fidelity_score": fidelity_score})
+        return image_bytes, metadata
+
+    output = io.BytesIO()
+    enhanced.save(output, format="PNG", optimize=True)
+    metadata.update(
+        {
+            "applied": True,
+            "status": "enhanced",
+            "output_width": target_width,
+            "output_height": target_height,
+            "scale": round(scale, 4),
+            "fidelity_score": fidelity_score,
+        }
+    )
+    return output.getvalue(), metadata
+
 
 def normalize_ratio(value: str, width: int = 1, height: int = 1) -> str:
     ratio = str(value or "source").strip().lower()

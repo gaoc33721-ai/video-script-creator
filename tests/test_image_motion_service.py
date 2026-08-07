@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 from image_motion_service import (
     analyze_creative_image,
     build_motion_prompt,
+    enhance_image_resolution,
     prepare_motion_source,
     validate_motion_plan,
 )
@@ -18,6 +19,21 @@ def image_bytes(image):
 
 
 class ImageMotionServiceTests(unittest.TestCase):
+    def test_low_resolution_image_is_fidelity_upscaled_to_720_short_side(self):
+        source = image_bytes(Image.new("RGB", (690, 388), (25, 90, 105)))
+        enhanced, metadata = enhance_image_resolution(source)
+        self.assertTrue(metadata["applied"])
+        self.assertEqual("enhanced", metadata["status"])
+        self.assertEqual((1280, 720), Image.open(io.BytesIO(enhanced)).size)
+        self.assertGreaterEqual(metadata["fidelity_score"], 72)
+
+    def test_too_small_image_is_not_upscaled(self):
+        source = image_bytes(Image.new("RGB", (320, 180), (25, 90, 105)))
+        enhanced, metadata = enhance_image_resolution(source)
+        self.assertFalse(metadata["applied"])
+        self.assertEqual("too_small", metadata["status"])
+        self.assertEqual(source, enhanced)
+
     def test_default_prompt_is_not_empty_without_custom_instruction(self):
         asset = {
             "category": "oven",

@@ -153,6 +153,11 @@ function renderMotionAssets() {
       }
       const blockers = analysis.blocking_issues || [];
       const warnings = analysis.warnings || [];
+      const enhancement = asset.resolution_enhancement || analysis.resolution_enhancement || {};
+      const resolutionText = enhancement.applied
+        ? "\u539f\u56fe " + Number(enhancement.source_width || asset.source_width || 0) + "\u00d7" + Number(enhancement.source_height || asset.source_height || 0) +
+          " \u2192 \u5df2\u81ea\u52a8\u589e\u5f3a\u81f3 " + Number(enhancement.output_width || asset.working_width || 0) + "\u00d7" + Number(enhancement.output_height || asset.working_height || 0)
+        : Number(asset.source_width || 0) + " \u00d7 " + Number(asset.source_height || 0);
       return `
         <article class="motion-asset" data-motion-asset-id="${escapeAttr(asset.id)}">
           <div class="motion-asset-head">
@@ -165,7 +170,7 @@ function renderMotionAssets() {
           <div class="motion-asset-body">
             <div>
               <img class="motion-original" src="${escapeAttr(asset.preview_url)}" alt="${escapeAttr(asset.filename || "\u5356\u70b9\u56fe")}" />
-              <p class="message">${Number(asset.source_width || 0)} \u00d7 ${Number(asset.source_height || 0)} \u00b7 ${escapeHtml(analysis.detected_category || asset.category || "")}</p>
+              <p class="message motion-resolution ${enhancement.applied ? "enhanced" : ""}">${escapeHtml(resolutionText)} \u00b7 ${escapeHtml(analysis.detected_category || asset.category || "")}</p>
             </div>
             <div class="motion-analysis">
               <p><strong>\u5356\u70b9\uff1a</strong>${escapeHtml(analysis.selling_point_summary || asset.feature || "\u5df2\u6839\u636e\u56fe\u7247\u8bc6\u522b")}</p>
@@ -189,6 +194,10 @@ function renderMotionAssets() {
                   </select>
                 </label>
               </div>
+              ${analysis.ready ? `<div class="motion-generate-action">
+                <button type="button" data-motion-generate-asset="${escapeAttr(asset.id)}">\u751f\u6210\u52a8\u6001\u77ed\u89c6\u9891</button>
+                <span>\u9ed8\u8ba4 5 \u79d2\u30011080p\u3001\u5355\u955c\u5934\uff1b\u751f\u6210\u540e\u53ef\u9884\u89c8\u548c\u4e0b\u8f7d\u3002</span>
+              </div>` : ""}
               ${motionResultHtml(asset)}
             </div>
           </div>
@@ -455,7 +464,17 @@ $("motionAssets")?.addEventListener("change", async (event) => {
     }
   }
 });
-$("motionAssets")?.addEventListener("click", (event) => {
+$("motionAssets")?.addEventListener("click", async (event) => {
+  const generate = event.target.closest("[data-motion-generate-asset]");
+  if (generate) {
+    generate.disabled = true;
+    try {
+      await submitSelectedMotion([generate.dataset.motionGenerateAsset]);
+    } finally {
+      generate.disabled = false;
+    }
+    return;
+  }
   const version = event.target.closest("[data-motion-version]");
   if (version) {
     state.motionActiveVersions.set(version.dataset.assetId, version.dataset.motionVersion);

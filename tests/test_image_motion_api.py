@@ -24,11 +24,63 @@ class ImageMotionApiTests(unittest.TestCase):
         cls.client = TestClient(api_app.app)
 
     @staticmethod
-    def png(color):
+    def png(color, size=(800, 800)):
         output = io.BytesIO()
-        Image.new("RGB", (800, 800), color).save(output, format="PNG")
+        Image.new("RGB", size, color).save(output, format="PNG")
         return output.getvalue()
 
+    def test_existing_low_resolution_asset_is_migrated_on_workspace_load(self):
+        workflow = api_app.IMAGE_MOTION_WORKFLOW
+        original = self.png((30, 80, 100), (690, 388))
+        asset_id = "legacy-low-asset"
+        original_key = f"creative-assets/{asset_id}/original.png"
+        workflow.storage.write_file_bytes(original_key, original, content_type="image/png")
+        legacy = {
+            "id": asset_id,
+            "category": "air fryer",
+            "model": "AF-LEGACY-01",
+            "feature": "large capacity",
+            "filename": "airfryer-legacy.png",
+            "content_type": "image/png",
+            "source_width": 690,
+            "source_height": 388,
+            "file_hash": "legacy",
+            "original_key": original_key,
+            "analysis": {"ready": False, "blocking_issues": ["low resolution"]},
+            "created_at": workflow.now(),
+            "updated_at": workflow.now(),
+        }
+        workflow.write_list("creative_assets.json", [legacy] + workflow.assets(), 1000)
+
+        response = self.client.get(
+            "/api/creative-assets",
+            params={"category": "air fryer", "model": "AF-LEGACY-01"},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        asset = response.json()["assets"][0]
+        self.assertTrue(asset["resolution_enhancement"]["applied"])
+        self.assertEqual((1280, 720), (asset["working_width"], asset["working_height"]))
+        self.assertTrue(asset["analysis"]["ready"])
+        preview = self.client.get(asset["preview_url"])
+        self.assertEqual((1280, 720), Image.open(io.BytesIO(preview.content)).size)
+
+    def test_low_resolution_upload_is_enhanced_and_ready(self):
+        response = self.client.post(
+            "/api/creative-assets",
+            data={"category": "air fryer", "model": "AF-LOW-01"},
+            files=[
+                ("files", ("airfryer-low.png", self.png((25, 90, 105), (690, 388)), "image/png")),
+            ],
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        asset = response.json()["assets"][0]
+        self.assertEqual((690, 388), (asset["source_width"], asset["source_height"]))
+        self.assertEqual((1280, 720), (asset["working_width"], asset["working_height"]))
+        self.assertTrue(asset["resolution_enhancement"]["applied"])
+        self.assertTrue(asset["analysis"]["ready"])
+        preview = self.client.get(asset["preview_url"])
+        self.assertEqual(200, preview.status_code, preview.text)
+        self.assertEqual((1280, 720), Image.open(io.BytesIO(preview.content)).size)
     def test_batch_upload_plan_idempotency_and_unified_tasks(self):
         response = self.client.post(
             "/api/creative-assets",
