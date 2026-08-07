@@ -34,6 +34,13 @@ const state = {
   lastDiscoveredAsins: [],
   lastDiscoveredVideoIds: [],
   initialJobs: [],
+  activeMode: "script",
+  creativeAssets: [],
+  imageMotionJobs: [],
+  motionSelectedAssets: new Set(),
+  motionSelectedJobs: new Set(),
+  motionActiveVersions: new Map(),
+  motionRefreshBusy: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -803,46 +810,57 @@ async function uploadFile(event) {
 
 async function loadJobs() {
   try {
-    const data = await api("/api/jobs");
-    const jobs = data.jobs || [];
-    state.initialJobs = jobs;
+    const taskType = $("taskTypeFilter")?.value || "all";
+    const data = await api(`/api/tasks?task_type=${encodeURIComponent(taskType)}`);
+    const motionTab = document.querySelector('[data-app-mode="image_motion"]');
+    motionTab?.classList.toggle("hidden", data.enabled === false);
+    if (data.enabled === false && state.activeMode === "image_motion" && typeof setAppMode === "function") setAppMode("script");
+    const jobs = data.tasks || [];
+    state.initialJobs = jobs.filter((item) => item.task_type === "script");
     if (!jobs.length) {
-      $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>暂无任务</strong><span>提交脚本后会显示在这里。</span></div>';
+      $("jobs").innerHTML = '<div class="empty-state compact-empty"><strong>\u6682\u65e0\u4efb\u52a1</strong><span>\u63d0\u4ea4\u540e\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002</span></div>';
       return;
     }
     $("jobs").innerHTML = jobs.map(renderJob).join("");
-    await revealCompletedResult(jobs);
+    await revealCompletedResult(state.initialJobs);
   } catch (error) {
-    $("jobs").innerHTML = `<div class="empty-state"><strong>任务加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
+    $("jobs").innerHTML = `<div class="empty-state"><strong>\u4efb\u52a1\u52a0\u8f7d\u5931\u8d25</strong><span>${escapeHtml(error.message)}</span></div>`;
   }
 }
 
 function renderJob(job) {
   const request = job.request || {};
-  const model = request.model || "未命名产品";
-  const category = request.category || "";
-  const title = category ? `${model} · ${category}` : model;
-  const variants =
-    job.status === "succeeded"
-      ? `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">查看脚本</button>`
-      : "";
-  const error = job.error_message ? `<div class="message error">${escapeHtml(job.error_message)}</div>` : "";
-  const step = job.status === "succeeded" ? "" : job.current_step || "";
+  const isMotion = job.task_type === "image_motion";
+  const model = (isMotion ? job.model : request.model) || "\u672a\u547d\u540d\u4ea7\u54c1";
+  const category = (isMotion ? job.category : request.category) || "";
+  const feature = isMotion ? job.feature || job.asset_filename || "" : "";
+  const title = [model, category, feature].filter(Boolean).join(" \u00b7 ");
+  const success = job.status === "succeeded";
+  const action = success
+    ? isMotion
+      ? `<button class="load-motion-result" type="button" data-motion-job-id="${escapeAttr(job.id)}">\u67e5\u770b\u52a8\u6548</button>`
+      : `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">\u67e5\u770b\u811a\u672c</button>`
+    : "";
+  const errorText = job.failure_message || job.error_message || "";
+  const error = errorText ? `<div class="message error">${escapeHtml(errorText)}</div>` : "";
+  const step = success ? "" : job.current_step || "";
   const stepHtml = step ? `<div class="message">${escapeHtml(step)}</div>` : "";
-  const finishedAt =
-    job.status === "succeeded" || job.status === "failed"
-      ? `<div class="job-time">完成时间：${escapeHtml(formatDateTime(job.completed_at || job.updated_at))}</div>`
-      : "";
+  const finished = ["succeeded", "failed"].includes(job.status);
+  const finishedAt = finished
+    ? `<div class="job-time">\u5b8c\u6210\u65f6\u95f4\uff1a${escapeHtml(formatDateTime(job.completed_at || job.updated_at))}</div>`
+    : "";
+  const progress = Number(job.progress || (success ? 100 : 0));
   return `
     <article class="job">
       <div class="job-head">
-        <span>${escapeHtml(title)}</span>
+        <span>${escapeHtml(title || model)}</span>
+        <small class="task-type-badge">${isMotion ? "\u5356\u70b9\u56fe\u52a8\u6548" : "\u811a\u672c\u4efb\u52a1"}</small>
       </div>
-      <div class="progress"><div style="width:${Number(job.progress || 0)}%"></div></div>
+      <div class="progress"><div style="width:${progress}%"></div></div>
       ${stepHtml}
       ${finishedAt}
       ${error}
-      ${variants}
+      ${action}
     </article>
   `;
 }
@@ -2273,8 +2291,16 @@ async function startApp() {
   try {
     await loadJobs();
     await loadOptions(latestTaskProductSelection(state.initialJobs));
+    if (typeof initializeMotionWorkflow === "function") {
+      await initializeMotionWorkflow();
+    }
     if (!state.jobsTimer) {
-      state.jobsTimer = setInterval(loadJobs, 5000);
+      state.jobsTimer = setInterval(async () => {
+        await loadJobs();
+        if (state.activeMode === "image_motion" && typeof refreshMotionJobs === "function") {
+          await refreshMotionJobs(true);
+        }
+      }, 5000);
     }
   } catch (error) {
     state.appReady = false;

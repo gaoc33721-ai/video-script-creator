@@ -1451,3 +1451,263 @@ button.secondary {
     grid-template-columns: 1fr;
   }
 }
+.mode-switch {
+  display: inline-flex;
+  gap: 4px;
+  margin: 0 0 16px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--shadow);
+}
+
+.mode-tab {
+  min-width: 156px;
+  padding: 11px 18px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.mode-tab.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+.motion-workflow {
+  min-width: 0;
+}
+
+.workflow-badge,
+.task-type-badge,
+.qa-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.motion-product-confirm {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.2fr);
+  gap: 14px;
+  margin: 20px 0 16px;
+}
+
+.motion-upload {
+  display: grid;
+  place-items: center;
+  min-height: 126px;
+  padding: 20px;
+  border: 1.5px dashed rgba(0, 170, 166, 0.45);
+  border-radius: 20px;
+  background: var(--brand-tint);
+  text-align: center;
+  cursor: pointer;
+}
+
+.motion-upload input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+}
+
+.motion-upload strong {
+  color: var(--brand-dark);
+  font-size: 18px;
+}
+
+.motion-upload span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.motion-toolbar,
+.task-actions,
+.motion-result-actions,
+.motion-version-list {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.motion-toolbar {
+  margin-top: 14px;
+}
+
+.task-actions select {
+  width: auto;
+  min-width: 118px;
+  padding: 8px 30px 8px 10px;
+}
+
+.motion-assets {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.motion-asset {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: #fbfbfd;
+}
+
+.motion-asset-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.motion-asset-head label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+}
+
+.motion-asset-head input {
+  width: auto;
+}
+
+.motion-asset-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.72fr) minmax(0, 1.28fr);
+  gap: 16px;
+  padding: 16px;
+}
+
+.motion-original,
+.motion-result video {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 16px;
+  background: #111;
+  object-fit: contain;
+}
+
+.motion-analysis {
+  display: grid;
+  gap: 10px;
+}
+
+.motion-analysis p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.motion-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.motion-controls label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.motion-controls select {
+  margin-top: 5px;
+}
+
+.motion-blockers {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff1f0;
+  color: #a32720;
+  font-size: 13px;
+}
+
+.motion-result {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.motion-version {
+  padding: 7px 10px;
+  background: #fff;
+  color: var(--brand-dark);
+  border: 1px solid rgba(0, 170, 166, 0.25);
+  box-shadow: none;
+}
+
+.motion-version.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+.motion-job-select {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.motion-job-select input {
+  width: auto;
+}
+
+.job-head {
+  gap: 8px;
+}
+
+.task-type-badge {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+@media (max-width: 980px) {
+  .motion-product-confirm,
+  .motion-asset-body,
+  .motion-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-switch {
+    display: flex;
+  }
+
+  .mode-tab {
+    min-width: 0;
+    flex: 1;
+  }
+}
+.motion-global-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 220px));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.motion-global-controls label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.motion-global-controls select {
+  margin-top: 5px;
+}
+
+@media (max-width: 640px) {
+  .motion-global-controls {
+    grid-template-columns: 1fr;
+  }
+}

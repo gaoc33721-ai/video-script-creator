@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260803-storyboard-control" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260807-image-motion" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -34,6 +34,11 @@
           </div>
         </section>
       </section>
+
+      <nav class="mode-switch" aria-label="创作模式">
+        <button type="button" class="mode-tab active" data-app-mode="script">AI脚本创作</button>
+        <button type="button" class="mode-tab" data-app-mode="image_motion">卖点图动效</button>
+      </nav>
 
       <section class="grid">
         <form id="generateForm" class="card form-card">
@@ -84,8 +89,58 @@
           <div id="formMessage" class="message"></div>
         </form>
 
+        <section id="motionWorkflow" class="card motion-workflow hidden">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">Selling Point Image Motion</p>
+              <h2>卖点图动效</h2>
+              <p>确认同一产品后批量上传，系统自动识别卖点、裁切区和保护区。正常素材无需填写 Prompt。</p>
+            </div>
+            <span class="workflow-badge">5秒 · 1080p · 24fps</span>
+          </div>
+          <div class="motion-product-confirm">
+            <label>产品品类<select id="motionCategorySelect"></select></label>
+            <label class="model-field">
+              产品型号
+              <input id="motionModelSearch" class="model-search" type="search" placeholder="搜索型号" autocomplete="off" />
+              <select id="motionModelSelect"></select>
+            </label>
+          </div>
+          <label class="motion-upload">
+            <input id="motionImageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+            <strong>上传卖点图</strong>
+            <span>同一批最多 10 张同型号图片，短边至少 720px</span>
+          </label>
+          <div class="motion-global-controls">
+            <label>&#25991;&#23383;&#31574;&#30053;
+              <select id="motionTextPolicy">
+                <option value="visual_only">&#32431;&#30011;&#38754;&#21160;&#25928;</option>
+                <option value="preserve_title_logo">&#20445;&#30041;&#26631;&#39064;&#19982;Logo</option>
+              </select>
+            </label>
+            <label>&#25104;&#29255;&#27604;&#20363;
+              <select id="motionAspectRatio">
+                <option value="source">&#28304;&#22270;&#27604;&#20363;</option>
+                <option value="1:1">1:1</option>
+                <option value="9:16">9:16</option>
+                <option value="16:9">16:9</option>
+              </select>
+            </label>
+          </div>
+          <div class="motion-toolbar">
+            <button id="uploadMotionAssets" type="button">识别图片并推荐动效</button>
+            <button id="generateReadyMotion" type="button" class="secondary">批量生成已勾选素材</button>
+            <button id="exportMotionZip" type="button" class="secondary">ZIP下载选中版本</button>
+            <label class="inline-toggle"><input id="motionExportMuted" type="checkbox" /> 静音导出</label>
+          </div>
+          <div id="motionMessage" class="message"></div>
+          <div id="motionAssets" class="motion-assets">
+            <div class="empty-state"><strong>尚未上传卖点图</strong><span>先确认品类和型号，再上传同型号素材。</span></div>
+          </div>
+        </section>
+
         <aside class="side-stack">
-          <section class="card selection-card">
+          <section id="scriptSelectionCard" class="card selection-card">
             <h2>当前选择</h2>
             <div id="selectionSummary" class="selection-summary"></div>
           </section>
@@ -95,7 +150,14 @@
             <div>
               <h2>任务中心</h2>
             </div>
-            <button id="refreshJobs" type="button">刷新</button>
+            <div class="task-actions">
+              <select id="taskTypeFilter" aria-label="任务类型筛选">
+                <option value="all">全部任务</option>
+                <option value="script">脚本任务</option>
+                <option value="image_motion">卖点图动效</option>
+              </select>
+              <button id="refreshJobs" type="button">刷新</button>
+            </div>
           </div>
           <div id="jobs" class="jobs"></div>
           </section>
@@ -155,6 +217,7 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260803-storyboard-control"></script>
+    <script src="/static/app.js?v=20260807-image-motion"></script>
+    <script src="/static/motion.js?v=20260807-image-motion"></script>
   </body>
 </html>

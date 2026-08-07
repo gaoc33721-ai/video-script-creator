@@ -51,6 +51,7 @@ from social_competitor import (
 )
 from storage_adapters import RuntimeStorage
 from liblibai_provider import LiblibAIClient, LiblibAIConfig, LiblibAIError
+from image_motion_routes import register_image_motion_routes
 
 
 APP_DATA_DIR = os.getenv("APP_DATA_DIR", ".")
@@ -5817,6 +5818,59 @@ def _toapis_status(body: dict) -> tuple[str, str, str]:
     return status, str(video_url or ""), str(failure or "")
 
 
+def _submit_image_motion_toapis(*, image_bytes: bytes, prompt: str, aspect_ratio: str, client_business_id: str) -> dict:
+    import requests as _requests
+
+    image_url = _toapis_upload_image(image_bytes, filename=f"{_safe_ascii_slug(client_business_id)}.png")
+    ratio = aspect_ratio if aspect_ratio in {"1:1", "9:16", "16:9"} else TOAPIS_VIDEO_RATIO
+    payload = {
+        "model": "grok-video-3",
+        "client_business_id": client_business_id,
+        "prompt": prompt,
+        "aspect_ratio": ratio,
+        "resolution": TOAPIS_VIDEO_RESOLUTION,
+        "seconds": "6",
+        "images": [image_url],
+    }
+    response = _requests.post(
+        _toapis_url("/v1/videos/generations"),
+        headers={**_toapis_headers(), "Content-Type": "application/json"},
+        json=payload,
+        timeout=max(10, int(TOAPIS_REQUEST_TIMEOUT)),
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"text": response.text[:500]}
+    if response.status_code >= 400:
+        raise RuntimeError(f"ToAPIs image-motion submit HTTP {response.status_code}: {body}")
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    task_id = data.get("task_id") or data.get("taskId") or data.get("id") or body.get("task_id") or body.get("id")
+    if not task_id:
+        raise RuntimeError(f"ToAPIs image-motion submit returned no task id: {body}")
+    return {"task_id": str(task_id), "metadata": {"payload": payload, "submit_response": body}}
+
+
+def _poll_image_motion_toapis(task_id: str) -> dict:
+    import requests as _requests
+
+    body = _query_toapis_video_job(task_id)
+    status, video_url, failure = _toapis_status(body)
+    if status == "InProgress":
+        return {"status": "processing", "message": failure}
+    if status != "Completed" or not video_url:
+        return {"status": "failed", "message": failure or "供应商未返回视频地址。"}
+    response = _requests.get(
+        video_url,
+        timeout=max(20, int(TOAPIS_RESULT_TIMEOUT)),
+        headers={"User-Agent": "selling-point-image-motion/1.0"},
+    )
+    response.raise_for_status()
+    if len(response.content) < 1024:
+        return {"status": "failed", "message": "供应商返回的视频文件无效。"}
+    return {"status": "succeeded", "video_bytes": response.content, "message": ""}
+
+
 def _store_toapis_video(video_job_id: str, video_url: str) -> str:
     import requests as _requests
 
@@ -8811,3 +8865,16 @@ def download(job_id: str):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="video_script_{model}.xlsx"'},
     )
+
+IMAGE_MOTION_WORKFLOW = register_image_motion_routes(
+    app,
+    verify_access=_verify_access,
+    storage=STORAGE,
+    script_tasks_loader=lambda: [_public_job_summary(item) for item in _load_jobs()],
+    provider_submit=_submit_image_motion_toapis
+    if _video_provider_name() in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}
+    else None,
+    provider_poll=_poll_image_motion_toapis
+    if _video_provider_name() in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}
+    else None,
+)
