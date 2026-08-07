@@ -1,5 +1,7 @@
 const motionKnownAssets = new Set();
 let motionUploadBatch = { status: "idle", files: [] };
+const motionSubmittingAssets = new Set();
+let motionSubmitBusy = false;
 
 function motionUploadFileSummary(files) {
   const names = (files || []).map((item) => (typeof item === "string" ? item : item.name)).filter(Boolean);
@@ -153,6 +155,7 @@ function renderMotionAssets() {
       }
       const blockers = analysis.blocking_issues || [];
       const warnings = analysis.warnings || [];
+      const isSubmitting = motionSubmittingAssets.has(asset.id);
       const enhancement = asset.resolution_enhancement || analysis.resolution_enhancement || {};
       const resolutionText = enhancement.applied
         ? "\u539f\u56fe " + Number(enhancement.source_width || asset.source_width || 0) + "\u00d7" + Number(enhancement.source_height || asset.source_height || 0) +
@@ -195,8 +198,8 @@ function renderMotionAssets() {
                 </label>
               </div>
               ${analysis.ready ? `<div class="motion-generate-action">
-                <button type="button" data-motion-generate-asset="${escapeAttr(asset.id)}">\u751f\u6210\u52a8\u6001\u77ed\u89c6\u9891</button>
-                <span>\u9ed8\u8ba4 5 \u79d2\u30011080p\u3001\u5355\u955c\u5934\uff1b\u751f\u6210\u540e\u53ef\u9884\u89c8\u548c\u4e0b\u8f7d\u3002</span>
+                <button type="button" data-motion-generate-asset="${escapeAttr(asset.id)}" ${motionSubmitBusy ? "disabled" : ""} ${isSubmitting ? 'aria-busy="true"' : ""}>${isSubmitting ? "\u6b63\u5728\u63d0\u4ea4\u2026" : "\u751f\u6210\u52a8\u6001\u77ed\u89c6\u9891"}</button>
+                <span>${isSubmitting ? "\u4efb\u52a1\u5df2\u53d7\u7406\uff0c\u6b63\u5728\u6392\u961f\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002" : "\u9ed8\u8ba4 5 \u79d2\u30011080p\u3001\u5355\u955c\u5934\uff1b\u751f\u6210\u540e\u53ef\u9884\u89c8\u548c\u4e0b\u8f7d\u3002"}</span>
               </div>` : ""}
               ${motionResultHtml(asset)}
             </div>
@@ -303,12 +306,18 @@ async function saveGlobalMotionPlans() {
 }
 
 async function submitSelectedMotion(assetIds = null) {
-  const selected = assetIds || Array.from(state.motionSelectedAssets);
+  const selected = Array.from(new Set(assetIds || Array.from(state.motionSelectedAssets)));
   if (!selected.length) {
     setMessage("motionMessage", "\u8bf7\u81f3\u5c11\u52fe\u9009\u4e00\u5f20\u53ef\u751f\u6210\u7d20\u6750\u3002", "error");
     return;
   }
-  setMessage("motionMessage", "\u6b63\u5728\u5e42\u7b49\u63d0\u4ea4\u52a8\u6548\u4efb\u52a1...");
+  if (motionSubmitBusy) {
+    setMessage("motionMessage", "\u4efb\u52a1\u5df2\u5728\u63d0\u4ea4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002");
+    return;
+  }
+  setMotionSubmitState(selected, true);
+  setMessage("motionMessage", `\u5df2\u53d7\u7406 ${selected.length} \u6761\u52a8\u6548\u4efb\u52a1\uff0c\u6b63\u5728\u5b89\u5168\u63d0\u4ea4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u2026`);
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   try {
     const data = await api("/api/image-motion/jobs", {
       method: "POST",
@@ -320,7 +329,33 @@ async function submitSelectedMotion(assetIds = null) {
     await loadJobs();
   } catch (error) {
     setMessage("motionMessage", error.message, "error");
+  } finally {
+    setMotionSubmitState(selected, false);
   }
+}
+
+function setMotionSubmitState(assetIds, busy) {
+  motionSubmitBusy = busy;
+  motionSubmittingAssets.clear();
+  if (busy) assetIds.forEach((assetId) => motionSubmittingAssets.add(String(assetId)));
+
+  const batchButton = $("generateReadyMotion");
+  if (batchButton) {
+    batchButton.disabled = busy;
+    batchButton.toggleAttribute("aria-busy", busy);
+    batchButton.textContent = busy ? `\u6b63\u5728\u63d0\u4ea4 ${assetIds.length} \u6761\u4efb\u52a1\u2026` : "\u6279\u91cf\u751f\u6210\u5df2\u52fe\u9009\u7d20\u6750";
+  }
+  document.querySelectorAll("[data-motion-generate-asset]").forEach((button) => {
+    const isTarget = motionSubmittingAssets.has(button.dataset.motionGenerateAsset || "");
+    button.disabled = busy;
+    button.toggleAttribute("aria-busy", busy && isTarget);
+    button.textContent = busy && isTarget ? "\u6b63\u5728\u63d0\u4ea4\u2026" : "\u751f\u6210\u52a8\u6001\u77ed\u89c6\u9891";
+    const hint = button.nextElementSibling;
+    if (hint) {
+      hint.textContent = busy && isTarget ? "\u4efb\u52a1\u5df2\u53d7\u7406\uff0c\u6b63\u5728\u6392\u961f\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002"
+        : "\u9ed8\u8ba4 5 \u79d2\u30011080p\u3001\u5355\u955c\u5934\uff1b\u751f\u6210\u540e\u53ef\u9884\u89c8\u548c\u4e0b\u8f7d\u3002";
+    }
+  });
 }
 
 async function refreshMotionJobs(silent = true) {
@@ -467,12 +502,7 @@ $("motionAssets")?.addEventListener("change", async (event) => {
 $("motionAssets")?.addEventListener("click", async (event) => {
   const generate = event.target.closest("[data-motion-generate-asset]");
   if (generate) {
-    generate.disabled = true;
-    try {
-      await submitSelectedMotion([generate.dataset.motionGenerateAsset]);
-    } finally {
-      generate.disabled = false;
-    }
+    await submitSelectedMotion([generate.dataset.motionGenerateAsset]);
     return;
   }
   const version = event.target.closest("[data-motion-version]");
