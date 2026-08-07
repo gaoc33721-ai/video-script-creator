@@ -277,6 +277,7 @@ def prepare_motion_source(
     ratio: str,
     text_policy: str,
     quality: str = "1080p",
+    max_dimension: int | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
     from PIL import Image, ImageFilter, ImageOps
 
@@ -285,6 +286,10 @@ def prepare_motion_source(
     working = source.crop(_crop_box(plan, *source.size)) if policy == "visual_only" else source
     normalized_ratio = normalize_ratio(ratio, *working.size)
     target_size = output_dimensions(normalized_ratio, quality, *working.size)
+    dimension_limit = max(2, int(max_dimension)) if max_dimension else 0
+    if dimension_limit and max(target_size) > dimension_limit:
+        scale = dimension_limit / float(max(target_size))
+        target_size = tuple(max(2, int(dimension * scale) // 2 * 2) for dimension in target_size)
     if policy == "preserve_title_logo" or normalized_ratio != "source":
         background = ImageOps.fit(working, target_size, method=Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(28))
         background = background.point(lambda value: int(value * 0.55))
@@ -307,6 +312,7 @@ def prepare_motion_source(
         "width": target_size[0],
         "height": target_size[1],
         "text_policy": policy,
+        "max_dimension": dimension_limit or None,
     }
 
 

@@ -23,6 +23,7 @@ from image_motion_service import (
     assess_video_fidelity,
     build_motion_prompt,
     enhance_image_resolution,
+    output_dimensions,
     mute_video,
     normalize_generated_video,
     prepare_motion_source,
@@ -436,8 +437,17 @@ class ImageMotionWorkflow:
                 analysis,
                 ratio=plan["aspect_ratio"],
                 text_policy=plan["text_policy"],
-                quality=plan["quality"],
+                quality="720p" if is_ray2 else plan["quality"],
+                max_dimension=1552 if is_ray2 else None,
             )
+            export_width, export_height = output_dimensions(
+                prepared_meta["aspect_ratio"],
+                plan["quality"],
+                prepared_meta["width"],
+                prepared_meta["height"],
+            )
+            prepared_meta["export_width"] = export_width
+            prepared_meta["export_height"] = export_height
             prepared_key = f"image-motion/prepared/{job_id}.png"
             self.storage.write_file_bytes(prepared_key, prepared, content_type="image/png")
             prompt = build_motion_prompt(asset, {**plan, "preset": preset})
@@ -503,7 +513,10 @@ class ImageMotionWorkflow:
                     result["video_bytes"],
                     duration_seconds=5,
                     metadata={"AssetId": job["creative_asset_id"], "JobId": job["id"], "Version": job.get("version")},
-                    output_size=(int(job["prepared_metadata"]["width"]), int(job["prepared_metadata"]["height"])),
+                    output_size=(
+                        int(job["prepared_metadata"].get("export_width") or job["prepared_metadata"]["width"]),
+                        int(job["prepared_metadata"].get("export_height") or job["prepared_metadata"]["height"]),
+                    ),
                 )
                 qa = assess_video_fidelity(prepared, normalized)
                 if is_component or is_flow:

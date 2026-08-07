@@ -148,6 +148,20 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertEqual("source", metadata["aspect_ratio"])
         self.assertEqual("1:1", metadata["provider_aspect_ratio"])
 
+    def test_provider_frame_can_be_limited_without_changing_requested_quality(self):
+        source = image_bytes(Image.new("RGB", (2400, 800), (30, 40, 50)))
+        prepared, metadata = prepare_motion_source(
+            source,
+            {"visual_crop": {"x": 0, "y": 0, "width": 1, "height": 1}},
+            ratio="source",
+            text_policy="visual_only",
+            quality="1080p",
+            max_dimension=1552,
+        )
+        prepared_size = Image.open(io.BytesIO(prepared)).size
+        self.assertLessEqual(max(prepared_size), 1552)
+        self.assertEqual(1552, metadata["max_dimension"])
+
     def test_example_like_header_recommends_lower_visual_crop(self):
         image = Image.new("RGB", (1000, 1000), (20, 20, 20))
         draw = ImageDraw.Draw(image)

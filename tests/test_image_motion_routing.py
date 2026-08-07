@@ -31,9 +31,9 @@ class MemoryStorage:
         return key
 
 
-def png_bytes():
+def png_bytes(size=(800, 800)):
     output = io.BytesIO()
-    Image.new("RGB", (800, 800), (25, 80, 100)).save(output, format="PNG")
+    Image.new("RGB", size, (25, 80, 100)).save(output, format="PNG")
     return output.getvalue()
 
 
@@ -107,7 +107,7 @@ class ImageMotionRoutingTests(unittest.TestCase):
         asset = flow_asset() if preset == "flow" else component_asset()
         storage.json[CREATIVE_ASSETS_KEY] = [asset]
         storage.json[IMAGE_MOTION_JOBS_KEY] = [flow_job() if preset == "flow" else component_job()]
-        storage.files[asset["original_key"]] = png_bytes()
+        storage.files[asset["original_key"]] = png_bytes((690, 388)) if preset == "flow" else png_bytes()
         workflow = ImageMotionWorkflow(
             storage,
             lambda: [],
@@ -164,6 +164,12 @@ class ImageMotionRoutingTests(unittest.TestCase):
         self.assertEqual("ray-flow-1", job["external_task_id"])
         self.assertIn("Both visible cooking zones", submitted["prompt"])
         self.assertIn("not be a static glow, horizontal highlight sweep", submitted["prompt"])
+        submitted_size = Image.open(io.BytesIO(submitted["image_bytes"])).size
+        self.assertEqual((1280, 720), submitted_size)
+        self.assertLessEqual(max(submitted_size), 1552)
+        self.assertEqual(1280, job["prepared_metadata"]["width"])
+        self.assertEqual((1920, 1080), (job["prepared_metadata"]["export_width"], job["prepared_metadata"]["export_height"]))
+
 
     def test_flow_submit_failure_is_not_downgraded(self):
         def submit(**kwargs):
