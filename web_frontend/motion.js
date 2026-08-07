@@ -100,6 +100,13 @@ function activeMotionJob(assetId) {
   return jobs.find((item) => item.id === wanted) || jobs.find((item) => item.status === "succeeded") || jobs[0] || null;
 }
 
+function motionGenerationLabel(job) {
+  if (job?.generation_mode === "luma_ray2_flow") return "\u00b7 Ray2 \u6c14\u6d41\u751f\u6210";
+  if (job?.generation_mode === "luma_ray2_component") return "\u00b7 Ray2 \u90e8\u4ef6\u751f\u6210";
+  if (job?.generation_mode === "stable_flow_overlay") return "\u00b7 \u65e7\u7248\u626b\u5149\u5408\u6210";
+  return "";
+}
+
 function motionResultHtml(asset) {
   const versions = jobsForMotionAsset(asset.id);
   const job = activeMotionJob(asset.id);
@@ -109,7 +116,7 @@ function motionResultHtml(asset) {
   const versionButtons = versions
     .map(
       (item) =>
-        `<button type="button" class="motion-version ${job?.id === item.id ? "active" : ""}" data-motion-version="${escapeAttr(item.id)}" data-asset-id="${escapeAttr(asset.id)}">\u7248\u672c ${Number(item.version || 1)} \u00b7 ${escapeHtml(item.status)}</button>`
+        `<button type="button" class="motion-version ${job?.id === item.id ? "active" : ""}" data-motion-version="${escapeAttr(item.id)}" data-asset-id="${escapeAttr(asset.id)}">\u7248\u672c ${Number(item.version || 1)} \u00b7 ${escapeHtml(item.status)} ${escapeHtml(motionGenerationLabel(item))}</button>`
     )
     .join("");
   const status = job?.current_step || job?.status || "";

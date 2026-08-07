@@ -35,6 +35,7 @@ CREATIVE_ASSETS_KEY = "creative_assets.json"
 MOTION_PLANS_KEY = "motion_plans.json"
 IMAGE_MOTION_JOBS_KEY = "image_motion_jobs.json"
 GENERATIVE_PRESETS = {"steam", "liquid"}
+RAY2_PRESETS = {"component", "flow"}
 CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 MAX_FILE_BYTES = 20 * 1024 * 1024
 
@@ -334,7 +335,7 @@ class ImageMotionWorkflow:
             job_id,
             status="failed",
             progress=100,
-            current_step="\u672a\u751f\u6210\u5408\u683c\u7684\u90e8\u4ef6\u8fd0\u52a8",
+            current_step="\u672a\u751f\u6210\u5408\u683c\u7684\u76ee\u6807\u52a8\u6548",
             completed_at=self.now(),
             qa_status="failed",
             qa_result=qa_result or {"status": "failed", "message": message},
@@ -410,21 +411,22 @@ class ImageMotionWorkflow:
             plan = validate_motion_plan(job.get("motion_plan") or {})
             preset = plan["preset"] if plan["preset"] != "auto" else analysis.get("recommended_preset") or "camera"
             is_component = preset == "component"
-            if is_component and plan["text_policy"] != "visual_only":
-                raise RuntimeError("\u90e8\u4ef6\u8fd0\u52a8\u6682\u4e0d\u652f\u6301\u201c\u4fdd\u7559\u6807\u9898\u4e0eLogo\u201d\uff1b\u8bf7\u4f7f\u7528\u7eaf\u753b\u9762\u52a8\u6548\u4ee5\u907f\u514d\u6a21\u578b\u91cd\u753b\u54c1\u724c\u6587\u5b57\u3002")
+            is_ray2 = preset in RAY2_PRESETS
+            if is_ray2 and plan["text_policy"] != "visual_only":
+                raise RuntimeError("\u751f\u6210\u5f0f\u76ee\u6807\u52a8\u6548\u6682\u4e0d\u652f\u6301\u201c\u4fdd\u7559\u6807\u9898\u4e0eLogo\u201d\uff1b\u8bf7\u4f7f\u7528\u7eaf\u753b\u9762\u52a8\u6548\u4ee5\u907f\u514d\u6a21\u578b\u91cd\u753b\u54c1\u724c\u6587\u5b57\u3002")
 
-            provider_submit = self.component_provider_submit if is_component else self.provider_submit
-            provider_poll = self.component_provider_poll if is_component else self.provider_poll
+            provider_submit = self.component_provider_submit if is_ray2 else self.provider_submit
+            provider_poll = self.component_provider_poll if is_ray2 else self.provider_poll
             use_provider = (
                 self.generative_enabled
                 and plan["text_policy"] == "visual_only"
-                and (is_component or preset in GENERATIVE_PRESETS)
+                and (is_ray2 or preset in GENERATIVE_PRESETS)
                 and provider_submit is not None
                 and provider_poll is not None
             )
             if not use_provider:
-                if is_component:
-                    raise RuntimeError("Bedrock Luma Ray 2 \u90e8\u4ef6\u8fd0\u52a8\u8def\u5f84\u4e0d\u53ef\u7528\uff0c\u4efb\u52a1\u672a\u964d\u7ea7\u4e3a\u63a8\u955c\u6a21\u677f\u3002")
+                if is_ray2:
+                    raise RuntimeError("Bedrock Luma Ray 2 \u76ee\u6807\u52a8\u6548\u8def\u5f84\u4e0d\u53ef\u7528\uff0c\u4efb\u52a1\u672a\u964d\u7ea7\u4e3a\u626b\u5149\u6216\u63a8\u955c\u6a21\u677f\u3002")
                 self.render_fallback(job_id)
                 return
 
@@ -450,15 +452,15 @@ class ImageMotionWorkflow:
                 status="processing",
                 progress=42,
                 current_step="生成式自然动效处理中",
-                generation_mode="luma_ray2_component" if is_component else "generative_video",
-                provider_name="luma_ray2" if is_component else str(provider_result.get("provider") or "default"),
+                generation_mode=f"luma_ray2_{preset}" if is_ray2 else "generative_video",
+                provider_name="luma_ray2" if is_ray2 else str(provider_result.get("provider") or "default"),
                 prepared_image_key=prepared_key,
                 prepared_metadata=prepared_meta,
                 external_task_id=provider_result["task_id"],
                 provider_metadata=provider_result.get("metadata") or {},
             )
         except Exception as exc:
-            if preset == "component":
+            if preset in RAY2_PRESETS:
                 self.fail_job(job_id, str(exc))
                 return
             try:
@@ -480,15 +482,17 @@ class ImageMotionWorkflow:
             asset = self.asset(str(job.get("creative_asset_id") or ""))
             recommended = str(((asset or {}).get("analysis") or {}).get("recommended_preset") or "camera")
             preset = plan["preset"] if plan["preset"] != "auto" else recommended
-            is_component = job.get("provider_name") == "luma_ray2" or preset == "component"
-            provider_poll = self.component_provider_poll if is_component else self.provider_poll
+            is_component = preset == "component"
+            is_flow = preset == "flow"
+            is_ray2 = job.get("provider_name") == "luma_ray2" or preset in RAY2_PRESETS
+            provider_poll = self.component_provider_poll if is_ray2 else self.provider_poll
             try:
                 result = provider_poll(str(job["external_task_id"])) if provider_poll else {"status": "failed"}
                 if result.get("status") == "processing":
                     self.update_job(job["id"], progress=65, current_step="供应商生成中")
                     continue
-                if is_component and (result.get("status") != "succeeded" or not result.get("video_bytes")):
-                    self.fail_job(job["id"], f"Ray 2 \u90e8\u4ef6\u8fd0\u52a8\u751f\u6210\u5931\u8d25\uff1a{result.get('message') or 'no video returned'}")
+                if is_ray2 and (result.get("status") != "succeeded" or not result.get("video_bytes")):
+                    self.fail_job(job["id"], f"Ray 2 \u76ee\u6807\u52a8\u6548\u751f\u6210\u5931\u8d25\uff1a{result.get('message') or 'no video returned'}")
                     continue
 
                 if result.get("status") != "succeeded" or not result.get("video_bytes"):
@@ -502,19 +506,27 @@ class ImageMotionWorkflow:
                     output_size=(int(job["prepared_metadata"]["width"]), int(job["prepared_metadata"]["height"])),
                 )
                 qa = assess_video_fidelity(prepared, normalized)
-                if is_component:
+                if is_component or is_flow:
                     motion_region = ((asset or {}).get("analysis") or {}).get("motion_region")
-                    motion_qa = assess_component_motion(normalized, target_region=motion_region)
+                    if is_flow and not motion_region:
+                        motion_region = {"x": 0.08, "y": 0.24, "width": 0.84, "height": 0.70}
+                    motion_label = "\u70ed\u6d41" if is_flow else "\u90e8\u4ef6"
+                    motion_qa = assess_component_motion(
+                        normalized,
+                        target_region=motion_region,
+                        motion_name=motion_label,
+                        minimum_motion_coverage=0.22 if is_flow else 0.0,
+                    )
                     passed = qa.get("status") == "passed" and motion_qa.get("status") == "passed"
                     qa = {
                         "status": "passed" if passed else "failed",
                         "score": min(int(qa.get("score") or 0), int(motion_qa.get("score") or 0)),
                         "message": motion_qa.get("message") if qa.get("status") == "passed" else qa.get("message"),
                         "fidelity": qa,
-                        "component_motion": motion_qa,
+                        "flow_motion" if is_flow else "component_motion": motion_qa,
                     }
                     if not passed:
-                        self.fail_job(job["id"], f"\u90e8\u4ef6\u8fd0\u52a8\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{qa.get('message')}", qa_result=qa)
+                        self.fail_job(job["id"], f"{motion_label}\u52a8\u6548\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{qa.get('message')}", qa_result=qa)
                         continue
                 if qa.get("status") != "passed":
                     self.render_fallback(job["id"], reason=f"AI 保真检查未通过，已自动降级：{qa.get('message')}")
@@ -532,7 +544,7 @@ class ImageMotionWorkflow:
                     qa_result=qa,
                 )
             except Exception as exc:
-                if is_component:
+                if is_ray2:
                     self.fail_job(job["id"], f"\u5237\u65b0 Ray 2 \u7ed3\u679c\u5931\u8d25\uff1a{exc}")
                     continue
                 try:

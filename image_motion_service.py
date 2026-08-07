@@ -133,13 +133,30 @@ def _category_matches(selected: str, detected: str) -> bool:
 
 def _preset_for_text(text: str) -> str:
     lowered = str(text or "").lower()
-    if any(token in lowered for token in ("air", "flow", "heat", "inverter", "circul", "风", "热", "循环")):
+    if any(
+        token in lowered
+        for token in (
+            "dual cooking",
+            "cooking zone",
+            "dual zone",
+            "airflow",
+            "air flow",
+            "hot air",
+            "flow",
+            "heat",
+            "inverter",
+            "circul",
+            "风",
+            "热",
+            "循环",
+        )
+    ):
         return "flow"
     if any(token in lowered for token in ("steam", "蒸汽", "蒸")):
         return "steam"
     if any(token in lowered for token in ("water", "wash", "liquid", "水", "洗", "液")):
         return "liquid"
-    if any(token in lowered for token in ("display", "led", "light", "screen", "灯", "屏")):
+    if any(token in lowered for token in ("display", "led", "light", "screen", "panel", "touch", "灯", "屏")):
         return "glow"
     if any(token in lowered for token in ("door", "drawer", "rotate", "spin", "门", "抽屉", "旋转")):
         return "component"
@@ -302,6 +319,29 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
     intensity = str(plan.get("intensity") or "standard")
     direction = str(plan.get("direction") or (asset.get("analysis") or {}).get("recommended_direction") or "gentle forward motion")
     custom = str(plan.get("custom_instruction") or "").strip()
+    if preset == "flow":
+        lowered_feature = feature.lower()
+        dual_zone = any(token in lowered_feature for token in ("dual cooking", "cooking zone", "dual zone", "two zone", "2 zone"))
+        flow_action = (
+            "Both visible cooking zones must show separate, continuous circulating hot-air currents inside each basket; "
+            "the left and right currents remain spatially separated and clearly travel along curved paths."
+            if dual_zone
+            else "Any existing airflow arrows or heat cues must become continuously moving directional hot-air currents that follow their source paths."
+        )
+        prompt = (
+            "Create one continuous five-second premium e-commerce product demonstration based strictly on the supplied source image. "
+            f"Product lock: exactly one Hisense {category}, model {model or 'as shown in the source'}, and no other appliance. "
+            "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
+            f"Required airflow motion: {flow_action} Selling point: {feature}. Direction note: {direction}. Intensity: {intensity}. "
+            "The primary airflow motion must visibly change position frame by frame and persist throughout the shot. "
+            "It must not be a static glow, horizontal highlight sweep, brightness pulse, mask wipe or camera motion. "
+            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            "Keep the appliance shell, baskets, food, control panel, labels, logo and background stationary and structurally unchanged. "
+            "Do not add people, hands, rooms, extra products, text or logos. Lighting stays bright, positive, clean and consistent. "
+        )
+        if custom:
+            prompt += f"Creator instruction: {custom}."
+        return prompt.strip()[:3000]
     if preset == "component":
         category_hint = _category_hint(category)
         if category_hint == "air fryer":
@@ -589,6 +629,7 @@ def assess_component_motion(
     video_bytes: bytes,
     target_region: dict[str, Any] | None = None,
     motion_name: str = "\u90e8\u4ef6",
+    minimum_motion_coverage: float = 0.0,
 ) -> dict[str, Any]:
     """Reject static/global-camera results when articulated local motion was requested."""
     from PIL import Image, ImageChops, ImageOps, ImageStat
@@ -643,7 +684,10 @@ def assess_component_motion(
         candidates = []
         for frame in frames[1:]:
             difference = ImageChops.difference(frames[0], frame)
-            target_difference = mean_difference(difference.crop((left, top, right, bottom)))
+            target_crop = difference.crop((left, top, right, bottom))
+            target_difference = mean_difference(target_crop)
+            target_values = list(target_crop.getdata())
+            motion_coverage = sum(value >= 8 for value in target_values) / max(1, len(target_values))
             background_parts = [
                 difference.crop((0, 0, difference.width, top)),
                 difference.crop((0, bottom, difference.width, difference.height)),
@@ -662,17 +706,18 @@ def assess_component_motion(
             ratio = target_difference / max(1.0, background_difference)
             best_scale, best_zoom_error, identity_error = zoom_alignment(frames[0], frame)
             zoom_explains_motion = best_scale >= 1.02 and best_zoom_error <= identity_error * 0.82
-            candidates.append((local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion))
+            candidates.append((local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion, motion_coverage))
 
-        local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion = max(candidates, key=lambda item: item[0])
+        local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion, motion_coverage = max(candidates, key=lambda item: item[0])
         passed = (
             target_difference >= 4.5
             and local_difference >= 1.5
             and ratio >= 1.18
             and background_difference <= 16.0
             and not zoom_explains_motion
+            and motion_coverage >= max(0.0, float(minimum_motion_coverage))
         )
-        score = round(max(0.0, min(100.0, local_difference * 12.0 + (ratio - 1.0) * 40.0)))
+        score = round(max(0.0, min(100.0, local_difference * 12.0 + (ratio - 1.0) * 40.0 + motion_coverage * 80.0)))
         if not passed:
             score = min(score, 49)
         return {
@@ -689,6 +734,7 @@ def assess_component_motion(
                 if passed
                 else f"\u672a\u68c0\u6d4b\u5230\u8db3\u591f\u7684\u72ec\u7acb{motion_name}\u8fd0\u52a8\uff0c\u6216\u7ed3\u679c\u4e3b\u8981\u662f\u5168\u5c40\u63a8\u955c/\u753b\u9762\u6f02\u79fb\u3002"
             ),
+            "motion_coverage": round(motion_coverage, 3),
         }
 
 def mute_video(video_bytes: bytes) -> bytes:

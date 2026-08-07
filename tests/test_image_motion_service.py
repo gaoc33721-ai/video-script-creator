@@ -64,6 +64,43 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertIn("absolutely no zoom", prompt)
         self.assertIn("outer cabinet remain fixed", prompt)
 
+    def test_flow_prompt_requires_real_currents_and_rejects_highlight_sweep(self):
+        asset = {
+            "category": "Airfryer",
+            "model": "HAFA11BDW",
+            "feature": "Dual Cooking Zone",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {"preset": "flow", "focus": "effect", "intensity": "standard", "direction": "circulating hot air"}
+        )
+        prompt = build_motion_prompt(asset, plan)
+        self.assertEqual("locked", plan["camera_motion"])
+        self.assertIn("Both visible cooking zones", prompt)
+        self.assertIn("continuous circulating hot-air currents", prompt)
+        self.assertIn("not be a static glow, horizontal highlight sweep", prompt)
+        self.assertIn("absolutely no zoom", prompt)
+
+    def test_airfryer_category_name_does_not_force_touch_panel_into_flow(self):
+        result = analyze_creative_image(
+            image_bytes(Image.new("RGB", (800, 800), (30, 40, 50))),
+            filename="Colourful-Touch-Panel.jpg",
+            category="Airfryer",
+            model="HAFA11BDW",
+            feature="Colourful Touch Panel",
+        )
+        self.assertEqual("glow", result["recommended_preset"])
+
+    def test_dual_cooking_zone_still_recommends_flow(self):
+        result = analyze_creative_image(
+            image_bytes(Image.new("RGB", (800, 800), (30, 40, 50))),
+            filename="Dual-Cooking-Zone.jpg",
+            category="Airfryer",
+            model="HAFA11BDW",
+            feature="Dual Cooking Zone",
+        )
+        self.assertEqual("flow", result["recommended_preset"])
+
     def test_flow_plan_locks_camera_and_renders_localized_hot_air_motion(self):
         plan = validate_motion_plan({"preset": "flow", "focus": "effect", "intensity": "standard"})
         self.assertEqual("locked", plan["camera_motion"])
@@ -86,6 +123,14 @@ class ImageMotionServiceTests(unittest.TestCase):
         )
         self.assertEqual("passed", qa["status"], qa)
         self.assertFalse(qa["global_zoom_explains_motion"])
+        strict_qa = assess_component_motion(
+            video,
+            target_region={"x": 0.10, "y": 0.10, "width": 0.80, "height": 0.80},
+            motion_name="\u70ed\u6d41",
+            minimum_motion_coverage=0.22,
+        )
+        self.assertEqual("failed", strict_qa["status"], strict_qa)
+
 
 
 
