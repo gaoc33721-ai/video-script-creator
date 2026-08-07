@@ -1557,6 +1557,31 @@ button.secondary {
   margin-top: 18px;
 }
 
+.motion-batch-status {
+  min-height: 118px;
+  border-color: rgba(0, 170, 166, 0.38);
+  background: var(--brand-tint);
+}
+
+.motion-batch-status[data-status="uploading"] {
+  border-style: solid;
+}
+
+.motion-batch-status[data-status="success"] {
+  border-style: solid;
+  background: rgba(0, 170, 166, 0.09);
+}
+
+.motion-batch-status[data-status="error"] {
+  border-color: rgba(215, 0, 21, 0.3);
+  background: #fff1f0;
+}
+
+.motion-batch-status small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .motion-asset {
   overflow: hidden;
   border: 1px solid var(--border);

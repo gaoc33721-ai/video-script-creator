@@ -1,4 +1,49 @@
 const motionKnownAssets = new Set();
+let motionUploadBatch = { status: "idle", files: [] };
+
+function motionUploadFileSummary(files) {
+  const names = (files || []).map((item) => (typeof item === "string" ? item : item.name)).filter(Boolean);
+  if (!names.length) return "";
+  const visible = names.slice(0, 3).join("、");
+  return names.length > 3 ? visible + " 等 " + names.length + " 张" : visible;
+}
+
+function updateMotionUploadArea() {
+  const count = motionUploadBatch.files.length;
+  const title = $("motionUploadTitle");
+  const hint = $("motionUploadHint");
+  if (!title || !hint) return;
+  if (!count || motionUploadBatch.status === "idle") {
+    title.textContent = "上传卖点图";
+    hint.textContent = "同一批最多 10 张同型号图片，短边至少 720px";
+    return;
+  }
+  const labels = {
+    selected: "已选择 " + count + " 张卖点图",
+    uploading: "正在上传并识别 " + count + " 张卖点图",
+    success: "刚刚上传 " + count + " 张卖点图",
+    error: count + " 张卖点图上传未完成",
+  };
+  title.textContent = labels[motionUploadBatch.status] || labels.selected;
+  hint.textContent = motionUploadFileSummary(motionUploadBatch.files);
+}
+
+function motionUploadBatchHtml() {
+  const count = motionUploadBatch.files.length;
+  if (!count || motionUploadBatch.status === "idle") return "";
+  const copy = {
+    selected: ["已选择 " + count + " 张卖点图", "文件已选中，点击“识别图片并推荐动效”开始上传。"],
+    uploading: ["正在处理本次 " + count + " 张卖点图", "图片正在上传并识别卖点、裁切区和保护区，请稍候。"],
+    success: ["刚刚成功上传 " + count + " 张卖点图", "素材已接收并显示在下方，可继续确认推荐动效。"],
+    error: ["本次 " + count + " 张卖点图上传未完成", "文件仍保留在选择框中，可检查提示后重试。"],
+  }[motionUploadBatch.status];
+  if (!copy) return "";
+  return '<div class="empty-state motion-batch-status" data-status="' + escapeAttr(motionUploadBatch.status) + '">' +
+    "<strong>" + escapeHtml(copy[0]) + "</strong>" +
+    "<span>" + escapeHtml(copy[1]) + "</span>" +
+    "<small>" + escapeHtml(motionUploadFileSummary(motionUploadBatch.files)) + "</small>" +
+    "</div>";
+}
 
 function motionOptions(items, selected) {
   return items
@@ -93,11 +138,12 @@ function motionResultHtml(asset) {
 
 function renderMotionAssets() {
   if (!$("motionAssets")) return;
-  if (!state.creativeAssets.length) {
+  const batchStatus = motionUploadBatchHtml();
+  if (!state.creativeAssets.length && !batchStatus) {
     $("motionAssets").innerHTML = '<div class="empty-state"><strong>\u5c1a\u672a\u4e0a\u4f20\u5356\u70b9\u56fe</strong><span>\u5148\u786e\u8ba4\u54c1\u7c7b\u548c\u578b\u53f7\uff0c\u518d\u4e0a\u4f20\u540c\u578b\u53f7\u7d20\u6750\u3002</span></div>';
     return;
   }
-  $("motionAssets").innerHTML = state.creativeAssets
+  $("motionAssets").innerHTML = batchStatus + state.creativeAssets
     .map((asset) => {
       const analysis = asset.analysis || {};
       const plan = asset.motion_plan || {};
@@ -191,14 +237,26 @@ async function uploadMotionAssets() {
   body.append("model", model);
   files.forEach((file) => body.append("files", file));
   $("uploadMotionAssets").disabled = true;
+  motionUploadBatch = { status: "uploading", files: files.map((file) => file.name) };
+  updateMotionUploadArea();
+  renderMotionAssets();
   setMessage("motionMessage", "\u6b63\u5728\u8bc6\u522b\u5356\u70b9\u3001\u88c1\u5207\u533a\u548c\u4fdd\u62a4\u533a...");
   try {
     const data = await api("/api/creative-assets", { method: "POST", body });
-    (data.assets || []).forEach((asset) => state.motionSelectedAssets.add(asset.id));
+    const uploadedAssets = data.assets || [];
+    uploadedAssets.forEach((asset) => state.motionSelectedAssets.add(asset.id));
+    const uploadedIds = new Set(uploadedAssets.map((asset) => asset.id));
+    state.creativeAssets = [...uploadedAssets, ...state.creativeAssets.filter((asset) => !uploadedIds.has(asset.id))];
+    motionUploadBatch = { status: "success", files: files.map((file) => file.name) };
     $("motionImageInput").value = "";
+    updateMotionUploadArea();
+    renderMotionAssets();
     setMessage("motionMessage", `\u5df2\u8bc6\u522b ${(data.assets || []).length} \u5f20\u7d20\u6750\uff0c\u8bf7\u786e\u8ba4\u63a8\u8350\u52a8\u6548\u3002`, "ok");
     await loadMotionWorkspace();
   } catch (error) {
+    motionUploadBatch = { status: "error", files: files.map((file) => file.name) };
+    updateMotionUploadArea();
+    renderMotionAssets();
     setMessage("motionMessage", error.message, "error");
   } finally {
     $("uploadMotionAssets").disabled = false;
@@ -344,14 +402,28 @@ document.querySelectorAll("[data-app-mode]").forEach((button) => {
   button.addEventListener("click", () => setAppMode(button.dataset.appMode));
 });
 $("motionCategorySelect")?.addEventListener("change", () => {
+  motionUploadBatch = { status: "idle", files: [] };
+  updateMotionUploadArea();
+  $("motionImageInput").value = "";
+  renderMotionAssets();
   $("motionModelSearch").value = "";
   syncMotionModelOptions();
   loadMotionWorkspace();
 });
 $("motionModelSearch")?.addEventListener("input", syncMotionModelOptions);
-$("motionModelSelect")?.addEventListener("change", loadMotionWorkspace);
+$("motionModelSelect")?.addEventListener("change", () => {
+  motionUploadBatch = { status: "idle", files: [] };
+  updateMotionUploadArea();
+  $("motionImageInput").value = "";
+  renderMotionAssets();
+  loadMotionWorkspace();
+});
 $("motionImageInput")?.addEventListener("change", () => {
-  const count = $("motionImageInput").files?.length || 0;
+  const files = Array.from($("motionImageInput").files || []);
+  const count = files.length;
+  motionUploadBatch = count ? { status: "selected", files: files.map((file) => file.name) } : { status: "idle", files: [] };
+  updateMotionUploadArea();
+  renderMotionAssets();
   setMessage("motionMessage", count ? `\u5df2\u9009\u62e9 ${count} \u5f20\u56fe\u7247\u3002` : "");
 });
 $("uploadMotionAssets")?.addEventListener("click", uploadMotionAssets);

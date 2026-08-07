@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外爆款内容引擎</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260807-image-motion" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260807-motion-upload-state" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -108,8 +108,8 @@
           </div>
           <label class="motion-upload">
             <input id="motionImageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-            <strong>上传卖点图</strong>
-            <span>同一批最多 10 张同型号图片，短边至少 720px</span>
+            <strong id="motionUploadTitle">上传卖点图</strong>
+            <span id="motionUploadHint">同一批最多 10 张同型号图片，短边至少 720px</span>
           </label>
           <div class="motion-global-controls">
             <label>&#25991;&#23383;&#31574;&#30053;
@@ -134,7 +134,7 @@
             <label class="inline-toggle"><input id="motionExportMuted" type="checkbox" /> 静音导出</label>
           </div>
           <div id="motionMessage" class="message"></div>
-          <div id="motionAssets" class="motion-assets">
+          <div id="motionAssets" class="motion-assets" aria-live="polite">
             <div class="empty-state"><strong>尚未上传卖点图</strong><span>先确认品类和型号，再上传同型号素材。</span></div>
           </div>
         </section>
@@ -217,7 +217,7 @@
         <img id="imagePreviewImage" alt="Storyboard reference" />
       </div>
     </div>
-    <script src="/static/app.js?v=20260807-image-motion"></script>
-    <script src="/static/motion.js?v=20260807-image-motion"></script>
+    <script src="/static/app.js?v=20260807-motion-upload-state"></script>
+    <script src="/static/motion.js?v=20260807-motion-upload-state"></script>
   </body>
 </html>
