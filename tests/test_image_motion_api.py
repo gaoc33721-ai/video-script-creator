@@ -133,5 +133,22 @@ class ImageMotionApiTests(unittest.TestCase):
         self.assertIn("categories", legacy_options.json())
 
 
+    def test_ray2_model_input_uses_asset_ratio_and_start_keyframe(self):
+        image_payload = {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "abc"},
+        }
+        payload = api_app._build_luma_ray2_model_input(
+            "locked camera component motion",
+            duration_seconds=5,
+            image_payload=image_payload,
+            aspect_ratio="1:1",
+        )
+        self.assertEqual("1:1", payload["aspect_ratio"])
+        self.assertEqual("5s", payload["duration"])
+        self.assertEqual("720p", payload["resolution"])
+        self.assertEqual(image_payload, payload["keyframes"]["frame0"])
+
+
 if __name__ == "__main__":
     unittest.main()

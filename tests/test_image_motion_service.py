@@ -46,6 +46,23 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertIn("bright, positive", prompt)
         self.assertNotIn("Creator instruction", prompt)
 
+    def test_component_prompt_requires_real_part_motion_and_locked_camera(self):
+        asset = {
+            "category": "Airfryer",
+            "model": "HAFA11BDW",
+            "feature": "Dual Cooking Zone",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {"preset": "component", "focus": "product", "intensity": "standard", "direction": "drawer motion"}
+        )
+        prompt = build_motion_prompt(asset, plan)
+        self.assertEqual("locked", plan["camera_motion"])
+        self.assertIn("cooking basket or front drawer slides outward", prompt)
+        self.assertIn("absolutely no zoom", prompt)
+        self.assertIn("outer cabinet remain fixed", prompt)
+
+
     def test_source_ratio_is_preserved(self):
         source = image_bytes(Image.new("RGB", (800, 1000), (30, 40, 50)))
         prepared, metadata = prepare_motion_source(

@@ -302,6 +302,31 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
     intensity = str(plan.get("intensity") or "standard")
     direction = str(plan.get("direction") or (asset.get("analysis") or {}).get("recommended_direction") or "gentle forward motion")
     custom = str(plan.get("custom_instruction") or "").strip()
+    if preset == "component":
+        category_hint = _category_hint(category)
+        if category_hint == "air fryer":
+            component_action = "one clearly visible cooking basket or front drawer slides outward slightly, then settles; the other basket and outer cabinet remain fixed"
+        elif category_hint in {"oven", "microwave", "dishwasher"}:
+            component_action = "the clearly visible appliance door opens slightly on its real hinge, then settles; the outer cabinet remains fixed"
+        elif category_hint == "washing machine":
+            component_action = "the visible drum rotates smoothly inside the fixed outer cabinet"
+        elif category_hint == "refrigerator":
+            component_action = "one clearly visible door opens slightly on its real hinge; the cabinet and any other door remain fixed"
+        else:
+            component_action = "exactly one clearly visible movable product component performs a small mechanically plausible slide, rotation or hinge motion while the outer cabinet remains fixed"
+        prompt = (
+            "Create one continuous five-second premium e-commerce product demonstration based strictly on the supplied source image. "
+            f"Product lock: exactly one Hisense {category}, model {model or 'as shown in the source'}, and no other appliance. "
+            "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
+            f"Required articulated motion: {component_action}. Selling point: {feature}. Direction note: {direction}. "
+            "The component motion must be obvious but restrained and mechanically connected to the product; do not move, translate, scale, bend or morph the whole appliance. "
+            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            "Keep the background, outer shell, control panel, labels and logo stationary and unchanged. Do not add hands, people, rooms, extra products, text or logos. "
+            "Lighting stays bright, clean, positive and consistent. "
+        )
+        if custom:
+            prompt += f"Creator instruction: {custom}."
+        return prompt.strip()[:3000]
     prompt = (
         f"Create one continuous five-second premium e-commerce motion shot based strictly on the supplied source image. "
         f"Product lock: exactly one Hisense {category}, model {model or 'as shown in the source'}, and no other appliance. "
@@ -325,9 +350,10 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
     focus = str(plan.get("focus") or "effect").strip().lower()
     ratio = str(plan.get("aspect_ratio") or "source").strip().lower()
     duration = max(1.0, min(5.0, float(plan.get("duration_seconds") or 5.0)))
+    normalized_preset = preset if preset in ALLOWED_PRESETS else "auto"
     return {
         **plan,
-        "preset": preset if preset in ALLOWED_PRESETS else "auto",
+        "preset": normalized_preset,
         "intensity": intensity if intensity in ALLOWED_INTENSITIES else "standard",
         "text_policy": text_policy if text_policy in ALLOWED_TEXT_POLICIES else "visual_only",
         "focus": focus if focus in {"product", "effect", "background"} else "effect",
@@ -335,7 +361,7 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds": duration,
         "fps": 24,
         "quality": "1080p",
-        "camera_motion": "gentle_push_in",
+        "camera_motion": "locked" if normalized_preset == "component" else "gentle_push_in",
     }
 
 
@@ -437,7 +463,7 @@ def render_stable_motion_video(
             return handle.read()
 
 
-def normalize_generated_video(video_bytes: bytes, *, duration_seconds: float = 5.0, metadata: dict[str, Any] | None = None) -> bytes:
+def normalize_generated_video(video_bytes: bytes, *, duration_seconds: float = 5.0, metadata: dict[str, Any] | None = None, output_size: tuple[int, int] | None = None) -> bytes:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return video_bytes
@@ -447,9 +473,17 @@ def normalize_generated_video(video_bytes: bytes, *, duration_seconds: float = 5
         with open(input_path, "wb") as handle:
             handle.write(video_bytes)
         provenance = json.dumps({"Label": "1", "Workflow": "selling_point_image_motion", **(metadata or {})}, ensure_ascii=True, separators=(",", ":"))
+        video_filter = []
+        if output_size:
+            width = max(2, int(output_size[0]) // 2 * 2)
+            height = max(2, int(output_size[1]) // 2 * 2)
+            video_filter = [
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+            ]
         command = [
             ffmpeg, "-y", "-i", input_path, "-t", f"{duration_seconds:.3f}", "-map", "0:v:0", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+            *video_filter,
             "-movflags", "+faststart+use_metadata_tags", "-metadata", f"AIGC={provenance}", output_path,
         ]
         completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=180, check=False)
@@ -501,6 +535,109 @@ def assess_video_fidelity(source_image_bytes: bytes, video_bytes: bytes) -> dict
             "message": f"首帧/中帧与原图感知相似度约 {score}%。",
         }
 
+
+
+def assess_component_motion(video_bytes: bytes, target_region: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Reject static/global-camera results when articulated local motion was requested."""
+    from PIL import Image, ImageChops, ImageOps, ImageStat
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {"status": "unavailable", "score": None, "message": "FFmpeg \u4e0d\u53ef\u7528\uff0c\u65e0\u6cd5\u6267\u884c\u90e8\u4ef6\u8fd0\u52a8\u68c0\u67e5\u3002"}
+
+    region = target_region or {"x": 0.15, "y": 0.28, "width": 0.70, "height": 0.62}
+
+    def region_box(width: int, height: int) -> tuple[int, int, int, int]:
+        left = max(0, min(width - 1, int(float(region.get("x", 0.15)) * width)))
+        top = max(0, min(height - 1, int(float(region.get("y", 0.28)) * height)))
+        right = max(left + 1, min(width, int((float(region.get("x", 0.15)) + float(region.get("width", 0.70))) * width)))
+        bottom = max(top + 1, min(height, int((float(region.get("y", 0.28)) + float(region.get("height", 0.62))) * height)))
+        return left, top, right, bottom
+
+    def mean_difference(image) -> float:
+        return float(ImageStat.Stat(image).mean[0])
+
+    def zoom_alignment(reference, frame) -> tuple[float, float, float]:
+        width, height = reference.size
+        identity_error = mean_difference(ImageChops.difference(reference, frame))
+        best_scale = 1.0
+        best_error = identity_error
+        for step in range(1, 13):
+            scale = 1.0 + step * 0.01
+            resized = reference.resize((int(round(width * scale)), int(round(height * scale))), Image.Resampling.LANCZOS)
+            left = max(0, (resized.width - width) // 2)
+            top = max(0, (resized.height - height) // 2)
+            aligned = resized.crop((left, top, left + width, top + height))
+            error = mean_difference(ImageChops.difference(aligned, frame))
+            if error < best_error:
+                best_scale, best_error = scale, error
+        return best_scale, best_error, identity_error
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = os.path.join(tmpdir, "input.mp4")
+        with open(video_path, "wb") as handle:
+            handle.write(video_bytes)
+        frames = []
+        for index, seek in enumerate(("0.10", "2.50", "4.70")):
+            frame_path = os.path.join(tmpdir, f"motion_{index}.png")
+            command = [ffmpeg, "-y", "-ss", seek, "-i", video_path, "-frames:v", "1", frame_path]
+            completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
+            if completed.returncode == 0 and os.path.exists(frame_path):
+                frames.append(ImageOps.exif_transpose(Image.open(frame_path)).convert("L").resize((160, 90), Image.Resampling.LANCZOS))
+        if len(frames) < 2:
+            return {"status": "unavailable", "score": None, "message": "\u672a\u80fd\u62bd\u53d6\u8db3\u591f\u5e27\u6267\u884c\u90e8\u4ef6\u8fd0\u52a8\u68c0\u67e5\u3002"}
+
+        left, top, right, bottom = region_box(*frames[0].size)
+        candidates = []
+        for frame in frames[1:]:
+            difference = ImageChops.difference(frames[0], frame)
+            target_difference = mean_difference(difference.crop((left, top, right, bottom)))
+            background_parts = [
+                difference.crop((0, 0, difference.width, top)),
+                difference.crop((0, bottom, difference.width, difference.height)),
+                difference.crop((0, top, left, bottom)),
+                difference.crop((right, top, difference.width, bottom)),
+            ]
+            weighted_total = 0.0
+            weighted_pixels = 0
+            for part in background_parts:
+                if part.width and part.height:
+                    pixels = part.width * part.height
+                    weighted_total += mean_difference(part) * pixels
+                    weighted_pixels += pixels
+            background_difference = weighted_total / max(1, weighted_pixels)
+            local_difference = max(0.0, target_difference - background_difference)
+            ratio = target_difference / max(1.0, background_difference)
+            best_scale, best_zoom_error, identity_error = zoom_alignment(frames[0], frame)
+            zoom_explains_motion = best_scale >= 1.02 and best_zoom_error <= identity_error * 0.82
+            candidates.append((local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion))
+
+        local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion = max(candidates, key=lambda item: item[0])
+        passed = (
+            target_difference >= 4.5
+            and local_difference >= 1.5
+            and ratio >= 1.18
+            and background_difference <= 16.0
+            and not zoom_explains_motion
+        )
+        score = round(max(0.0, min(100.0, local_difference * 12.0 + (ratio - 1.0) * 40.0)))
+        if not passed:
+            score = min(score, 49)
+        return {
+            "status": "passed" if passed else "failed",
+            "score": score,
+            "target_difference": round(target_difference, 2),
+            "background_difference": round(background_difference, 2),
+            "local_difference": round(local_difference, 2),
+            "local_to_background_ratio": round(ratio, 2),
+            "best_global_zoom_scale": round(best_scale, 3),
+            "global_zoom_explains_motion": zoom_explains_motion,
+            "message": (
+                "\u68c0\u6d4b\u5230\u76ee\u6807\u533a\u57df\u5b58\u5728\u72ec\u7acb\u90e8\u4ef6\u8fd0\u52a8\uff0c\u4e14\u955c\u5934\u6574\u4f53\u8fd0\u52a8\u53d7\u63a7\u3002"
+                if passed
+                else "\u672a\u68c0\u6d4b\u5230\u8db3\u591f\u7684\u72ec\u7acb\u90e8\u4ef6\u8fd0\u52a8\uff0c\u6216\u7ed3\u679c\u4e3b\u8981\u662f\u5168\u5c40\u63a8\u955c/\u753b\u9762\u6f02\u79fb\u3002"
+            ),
+        }
 
 def mute_video(video_bytes: bytes) -> bytes:
     ffmpeg = shutil.which("ffmpeg")

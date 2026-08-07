@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from image_motion_service import (
     analyze_creative_image,
+    assess_component_motion,
     assess_video_fidelity,
     build_motion_prompt,
     enhance_image_resolution,
@@ -69,11 +70,15 @@ class ImageMotionWorkflow:
         script_tasks_loader: Callable[[], list[dict]],
         provider_submit: Callable[..., dict] | None = None,
         provider_poll: Callable[[str], dict] | None = None,
+        component_provider_submit: Callable[..., dict] | None = None,
+        component_provider_poll: Callable[[str], dict] | None = None,
     ):
         self.storage = storage
         self.script_tasks_loader = script_tasks_loader
         self.provider_submit = provider_submit
         self.provider_poll = provider_poll
+        self.component_provider_submit = component_provider_submit
+        self.component_provider_poll = component_provider_poll
         self.lock = threading.Lock()
         self.enabled = os.getenv("IMAGE_MOTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
         self.generative_enabled = os.getenv("IMAGE_MOTION_GENERATIVE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -323,6 +328,19 @@ class ImageMotionWorkflow:
                 self.write_list(IMAGE_MOTION_JOBS_KEY, jobs, 1000)
             return found
 
+
+    def fail_job(self, job_id: str, message: str, qa_result: dict[str, Any] | None = None) -> None:
+        self.update_job(
+            job_id,
+            status="failed",
+            progress=100,
+            current_step="\u672a\u751f\u6210\u5408\u683c\u7684\u90e8\u4ef6\u8fd0\u52a8",
+            completed_at=self.now(),
+            qa_status="failed",
+            qa_result=qa_result or {"status": "failed", "message": message},
+            failure_message=message,
+        )
+
     def render_fallback(self, job_id: str, reason: str = "") -> None:
         job = next((item for item in self.jobs() if item.get("id") == job_id), None)
         asset = self.asset(str((job or {}).get("creative_asset_id") or ""))
@@ -370,6 +388,7 @@ class ImageMotionWorkflow:
         )
 
     def run_job(self, job_id: str) -> None:
+        preset = ""
         try:
             job = self.update_job(job_id, status="processing", progress=18, current_step="正在准备原图与保护区")
             asset = self.asset(str((job or {}).get("creative_asset_id") or ""))
@@ -380,16 +399,25 @@ class ImageMotionWorkflow:
                 raise RuntimeError("素材未通过生成前检查。")
             plan = validate_motion_plan(job.get("motion_plan") or {})
             preset = plan["preset"] if plan["preset"] != "auto" else analysis.get("recommended_preset") or "camera"
+            is_component = preset == "component"
+            if is_component and plan["text_policy"] != "visual_only":
+                raise RuntimeError("\u90e8\u4ef6\u8fd0\u52a8\u6682\u4e0d\u652f\u6301\u201c\u4fdd\u7559\u6807\u9898\u4e0eLogo\u201d\uff1b\u8bf7\u4f7f\u7528\u7eaf\u753b\u9762\u52a8\u6548\u4ee5\u907f\u514d\u6a21\u578b\u91cd\u753b\u54c1\u724c\u6587\u5b57\u3002")
+
+            provider_submit = self.component_provider_submit if is_component else self.provider_submit
+            provider_poll = self.component_provider_poll if is_component else self.provider_poll
             use_provider = (
                 self.generative_enabled
                 and plan["text_policy"] == "visual_only"
-                and preset in GENERATIVE_PRESETS
-                and self.provider_submit is not None
-                and self.provider_poll is not None
+                and (is_component or preset in GENERATIVE_PRESETS)
+                and provider_submit is not None
+                and provider_poll is not None
             )
             if not use_provider:
+                if is_component:
+                    raise RuntimeError("Bedrock Luma Ray 2 \u90e8\u4ef6\u8fd0\u52a8\u8def\u5f84\u4e0d\u53ef\u7528\uff0c\u4efb\u52a1\u672a\u964d\u7ea7\u4e3a\u63a8\u955c\u6a21\u677f\u3002")
                 self.render_fallback(job_id)
                 return
+
             source_bytes = self.storage.read_file_bytes(self.working_image_key(asset))
             prepared, prepared_meta = prepare_motion_source(
                 source_bytes,
@@ -401,7 +429,7 @@ class ImageMotionWorkflow:
             prepared_key = f"image-motion/prepared/{job_id}.png"
             self.storage.write_file_bytes(prepared_key, prepared, content_type="image/png")
             prompt = build_motion_prompt(asset, {**plan, "preset": preset})
-            provider_result = self.provider_submit(
+            provider_result = provider_submit(
                 image_bytes=prepared,
                 prompt=prompt,
                 aspect_ratio=prepared_meta["provider_aspect_ratio"],
@@ -412,13 +440,17 @@ class ImageMotionWorkflow:
                 status="processing",
                 progress=42,
                 current_step="生成式自然动效处理中",
-                generation_mode="generative_video",
+                generation_mode="luma_ray2_component" if is_component else "generative_video",
+                provider_name="luma_ray2" if is_component else str(provider_result.get("provider") or "default"),
                 prepared_image_key=prepared_key,
                 prepared_metadata=prepared_meta,
                 external_task_id=provider_result["task_id"],
                 provider_metadata=provider_result.get("metadata") or {},
             )
         except Exception as exc:
+            if preset == "component":
+                self.fail_job(job_id, str(exc))
+                return
             try:
                 self.render_fallback(job_id, reason=f"生成式路径不可用，已自动降级：{exc}")
             except Exception as fallback_exc:
@@ -431,15 +463,24 @@ class ImageMotionWorkflow:
                     qa_status="failed",
                     failure_message=str(fallback_exc),
                 )
-
     def refresh_provider_jobs(self) -> list[dict]:
         active = [item for item in self.jobs() if item.get("status") == "processing" and item.get("external_task_id")]
         for job in active:
+            plan = validate_motion_plan(job.get("motion_plan") or {})
+            asset = self.asset(str(job.get("creative_asset_id") or ""))
+            recommended = str(((asset or {}).get("analysis") or {}).get("recommended_preset") or "camera")
+            preset = plan["preset"] if plan["preset"] != "auto" else recommended
+            is_component = job.get("provider_name") == "luma_ray2" or preset == "component"
+            provider_poll = self.component_provider_poll if is_component else self.provider_poll
             try:
-                result = self.provider_poll(str(job["external_task_id"])) if self.provider_poll else {"status": "failed"}
+                result = provider_poll(str(job["external_task_id"])) if provider_poll else {"status": "failed"}
                 if result.get("status") == "processing":
                     self.update_job(job["id"], progress=65, current_step="供应商生成中")
                     continue
+                if is_component and (result.get("status") != "succeeded" or not result.get("video_bytes")):
+                    self.fail_job(job["id"], f"Ray 2 \u90e8\u4ef6\u8fd0\u52a8\u751f\u6210\u5931\u8d25\uff1a{result.get('message') or 'no video returned'}")
+                    continue
+
                 if result.get("status") != "succeeded" or not result.get("video_bytes"):
                     self.render_fallback(job["id"], reason=f"供应商失败，已自动降级：{result.get('message') or '未返回视频'}")
                     continue
@@ -448,8 +489,23 @@ class ImageMotionWorkflow:
                     result["video_bytes"],
                     duration_seconds=5,
                     metadata={"AssetId": job["creative_asset_id"], "JobId": job["id"], "Version": job.get("version")},
+                    output_size=(int(job["prepared_metadata"]["width"]), int(job["prepared_metadata"]["height"])),
                 )
                 qa = assess_video_fidelity(prepared, normalized)
+                if is_component:
+                    motion_region = ((asset or {}).get("analysis") or {}).get("motion_region")
+                    motion_qa = assess_component_motion(normalized, target_region=motion_region)
+                    passed = qa.get("status") == "passed" and motion_qa.get("status") == "passed"
+                    qa = {
+                        "status": "passed" if passed else "failed",
+                        "score": min(int(qa.get("score") or 0), int(motion_qa.get("score") or 0)),
+                        "message": motion_qa.get("message") if qa.get("status") == "passed" else qa.get("message"),
+                        "fidelity": qa,
+                        "component_motion": motion_qa,
+                    }
+                    if not passed:
+                        self.fail_job(job["id"], f"\u90e8\u4ef6\u8fd0\u52a8\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{qa.get('message')}", qa_result=qa)
+                        continue
                 if qa.get("status") != "passed":
                     self.render_fallback(job["id"], reason=f"AI 保真检查未通过，已自动降级：{qa.get('message')}")
                     continue
@@ -466,13 +522,14 @@ class ImageMotionWorkflow:
                     qa_result=qa,
                 )
             except Exception as exc:
+                if is_component:
+                    self.fail_job(job["id"], f"\u5237\u65b0 Ray 2 \u7ed3\u679c\u5931\u8d25\uff1a{exc}")
+                    continue
                 try:
                     self.render_fallback(job["id"], reason=f"刷新供应商结果失败，已自动降级：{exc}")
                 except Exception as fallback_exc:
                     self.update_job(job["id"], status="failed", progress=100, qa_status="failed", failure_message=str(fallback_exc))
         return self.jobs()
-
-
 def _safe_name(value: str, fallback: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "")).strip("_")
     return name[:80] or fallback
@@ -486,8 +543,17 @@ def register_image_motion_routes(
     script_tasks_loader: Callable[[], list[dict]],
     provider_submit: Callable[..., dict] | None = None,
     provider_poll: Callable[[str], dict] | None = None,
+    component_provider_submit: Callable[..., dict] | None = None,
+    component_provider_poll: Callable[[str], dict] | None = None,
 ):
-    workflow = ImageMotionWorkflow(storage, script_tasks_loader, provider_submit, provider_poll)
+    workflow = ImageMotionWorkflow(
+        storage,
+        script_tasks_loader,
+        provider_submit,
+        provider_poll,
+        component_provider_submit,
+        component_provider_poll,
+    )
     protected = [Depends(verify_access)]
 
     @app.get("/api/creative-assets", dependencies=protected)

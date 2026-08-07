@@ -5343,10 +5343,10 @@ def _single_frame_from_ninegrid_image(image):
     return crop.resize((target_w, target_h))
 
 
-def _build_luma_ray2_model_input(prompt: str, duration_seconds=6, image_payload: dict | None = None) -> dict:
+def _build_luma_ray2_model_input(prompt: str, duration_seconds=6, image_payload: dict | None = None, aspect_ratio: str = "") -> dict:
     model_input = {
         "prompt": str(prompt or "premium product video").strip()[:4000],
-        "aspect_ratio": LUMA_RAY2_ASPECT_RATIO,
+        "aspect_ratio": aspect_ratio if aspect_ratio in {"1:1", "9:16", "16:9"} else LUMA_RAY2_ASPECT_RATIO,
         "duration": f"{_ray2_duration_seconds(duration_seconds)}s",
         "resolution": LUMA_RAY2_RESOLUTION,
         "loop": False,
@@ -5385,7 +5385,7 @@ def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
     return response["invocationArn"], output_s3_uri
 
 
-def _start_luma_ray2_job(category, model, prompt, duration_seconds=6, image_payload: dict | None = None):
+def _start_luma_ray2_job(category, model, prompt, duration_seconds=6, image_payload: dict | None = None, aspect_ratio: str = ""):
     output_s3_uri = _video_job_output_uri(category, model)
     if not output_s3_uri:
         raise RuntimeError("未配置 Ray2 输出 S3。请设置 VIDEO_OUTPUT_S3_URI，且 bucket 需位于 us-west-2。")
@@ -5398,7 +5398,7 @@ def _start_luma_ray2_job(category, model, prompt, duration_seconds=6, image_payl
     )
     response = client.start_async_invoke(
         modelId=LUMA_RAY2_MODEL_ID,
-        modelInput=_build_luma_ray2_model_input(prompt, duration_seconds=duration_seconds, image_payload=image_payload),
+        modelInput=_build_luma_ray2_model_input(prompt, duration_seconds=duration_seconds, image_payload=image_payload, aspect_ratio=aspect_ratio),
         outputDataConfig={"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
         clientRequestToken=str(uuid.uuid4()),
     )
@@ -5870,6 +5870,54 @@ def _poll_image_motion_toapis(task_id: str) -> dict:
         return {"status": "failed", "message": "供应商返回的视频文件无效。"}
     return {"status": "succeeded", "video_bytes": response.content, "message": ""}
 
+
+
+def _submit_image_motion_luma_ray2(*, image_bytes: bytes, prompt: str, aspect_ratio: str, client_business_id: str) -> dict:
+    image_payload = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": base64.b64encode(image_bytes).decode("ascii"),
+        },
+    }
+    task_id, output_s3_uri = _start_luma_ray2_job(
+        "image-motion",
+        client_business_id,
+        prompt,
+        duration_seconds=5,
+        image_payload=image_payload,
+        aspect_ratio=aspect_ratio,
+    )
+    return {
+        "task_id": str(task_id),
+        "provider": "luma_ray2",
+        "metadata": {
+            "provider": "luma_ray2",
+            "model_id": LUMA_RAY2_MODEL_ID,
+            "region": LUMA_RAY2_AWS_REGION,
+            "output_s3_uri": output_s3_uri,
+            "aspect_ratio": aspect_ratio,
+        },
+    }
+
+
+def _poll_image_motion_luma_ray2(task_id: str) -> dict:
+    result = _query_video_job(task_id, provider="luma_ray2", region=LUMA_RAY2_AWS_REGION)
+    status = str(result.get("status") or "").lower()
+    if status in {"inprogress", "in_progress", "processing", "queued"}:
+        return {"status": "processing", "message": ""}
+    if status not in {"completed", "succeeded", "success"}:
+        return {"status": "failed", "message": str(result.get("failureMessage") or result.get("failure_message") or "Ray 2 generation failed.")}
+    video_s3_uri = _video_uri_from_bedrock_job(result, invocation_arn=task_id)
+    resolved_s3_uri = _resolve_video_s3_uri({"video_s3_uri": video_s3_uri}) or video_s3_uri
+    try:
+        video_bytes = _read_s3_uri_bytes(resolved_s3_uri)
+    except Exception as exc:
+        return {"status": "failed", "message": f"Unable to read Ray 2 output: {exc}"}
+    if len(video_bytes) < 1024:
+        return {"status": "failed", "message": "Ray 2 returned an empty or invalid video."}
+    return {"status": "succeeded", "video_bytes": video_bytes, "message": ""}
 
 def _store_toapis_video(video_job_id: str, video_url: str) -> str:
     import requests as _requests
@@ -8877,4 +8925,6 @@ IMAGE_MOTION_WORKFLOW = register_image_motion_routes(
     provider_poll=_poll_image_motion_toapis
     if _video_provider_name() in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}
     else None,
+    component_provider_submit=_submit_image_motion_luma_ray2,
+    component_provider_poll=_poll_image_motion_luma_ray2,
 )
