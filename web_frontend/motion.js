@@ -325,18 +325,32 @@ async function submitSelectedMotion(assetIds = null) {
   setMotionSubmitState(selected, true);
   setMessage("motionMessage", `\u5df2\u53d7\u7406 ${selected.length} \u6761\u52a8\u6548\u4efb\u52a1\uff0c\u6b63\u5728\u5b89\u5168\u63d0\u4ea4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u2026`);
   await new Promise((resolve) => requestAnimationFrame(resolve));
+  const submitController = new AbortController();
+  let submitTimedOut = false;
+  const submitTimeout = setTimeout(() => {
+    submitTimedOut = true;
+    submitController.abort();
+  }, 20000);
   try {
     const data = await api("/api/image-motion/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ creative_asset_ids: selected }),
+      signal: submitController.signal,
     });
     setMessage("motionMessage", `\u5df2\u63d0\u4ea4 ${(data.jobs || []).length} \u6761\u4efb\u52a1\uff0c\u91cd\u590d\u70b9\u51fb\u4e0d\u4f1a\u91cd\u590d\u6263\u8d39\u3002`, "ok");
     await loadMotionWorkspace();
     await loadJobs();
   } catch (error) {
-    setMessage("motionMessage", error.message, "error");
+    setMessage(
+      "motionMessage",
+      submitTimedOut || error.name === "AbortError"
+        ? "\u63d0\u4ea4\u54cd\u5e94\u8d85\u65f6\uff0c\u5df2\u81ea\u52a8\u89e3\u9664\u6309\u94ae\u9501\u5b9a\u3002\u8bf7\u5237\u65b0\u4efb\u52a1\u4e2d\u5fc3\u540e\u91cd\u8bd5\uff0c\u76f8\u540c\u4efb\u52a1\u4e0d\u4f1a\u91cd\u590d\u521b\u5efa\u3002"
+        : error.message,
+      "error"
+    );
   } finally {
+    clearTimeout(submitTimeout);
     setMotionSubmitState(selected, false);
   }
 }
@@ -356,10 +370,17 @@ function setMotionSubmitState(assetIds, busy) {
     const isTarget = motionSubmittingAssets.has(button.dataset.motionGenerateAsset || "");
     button.disabled = busy;
     button.toggleAttribute("aria-busy", busy && isTarget);
-    button.textContent = busy && isTarget ? "\u6b63\u5728\u63d0\u4ea4\u2026" : "\u751f\u6210\u52a8\u6001\u77ed\u89c6\u9891";
+    button.textContent = busy
+      ? isTarget
+        ? "\u6b63\u5728\u63d0\u4ea4\u2026"
+        : "\u7b49\u5f85\u5f53\u524d\u63d0\u4ea4\u2026"
+      : "\u751f\u6210\u52a8\u6001\u77ed\u89c6\u9891";
     const hint = button.nextElementSibling;
     if (hint) {
-      hint.textContent = busy && isTarget ? "\u4efb\u52a1\u5df2\u53d7\u7406\uff0c\u6b63\u5728\u6392\u961f\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002"
+      hint.textContent = busy
+        ? isTarget
+          ? "\u4efb\u52a1\u5df2\u53d7\u7406\uff0c\u6b63\u5728\u6392\u961f\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002"
+          : "\u5df2\u6709\u5176\u4ed6\u7d20\u6750\u6b63\u5728\u63d0\u4ea4\uff0c\u5b8c\u6210\u6216\u8d85\u65f6\u540e\u5c06\u81ea\u52a8\u6062\u590d\u3002"
         : "\u9ed8\u8ba4 5 \u79d2\u30011080p\u3001\u5355\u955c\u5934\uff1b\u751f\u6210\u540e\u53ef\u9884\u89c8\u548c\u4e0b\u8f7d\u3002";
     }
   });

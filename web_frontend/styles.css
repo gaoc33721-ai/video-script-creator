@@ -1685,6 +1685,14 @@ button.secondary {
   opacity: 0.72;
   cursor: wait;
 }
+.motion-generate-action button:disabled:not([aria-busy="true"]),
+#generateReadyMotion:disabled:not([aria-busy="true"]) {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+  box-shadow: none;
+}
+
 
 .motion-generate-action button[aria-busy="true"]::after,
 #generateReadyMotion[aria-busy="true"]::after {
