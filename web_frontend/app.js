@@ -836,13 +836,16 @@ function renderJob(job) {
   const feature = isMotion ? job.feature || job.asset_filename || "" : "";
   const title = [model, category, feature].filter(Boolean).join(" \u00b7 ");
   const success = job.status === "succeeded";
-  const action = success
-    ? isMotion
-      ? `<button class="load-motion-result" type="button" data-motion-job-id="${escapeAttr(job.id)}">\u67e5\u770b\u52a8\u6548</button>`
-      : `<button class="load-result" type="button" data-job-id="${escapeAttr(job.id)}">\u67e5\u770b\u811a\u672c</button>`
-    : "";
+  const failed = job.status === "failed";
+  const action = isMotion && (success || failed)
+    ? '<button class="load-motion-result" type="button" data-motion-job-id="' + escapeAttr(job.id) + '">' +
+      (failed ? "\u8c03\u6574\u5e76\u91cd\u8bd5" : "\u67e5\u770b\u52a8\u6548") +
+      "</button>"
+    : success
+      ? '<button class="load-result" type="button" data-job-id="' + escapeAttr(job.id) + '">\u67e5\u770b\u811a\u672c</button>'
+      : "";
   const errorText = job.failure_message || job.error_message || "";
-  const error = errorText ? `<div class="message error">${escapeHtml(errorText)}</div>` : "";
+  const error = errorText ? '<div class="message error" title="' + escapeAttr(errorText) + '">' + escapeHtml(errorText) + "</div>" : "";
   const step = success ? "" : job.current_step || "";
   const stepHtml = step ? `<div class="message">${escapeHtml(step)}</div>` : "";
   const finished = ["succeeded", "failed"].includes(job.status);

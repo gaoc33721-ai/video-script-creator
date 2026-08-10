@@ -56,7 +56,7 @@ class ImageMotionSubmitRequest(BaseModel):
 
 
 class ImageMotionRegenerateRequest(BaseModel):
-    action: str = Field(default="preserve_composition", pattern="^(preserve_composition|lower_intensity|alternate_effect)$")
+    action: str = Field(default="preserve_composition", pattern="^(preserve_composition|strengthen_effect|lower_intensity|alternate_effect)$")
 
 
 class ImageMotionExportRequest(BaseModel):
@@ -725,12 +725,33 @@ def register_image_motion_routes(
         if not job:
             raise HTTPException(status_code=404, detail="动效任务不存在。")
         asset_id = str(job.get("creative_asset_id") or "")
-        plan = dict(workflow.plan(asset_id) or job.get("motion_plan") or {})
-        if request.action == "lower_intensity":
+        plan = dict(job.get("motion_plan") or workflow.plan(asset_id) or {})
+        if request.action == "strengthen_effect":
+            preset = str(plan.get("preset") or "camera")
+            target_label = {
+                "flow": "directional airflow or heat-flow",
+                "steam": "volumetric steam",
+                "liquid": "physically coherent liquid motion",
+                "component": "localized articulated component motion",
+                "glow": "localized functional illumination",
+            }.get(preset, "requested target motion")
+            plan["intensity"] = {"subtle": "standard", "standard": "strong", "strong": "strong"}.get(plan.get("intensity"), "strong")
+            reinforcement = (
+                f"Previous attempt failed motion QA. Keep the same composition and {preset} effect. "
+                f"Make the {target_label} clearly visible, continuous and independently moving throughout the shot. "
+                "Do not substitute camera zoom, global drift, brightness sweep or static line graphics for the requested motion."
+            )
+            existing_instruction = str(plan.get("custom_instruction") or "").strip()
+            plan["custom_instruction"] = (
+                existing_instruction
+                if "Previous attempt failed motion QA" in existing_instruction
+                else f"{existing_instruction} {reinforcement}".strip()
+            )[:1000]
+        elif request.action == "lower_intensity":
             plan["intensity"] = {"strong": "standard", "standard": "subtle", "subtle": "subtle"}.get(plan.get("intensity"), "subtle")
         elif request.action == "alternate_effect":
             current = plan.get("preset") or "camera"
-            choices = ["flow", "steam", "glow", "component", "camera"]
+            choices = ["flow", "steam", "liquid", "glow", "component", "camera"]
             plan["preset"] = choices[(choices.index(current) + 1) % len(choices)] if current in choices else "flow"
         saved_plan = workflow.save_plan(asset_id, plan)
         asset = workflow.asset(asset_id)

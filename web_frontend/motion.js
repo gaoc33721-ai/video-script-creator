@@ -2,6 +2,7 @@ const motionKnownAssets = new Set();
 let motionUploadBatch = { status: "idle", files: [] };
 const motionSubmittingAssets = new Set();
 let motionSubmitBusy = false;
+const motionRetryBusyJobs = new Set();
 const motionSubmissionFallbackKeys = new Map();
 const MOTION_SUBMISSION_TTL_MS = 30 * 60 * 1000;
 
@@ -145,6 +146,20 @@ function motionGenerationLabel(job) {
   return "";
 }
 
+function motionFailureGuidance(job) {
+  const raw = String(job?.qa_result?.message || job?.failure_message || job?.current_step || "").toLowerCase();
+  if (raw.includes("\u72ec\u7acb") || raw.includes("\u76ee\u6807\u52a8\u6548") || raw.includes("global") || raw.includes("\u63a8\u955c") || raw.includes("\u6f02\u79fb")) {
+    return "\u76ee\u6807\u52a8\u6548\u4e0d\u591f\u660e\u786e\uff0c\u6216\u88ab\u6574\u4f53\u63a8\u955c\u4ee3\u66ff\u3002\u5efa\u8bae\u9996\u9009\u201c\u5f3a\u5316\u76ee\u6807\u52a8\u6548\u91cd\u8bd5\u201d\uff0c\u4fdd\u6301\u5f53\u524d\u84b8\u6c7d\u3001\u6c14\u6d41\u6216\u90e8\u4ef6\u7c7b\u578b\u4e0d\u53d8\u3002";
+  }
+  if (raw.includes("\u4fdd\u771f") || raw.includes("\u7ed3\u6784") || raw.includes("\u76f8\u4f3c") || raw.includes("fidelity")) {
+    return "\u4ea7\u54c1\u7ed3\u6784\u6216\u6784\u56fe\u504f\u79bb\u539f\u56fe\u3002\u5efa\u8bae\u4f7f\u7528\u201c\u4fdd\u7559\u6784\u56fe\u91cd\u8bd5\u201d\uff1b\u82e5\u4ecd\u6709\u6f02\u79fb\uff0c\u518d\u9009\u62e9\u201c\u964d\u4f4e\u5f3a\u5ea6\u201d\u3002";
+  }
+  if (raw.includes("\u670d\u52a1") || raw.includes("\u4f9b\u5e94\u5546") || raw.includes("ray 2") || raw.includes("provider")) {
+    return "\u6a21\u578b\u670d\u52a1\u672a\u8fd4\u56de\u53ef\u7528\u7ed3\u679c\u3002\u5efa\u8bae\u4fdd\u6301\u5f53\u524d\u65b9\u6848\u91cd\u8bd5\uff0c\u65e0\u9700\u6539\u53d8\u4e1a\u52a1\u9700\u6c42\u3002";
+  }
+  return "\u672c\u7248\u672c\u672a\u901a\u8fc7\u8d28\u68c0\uff0c\u5df2\u7981\u6b62\u4e0b\u8f7d\u3002\u53ef\u4f18\u5148\u5f3a\u5316\u539f\u76ee\u6807\u52a8\u6548\uff0c\u6216\u6839\u636e\u6784\u56fe\u504f\u79fb\u60c5\u51b5\u964d\u4f4e\u5f3a\u5ea6\u3002";
+}
+
 function motionResultHtml(asset) {
   const versions = jobsForMotionAsset(asset.id);
   const job = activeMotionJob(asset.id);
@@ -159,6 +174,18 @@ function motionResultHtml(asset) {
     .join("");
   const status = job?.current_step || job?.status || "";
   const qa = job?.qa_result?.message || job?.fallback_reason || job?.failure_message || "";
+  const failedRecovery = job?.status === "failed"
+    ? '<div class="motion-recovery">' +
+      '<strong>\u672c\u7248\u672c\u672a\u901a\u8fc7\u8d28\u68c0\uff0c\u4e0d\u4f1a\u4f5c\u4e3a\u6b63\u5f0f\u7ed3\u679c\u4e0b\u8f7d\u3002</strong>' +
+      '<span>' + escapeHtml(motionFailureGuidance(job)) + '</span>' +
+      '<div class="motion-result-actions">' +
+        '<button type="button" data-motion-retry="strengthen_effect" data-job-id="' + escapeAttr(job.id) + '">\u5f3a\u5316\u76ee\u6807\u52a8\u6548\u91cd\u8bd5</button>' +
+        '<button type="button" class="secondary" data-motion-retry="preserve_composition" data-job-id="' + escapeAttr(job.id) + '">\u4fdd\u7559\u6784\u56fe\u91cd\u8bd5</button>' +
+        '<button type="button" class="secondary" data-motion-retry="lower_intensity" data-job-id="' + escapeAttr(job.id) + '">\u964d\u4f4e\u5f3a\u5ea6</button>' +
+        '<button type="button" class="secondary" data-motion-retry="alternate_effect" data-job-id="' + escapeAttr(job.id) + '">\u6362\u4e00\u79cd\u52a8\u6548</button>' +
+      '</div>' +
+    '</div>'
+    : "";
   const video =
     job?.status === "succeeded" && job?.preview_url
       ? `
@@ -174,7 +201,7 @@ function motionResultHtml(asset) {
           <button type="button" class="secondary" data-motion-retry="lower_intensity" data-job-id="${escapeAttr(job.id)}">\u964d\u4f4e\u5f3a\u5ea6</button>
           <button type="button" class="secondary" data-motion-retry="alternate_effect" data-job-id="${escapeAttr(job.id)}">\u6362\u4e00\u79cd\u52a8\u6548</button>
         </div>`
-      : `<div class="message">${escapeHtml(status)}</div>`;
+      : failedRecovery || '<div class="message">' + escapeHtml(status) + "</div>";
   return `
     <div class="motion-result">
       <div class="motion-version-list">${versionButtons}</div>
@@ -455,22 +482,40 @@ async function refreshMotionJobs(silent = true) {
 }
 
 async function regenerateMotionJob(jobId, action) {
-  setMessage("motionMessage", "\u6b63\u5728\u521b\u5efa\u65b0\u7248\u672c...");
+  if (motionRetryBusyJobs.has(jobId)) {
+    setMessage("motionMessage", "\u8be5\u7248\u672c\u6b63\u5728\u521b\u5efa\u91cd\u8bd5\u4efb\u52a1\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002");
+    return;
+  }
+  motionRetryBusyJobs.add(jobId);
+  const buttons = Array.from(document.querySelectorAll('[data-motion-retry][data-job-id="' + jobId + '"]'));
+  buttons.forEach((button) => {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  });
+  setMessage("motionMessage", "\u6b63\u5728\u521b\u5efa\u65b0\u7248\u672c\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb...");
   try {
-    const data = await api(`/api/image-motion/jobs/${encodeURIComponent(jobId)}/regenerate`, {
+    const data = await api("/api/image-motion/jobs/" + encodeURIComponent(jobId) + "/regenerate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action }),
     });
-    state.motionActiveVersions.set(data.job.creative_asset_id, data.job.id);
-    setMessage("motionMessage", `\u5df2\u521b\u5efa\u7248\u672c ${data.job.version}\u3002`, "ok");
+    const newJob = data.job;
+    state.motionActiveVersions.set(newJob.creative_asset_id, newJob.id);
+    state.imageMotionJobs = [newJob, ...state.imageMotionJobs.filter((item) => item.id !== newJob.id)];
+    renderMotionAssets();
+    setMessage("motionMessage", "\u5df2\u521b\u5efa\u7248\u672c " + newJob.version + "\uff0c\u6b63\u5728\u751f\u6210\u5e76\u6267\u884c\u8d28\u68c0\u3002", "ok");
     await loadMotionWorkspace();
     await loadJobs();
   } catch (error) {
     setMessage("motionMessage", error.message, "error");
+  } finally {
+    motionRetryBusyJobs.delete(jobId);
+    buttons.forEach((button) => {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    });
   }
 }
-
 async function exportMotionZip() {
   const jobIds = Array.from(state.motionSelectedJobs);
   if (!jobIds.length) {
@@ -513,7 +558,11 @@ async function showMotionTask(jobId) {
     }
     state.motionActiveVersions.set(job.creative_asset_id, job.id);
     await loadMotionWorkspace();
-    $("motionWorkflow")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const activeCard = document.querySelector('[data-motion-asset-id="' + job.creative_asset_id + '"]');
+    (activeCard || $("motionWorkflow"))?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (job.status === "failed") {
+      setMessage("motionMessage", motionFailureGuidance(job), "error");
+    }
   } catch (error) {
     setMessage("motionMessage", error.message, "error");
   }

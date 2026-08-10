@@ -557,6 +557,15 @@ button,
   font-size: 13px;
 }
 
+.job .message.error {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.45;
+}
+
 .progress {
   height: 7px;
   margin: 8px 0;
@@ -1715,6 +1724,30 @@ button.secondary {
   margin-top: 4px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
+}
+
+.motion-recovery {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(215, 0, 21, 0.22);
+  border-radius: 14px;
+  background: #fff5f5;
+}
+
+.motion-recovery strong {
+  color: #a32720;
+}
+
+.motion-recovery span {
+  color: #6e3c3a;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.motion-result-actions button[aria-busy="true"] {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 .motion-version {

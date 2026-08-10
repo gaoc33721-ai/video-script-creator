@@ -146,9 +146,23 @@ class ImageMotionApiTests(unittest.TestCase):
         self.assertEqual([2, 2], [item["version"] for item in third.json()["jobs"]])
         self.assertEqual([3, 3], [item["version"] for item in fourth.json()["jobs"]])
 
+        failed_job_id = fourth.json()["jobs"][0]["id"]
+        strengthened = self.client.post(
+            f"/api/image-motion/jobs/{failed_job_id}/regenerate",
+            json={"action": "strengthen_effect"},
+        )
+        self.assertEqual(200, strengthened.status_code, strengthened.text)
+        retry_job = strengthened.json()["job"]
+        self.assertEqual(4, retry_job["version"])
+        self.assertEqual(failed_job_id, retry_job["parent_job_id"])
+        self.assertEqual("flow", retry_job["motion_plan"]["preset"])
+        self.assertEqual("standard", retry_job["motion_plan"]["intensity"])
+        self.assertIn("Previous attempt failed motion QA", retry_job["motion_plan"]["custom_instruction"])
+        self.assertIn("Do not substitute camera zoom", retry_job["motion_plan"]["custom_instruction"])
+
         tasks = self.client.get("/api/tasks?task_type=image_motion")
         self.assertEqual(200, tasks.status_code, tasks.text)
-        self.assertEqual(6, len(tasks.json()["tasks"]))
+        self.assertEqual(7, len(tasks.json()["tasks"]))
         self.assertTrue(all(item["task_type"] == "image_motion" for item in tasks.json()["tasks"]))
 
         legacy_jobs = self.client.get("/api/jobs")
