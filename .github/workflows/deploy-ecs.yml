@@ -37,7 +37,7 @@ jobs:
       S3_PREFIX: ${{ vars.S3_PREFIX || 'runtime' }}
       NOVA_REEL_AWS_REGION: ${{ vars.NOVA_REEL_AWS_REGION || 'us-east-1' }}
       NOVA_REEL_MODEL_ID: ${{ vars.NOVA_REEL_MODEL_ID || 'amazon.nova-reel-v1:1' }}
-      NOVA_REEL_OUTPUT_S3_URI: ${{ vars.NOVA_REEL_OUTPUT_S3_URI || 's3://video-script-creator-prod-assets-625093290485/runtime/nova-reel-poc' }}
+      NOVA_REEL_OUTPUT_S3_URI: ${{ vars.NOVA_REEL_OUTPUT_S3_URI || 's3://video-script-creator-prod-video-use1-625093290485/runtime/bedrock-video' }}
       NOVA_REEL_ESTIMATED_USD_PER_SECOND: ${{ vars.NOVA_REEL_ESTIMATED_USD_PER_SECOND || '0.08' }}
       NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK: ${{ vars.NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK || '2' }}
       VIDEO_PROVIDER: ${{ vars.VIDEO_PROVIDER || 'toapis_grok_video_3' }}

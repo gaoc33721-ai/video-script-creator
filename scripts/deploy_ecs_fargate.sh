@@ -670,6 +670,44 @@ json.dump(doc, open(path, "w"))
 PY
 fi
 
+NOVA_REEL_OUTPUT_BUCKET=""
+if [[ "$NOVA_REEL_OUTPUT_S3_URI" == s3://* ]]; then
+  NOVA_REEL_OUTPUT_BUCKET="${NOVA_REEL_OUTPUT_S3_URI#s3://}"
+  NOVA_REEL_OUTPUT_BUCKET="${NOVA_REEL_OUTPUT_BUCKET%%/*}"
+fi
+if [[ -n "$NOVA_REEL_OUTPUT_BUCKET" && "$NOVA_REEL_OUTPUT_BUCKET" != "$S3_BUCKET" && "$NOVA_REEL_OUTPUT_BUCKET" != "$VIDEO_OUTPUT_BUCKET" ]]; then
+  if ! aws s3api head-bucket --bucket "$NOVA_REEL_OUTPUT_BUCKET" >/dev/null 2>&1; then
+    if [[ "$NOVA_REEL_AWS_REGION" == "us-east-1" ]]; then
+      aws s3api create-bucket \
+        --bucket "$NOVA_REEL_OUTPUT_BUCKET" \
+        --region "$NOVA_REEL_AWS_REGION" >/dev/null
+    else
+      aws s3api create-bucket \
+        --bucket "$NOVA_REEL_OUTPUT_BUCKET" \
+        --region "$NOVA_REEL_AWS_REGION" \
+        --create-bucket-configuration LocationConstraint="$NOVA_REEL_AWS_REGION" >/dev/null
+    fi
+  fi
+  python3 - "$POLICY_DOC" "$NOVA_REEL_OUTPUT_BUCKET" <<'PY'
+import json, sys
+path, bucket = sys.argv[1], sys.argv[2]
+doc = json.load(open(path))
+doc["Statement"].extend([
+    {
+        "Effect": "Allow",
+        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+        "Resource": f"arn:aws:s3:::{bucket}/*",
+    },
+    {
+        "Effect": "Allow",
+        "Action": ["s3:ListBucket"],
+        "Resource": f"arn:aws:s3:::{bucket}",
+    },
+])
+json.dump(doc, open(path, "w"))
+PY
+fi
+
 aws iam put-role-policy \
   --role-name "$TASK_ROLE" \
   --policy-name "${APP_NAME}-runtime-policy" \
