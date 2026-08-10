@@ -2,6 +2,41 @@ const motionKnownAssets = new Set();
 let motionUploadBatch = { status: "idle", files: [] };
 const motionSubmittingAssets = new Set();
 let motionSubmitBusy = false;
+const motionSubmissionFallbackKeys = new Map();
+const MOTION_SUBMISSION_TTL_MS = 30 * 60 * 1000;
+
+function motionSubmissionSignature(assetIds) {
+  return Array.from(new Set(assetIds.map(String))).sort().join(",");
+}
+
+function pendingMotionSubmissionKey(assetIds) {
+  const signature = motionSubmissionSignature(assetIds);
+  const storageKey = "image-motion-submit:" + signature;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+    if (saved?.key && Date.now() - Number(saved.createdAt || 0) < MOTION_SUBMISSION_TTL_MS) return saved.key;
+    sessionStorage.removeItem(storageKey);
+  } catch (_) {
+    const saved = motionSubmissionFallbackKeys.get(signature);
+    if (saved?.key && Date.now() - saved.createdAt < MOTION_SUBMISSION_TTL_MS) return saved.key;
+  }
+  const randomPart = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
+  const key = "motion-" + Date.now() + "-" + randomPart;
+  const pending = { key, createdAt: Date.now() };
+  motionSubmissionFallbackKeys.set(signature, pending);
+  try {
+    sessionStorage.setItem(storageKey, JSON.stringify(pending));
+  } catch (_) {}
+  return key;
+}
+
+function clearPendingMotionSubmissionKey(assetIds) {
+  const signature = motionSubmissionSignature(assetIds);
+  motionSubmissionFallbackKeys.delete(signature);
+  try {
+    sessionStorage.removeItem("image-motion-submit:" + signature);
+  } catch (_) {}
+}
 
 function motionUploadFileSummary(files) {
   const names = (files || []).map((item) => (typeof item === "string" ? item : item.name)).filter(Boolean);
@@ -325,6 +360,7 @@ async function submitSelectedMotion(assetIds = null) {
     setMessage("motionMessage", "\u4efb\u52a1\u5df2\u5728\u63d0\u4ea4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002");
     return;
   }
+  const idempotencyKey = pendingMotionSubmissionKey(selected);
   setMotionSubmitState(selected, true);
   setMessage("motionMessage", `\u5df2\u53d7\u7406 ${selected.length} \u6761\u52a8\u6548\u4efb\u52a1\uff0c\u6b63\u5728\u5b89\u5168\u63d0\u4ea4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u2026`);
   await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -338,10 +374,25 @@ async function submitSelectedMotion(assetIds = null) {
     const data = await api("/api/image-motion/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ creative_asset_ids: selected }),
+      body: JSON.stringify({ creative_asset_ids: selected, idempotency_key: idempotencyKey }),
       signal: submitController.signal,
     });
-    setMessage("motionMessage", `\u5df2\u63d0\u4ea4 ${(data.jobs || []).length} \u6761\u4efb\u52a1\uff0c\u91cd\u590d\u70b9\u51fb\u4e0d\u4f1a\u91cd\u590d\u6263\u8d39\u3002`, "ok");
+    const returnedJobs = data.jobs || [];
+    clearPendingMotionSubmissionKey(selected);
+    const returnedIds = new Set(returnedJobs.map((job) => job.id));
+    state.imageMotionJobs = [...returnedJobs, ...state.imageMotionJobs.filter((job) => !returnedIds.has(job.id))];
+    returnedJobs.forEach((job) => {
+      if (job.creative_asset_id) state.motionActiveVersions.set(job.creative_asset_id, job.id);
+    });
+    renderMotionAssets();
+    const reusedCount = returnedJobs.filter((job) => job.idempotent_reuse).length;
+    setMessage(
+      "motionMessage",
+      reusedCount
+        ? "\u5df2\u6062\u590d " + reusedCount + " \u6761\u4e0a\u6b21\u63d0\u4ea4\u7684\u4efb\u52a1\uff0c\u672a\u91cd\u590d\u521b\u5efa\u6216\u6263\u8d39\u3002"
+        : "\u5df2\u521b\u5efa " + returnedJobs.length + " \u6761\u65b0\u4efb\u52a1\uff0c\u53ef\u5728\u5f53\u524d\u7d20\u6750\u548c\u4efb\u52a1\u4e2d\u5fc3\u67e5\u770b\u8fdb\u5ea6\u3002",
+      "ok"
+    );
     await loadMotionWorkspace();
     await loadJobs();
   } catch (error) {

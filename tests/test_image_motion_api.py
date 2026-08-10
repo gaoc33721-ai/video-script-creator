@@ -120,9 +120,35 @@ class ImageMotionApiTests(unittest.TestCase):
         )
         self.assertTrue(all(item["idempotent_reuse"] for item in second.json()["jobs"]))
 
+        explicit_click = {**payload, "idempotency_key": "explicit-click-1"}
+        third = self.client.post("/api/image-motion/jobs", json=explicit_click)
+        third_replay = self.client.post("/api/image-motion/jobs", json=explicit_click)
+        fourth = self.client.post(
+            "/api/image-motion/jobs",
+            json={**payload, "idempotency_key": "explicit-click-2"},
+        )
+        self.assertEqual(200, third.status_code, third.text)
+        self.assertEqual(200, third_replay.status_code, third_replay.text)
+        self.assertEqual(200, fourth.status_code, fourth.text)
+        self.assertNotEqual(
+            [item["id"] for item in first.json()["jobs"]],
+            [item["id"] for item in third.json()["jobs"]],
+        )
+        self.assertEqual(
+            [item["id"] for item in third.json()["jobs"]],
+            [item["id"] for item in third_replay.json()["jobs"]],
+        )
+        self.assertTrue(all(item["idempotent_reuse"] for item in third_replay.json()["jobs"]))
+        self.assertNotEqual(
+            [item["id"] for item in third.json()["jobs"]],
+            [item["id"] for item in fourth.json()["jobs"]],
+        )
+        self.assertEqual([2, 2], [item["version"] for item in third.json()["jobs"]])
+        self.assertEqual([3, 3], [item["version"] for item in fourth.json()["jobs"]])
+
         tasks = self.client.get("/api/tasks?task_type=image_motion")
         self.assertEqual(200, tasks.status_code, tasks.text)
-        self.assertEqual(2, len(tasks.json()["tasks"]))
+        self.assertEqual(6, len(tasks.json()["tasks"]))
         self.assertTrue(all(item["task_type"] == "image_motion" for item in tasks.json()["tasks"]))
 
         legacy_jobs = self.client.get("/api/jobs")
