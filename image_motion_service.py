@@ -325,6 +325,44 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
     intensity = str(plan.get("intensity") or "standard")
     direction = str(plan.get("direction") or (asset.get("analysis") or {}).get("recommended_direction") or "gentle forward motion")
     custom = str(plan.get("custom_instruction") or "").strip()
+    if preset == "steam":
+        lowered_feature = feature.lower()
+        dual_zone = any(token in lowered_feature for token in ("dual cooking", "cooking zone", "dual zone", "two zone", "2 zone"))
+        steam_action = (
+            "Natural steam must emerge independently from the hot food surfaces in both visible cooking baskets, with non-identical timing and shapes in the left and right zones."
+            if dual_zone
+            else "Natural steam must emerge from the visible hot food surface or real appliance vent shown in the source image."
+        )
+        prompt = (
+            "Create one continuous five-second premium e-commerce product demonstration based strictly on the supplied source image. "
+            f"Product lock: exactly one Hisense {category}, model {model or 'as shown in the source'}, and no other appliance. "
+            "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
+            f"Required volumetric steam motion: {steam_action} Selling point: {feature}. Direction note: {direction}. Intensity: {intensity}. "
+            "Render translucent, semi-transparent vapor with layered density, fine wisps and broader soft plumes, buoyant upward drift, irregular turbulent curls, and natural expansion and dissipation. "
+            "The steam shape, position and opacity must evolve continuously frame by frame and feel lively, warm and appetizing without hiding the product. "
+            "No drawn white lines, vector curves, ribbons, outline strokes, repeated sine waves, sticker overlays, flat glow sweeps or artificial smoke-machine clouds. "
+            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            "Keep the appliance shell, baskets, food, control panel, labels, logo and background stationary and structurally unchanged. "
+            "Do not add people, hands, rooms, extra products, text or logos. Lighting stays bright, positive, clean and consistent. "
+        )
+        if custom:
+            prompt += f"Creator instruction: {custom}."
+        return prompt.strip()[:3000]
+    if preset == "liquid":
+        prompt = (
+            "Create one continuous five-second premium e-commerce product demonstration based strictly on the supplied source image. "
+            f"Product lock: exactly one Hisense {category}, model {model or 'as shown in the source'}, and no other appliance. "
+            "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
+            f"Required physically coherent liquid motion: animate liquid only from a visible real source and along a plausible path in the product scene. Selling point: {feature}. Direction note: {direction}. Intensity: {intensity}. "
+            "Show changing surface ripples, glossy refraction, small droplets and restrained splashes with continuous gravity-driven movement and natural variation frame by frame. "
+            "No blue lines, vector ribbons, flat mask wipes, glow sweeps, sticker overlays or repeated identical streams. "
+            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            "Keep the appliance structure, control panel, labels, logo and background stationary and unchanged. Do not add people, hands, rooms, extra products, text or logos. "
+            "Lighting stays bright, clean, positive and consistent. "
+        )
+        if custom:
+            prompt += f"Creator instruction: {custom}."
+        return prompt.strip()[:3000]
     if preset == "flow":
         lowered_feature = feature.lower()
         dual_zone = any(token in lowered_feature for token in ("dual cooking", "cooking zone", "dual zone", "two zone", "2 zone"))
@@ -407,7 +445,7 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds": duration,
         "fps": 24,
         "quality": "1080p",
-        "camera_motion": "locked" if normalized_preset in {"component", "flow"} else "gentle_push_in",
+        "camera_motion": "locked" if normalized_preset in {"component", "flow", "steam", "liquid"} else "gentle_push_in",
     }
 
 

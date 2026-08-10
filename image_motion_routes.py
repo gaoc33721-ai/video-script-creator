@@ -35,8 +35,7 @@ from image_motion_service import (
 CREATIVE_ASSETS_KEY = "creative_assets.json"
 MOTION_PLANS_KEY = "motion_plans.json"
 IMAGE_MOTION_JOBS_KEY = "image_motion_jobs.json"
-GENERATIVE_PRESETS = {"steam", "liquid"}
-RAY2_PRESETS = {"component", "flow"}
+RAY2_PRESETS = {"component", "flow", "steam", "liquid"}
 CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 MAX_FILE_BYTES = 20 * 1024 * 1024
 
@@ -427,7 +426,7 @@ class ImageMotionWorkflow:
             use_provider = (
                 self.generative_enabled
                 and plan["text_policy"] == "visual_only"
-                and (is_ray2 or preset in GENERATIVE_PRESETS)
+                and is_ray2
                 and provider_submit is not None
                 and provider_poll is not None
             )
@@ -500,6 +499,8 @@ class ImageMotionWorkflow:
             preset = plan["preset"] if plan["preset"] != "auto" else recommended
             is_component = preset == "component"
             is_flow = preset == "flow"
+            is_steam = preset == "steam"
+            is_liquid = preset == "liquid"
             is_ray2 = job.get("provider_name") == "luma_ray2" or preset in RAY2_PRESETS
             provider_poll = self.component_provider_poll if is_ray2 else self.provider_poll
             try:
@@ -525,16 +526,22 @@ class ImageMotionWorkflow:
                     ),
                 )
                 qa = assess_video_fidelity(prepared, normalized)
-                if is_component or is_flow:
+                if is_component or is_flow or is_steam or is_liquid:
                     motion_region = ((asset or {}).get("analysis") or {}).get("motion_region")
                     if is_flow and not motion_region:
                         motion_region = {"x": 0.08, "y": 0.24, "width": 0.84, "height": 0.70}
-                    motion_label = "\u70ed\u6d41" if is_flow else "\u90e8\u4ef6"
+                    if is_steam and not motion_region:
+                        motion_region = {"x": 0.08, "y": 0.10, "width": 0.84, "height": 0.72}
+                    if is_liquid and not motion_region:
+                        motion_region = {"x": 0.08, "y": 0.22, "width": 0.84, "height": 0.68}
+                    motion_label = "\u70ed\u6d41" if is_flow else "\u84b8\u6c7d" if is_steam else "\u6db2\u4f53" if is_liquid else "\u90e8\u4ef6"
+                    motion_qa_key = "flow_motion" if is_flow else "steam_motion" if is_steam else "liquid_motion" if is_liquid else "component_motion"
+                    minimum_coverage = 0.22 if is_flow else 0.12 if is_steam else 0.14 if is_liquid else 0.0
                     motion_qa = assess_component_motion(
                         normalized,
                         target_region=motion_region,
                         motion_name=motion_label,
-                        minimum_motion_coverage=0.22 if is_flow else 0.0,
+                        minimum_motion_coverage=minimum_coverage,
                     )
                     passed = qa.get("status") == "passed" and motion_qa.get("status") == "passed"
                     qa = {
@@ -542,12 +549,15 @@ class ImageMotionWorkflow:
                         "score": min(int(qa.get("score") or 0), int(motion_qa.get("score") or 0)),
                         "message": motion_qa.get("message") if qa.get("status") == "passed" else qa.get("message"),
                         "fidelity": qa,
-                        "flow_motion" if is_flow else "component_motion": motion_qa,
+                        motion_qa_key: motion_qa,
                     }
                     if not passed:
                         self.fail_job(job["id"], f"{motion_label}\u52a8\u6548\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{qa.get('message')}", qa_result=qa)
                         continue
                 if qa.get("status") != "passed":
+                    if is_ray2:
+                        self.fail_job(job["id"], f"Ray 2 \u4fdd\u771f\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{qa.get('message')}", qa_result=qa)
+                        continue
                     self.render_fallback(job["id"], reason=f"AI 保真检查未通过，已自动降级：{qa.get('message')}")
                     continue
                 video_key = f"image-motion/videos/{job['id']}_v{job.get('version', 1)}.mp4"

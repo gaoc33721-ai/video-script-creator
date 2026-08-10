@@ -103,7 +103,10 @@ function activeMotionJob(assetId) {
 function motionGenerationLabel(job) {
   if (job?.generation_mode === "luma_ray2_flow") return "\u00b7 Ray2 \u6c14\u6d41\u751f\u6210";
   if (job?.generation_mode === "luma_ray2_component") return "\u00b7 Ray2 \u90e8\u4ef6\u751f\u6210";
+  if (job?.generation_mode === "luma_ray2_steam") return "\u00b7 Ray2 \u4f53\u79ef\u84b8\u6c7d";
+  if (job?.generation_mode === "luma_ray2_liquid") return "\u00b7 Ray2 \u6db2\u4f53\u751f\u6210";
   if (job?.generation_mode === "stable_flow_overlay") return "\u00b7 \u65e7\u7248\u626b\u5149\u5408\u6210";
+  if (job?.generation_mode === "stable_template") return "\u00b7 \u65e7\u7248\u7ebf\u6761\u6a21\u677f";
   return "";
 }
 

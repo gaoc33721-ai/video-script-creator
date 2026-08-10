@@ -68,29 +68,29 @@ def component_job(status="queued"):
         },
     }
 
-def flow_asset():
+def natural_asset(preset="flow"):
     return {
-        "id": "asset-flow",
+        "id": f"asset-{preset}",
         "category": "Airfryer",
         "model": "HAFA11BDW",
         "feature": "Dual Cooking Zone",
-        "original_key": "creative-assets/asset-flow/original.png",
+        "original_key": f"creative-assets/asset-{preset}/original.png",
         "analysis": {
             "ready": True,
-            "recommended_preset": "flow",
+            "recommended_preset": preset,
             "visual_crop": {"x": 0, "y": 0, "width": 1, "height": 1},
         },
     }
 
 
-def flow_job(status="queued"):
+def natural_job(status="queued", preset="flow"):
     return {
-        "id": "job-flow",
-        "creative_asset_id": "asset-flow",
+        "id": f"job-{preset}",
+        "creative_asset_id": f"asset-{preset}",
         "version": 1,
         "status": status,
         "motion_plan": {
-            "preset": "flow",
+            "preset": preset,
             "text_policy": "visual_only",
             "focus": "effect",
             "intensity": "standard",
@@ -104,10 +104,11 @@ def flow_job(status="queued"):
 class ImageMotionRoutingTests(unittest.TestCase):
     def workflow(self, component_submit, component_poll, preset="component"):
         storage = MemoryStorage()
-        asset = flow_asset() if preset == "flow" else component_asset()
+        is_natural = preset in {"flow", "steam", "liquid"}
+        asset = natural_asset(preset) if is_natural else component_asset()
         storage.json[CREATIVE_ASSETS_KEY] = [asset]
-        storage.json[IMAGE_MOTION_JOBS_KEY] = [flow_job() if preset == "flow" else component_job()]
-        storage.files[asset["original_key"]] = png_bytes((690, 388)) if preset == "flow" else png_bytes()
+        storage.json[IMAGE_MOTION_JOBS_KEY] = [natural_job(preset=preset) if is_natural else component_job()]
+        storage.files[asset["original_key"]] = png_bytes((690, 388)) if is_natural else png_bytes()
         workflow = ImageMotionWorkflow(
             storage,
             lambda: [],
@@ -171,6 +172,51 @@ class ImageMotionRoutingTests(unittest.TestCase):
         self.assertEqual((1920, 1080), (job["prepared_metadata"]["export_width"], job["prepared_metadata"]["export_height"]))
 
 
+    def test_steam_and_liquid_jobs_use_ray2_with_natural_motion_prompts(self):
+        expected_prompt = {
+            "steam": "No drawn white lines",
+            "liquid": "No blue lines, vector ribbons",
+        }
+        for preset, required_text in expected_prompt.items():
+            with self.subTest(preset=preset):
+                submitted = {}
+
+                def submit(**kwargs):
+                    submitted.update(kwargs)
+                    return {"task_id": f"ray-{preset}-1", "provider": "luma_ray2"}
+
+                workflow, storage = self.workflow(
+                    submit,
+                    lambda task_id: {"status": "processing"},
+                    preset=preset,
+                )
+                workflow.run_job(f"job-{preset}")
+
+                job = storage.json[IMAGE_MOTION_JOBS_KEY][0]
+                self.assertEqual("processing", job["status"])
+                self.assertEqual(f"luma_ray2_{preset}", job["generation_mode"])
+                self.assertEqual("luma_ray2", job["provider_name"])
+                self.assertIn(required_text, submitted["prompt"])
+                self.assertIn("absolutely no zoom", submitted["prompt"])
+
+    def test_steam_and_liquid_submit_failures_are_not_downgraded(self):
+        for preset in ("steam", "liquid"):
+            with self.subTest(preset=preset):
+                def submit(**kwargs):
+                    raise RuntimeError("Ray 2 unavailable")
+
+                workflow, storage = self.workflow(
+                    submit,
+                    lambda task_id: {"status": "processing"},
+                    preset=preset,
+                )
+                workflow.run_job(f"job-{preset}")
+
+                job = storage.json[IMAGE_MOTION_JOBS_KEY][0]
+                self.assertEqual("failed", job["status"])
+                self.assertEqual("failed", job["qa_status"])
+                self.assertNotIn("video_key", job)
+
     def test_flow_submit_failure_is_not_downgraded(self):
         def submit(**kwargs):
             raise RuntimeError("Ray 2 unavailable")
@@ -192,8 +238,8 @@ class ImageMotionRoutingTests(unittest.TestCase):
             lambda task_id: {"status": "processing"},
             preset="flow",
         )
-        asset = flow_asset()
-        plan = flow_job()["motion_plan"]
+        asset = natural_asset()
+        plan = natural_job()["motion_plan"]
         first, first_reused = workflow.create_job(asset, plan, "same-click-key")
         workflow.update_job(first["id"], status="failed")
 

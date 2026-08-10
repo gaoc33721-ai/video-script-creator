@@ -81,6 +81,41 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertIn("not be a static glow, horizontal highlight sweep", prompt)
         self.assertIn("absolutely no zoom", prompt)
 
+    def test_steam_prompt_requires_volumetric_vapor_and_rejects_drawn_lines(self):
+        asset = {
+            "category": "Airfryer",
+            "model": "HAFA11BDW",
+            "feature": "Dual Cooking Zone",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {"preset": "steam", "focus": "effect", "intensity": "standard", "direction": "rising from hot food"}
+        )
+        prompt = build_motion_prompt(asset, plan)
+        self.assertEqual("locked", plan["camera_motion"])
+        self.assertIn("Required volumetric steam motion", prompt)
+        self.assertIn("both visible cooking baskets", prompt)
+        self.assertIn("irregular turbulent curls", prompt)
+        self.assertIn("No drawn white lines", prompt)
+        self.assertIn("absolutely no zoom", prompt)
+
+    def test_liquid_prompt_requires_physical_flow_and_rejects_vector_ribbons(self):
+        asset = {
+            "category": "Dishwasher",
+            "model": "DW-01",
+            "feature": "Fresh Water Rinse",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {"preset": "liquid", "focus": "effect", "intensity": "standard", "direction": "downward rinse"}
+        )
+        prompt = build_motion_prompt(asset, plan)
+        self.assertEqual("locked", plan["camera_motion"])
+        self.assertIn("physically coherent liquid motion", prompt)
+        self.assertIn("surface ripples", prompt)
+        self.assertIn("No blue lines, vector ribbons", prompt)
+        self.assertIn("absolutely no zoom", prompt)
+
     def test_airfryer_category_name_does_not_force_touch_panel_into_flow(self):
         result = analyze_creative_image(
             image_bytes(Image.new("RGB", (800, 800), (30, 40, 50))),
