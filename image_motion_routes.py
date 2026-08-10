@@ -56,7 +56,7 @@ class ImageMotionSubmitRequest(BaseModel):
 
 
 class ImageMotionRegenerateRequest(BaseModel):
-    action: str = Field(default="preserve_composition", pattern="^(preserve_composition|strengthen_effect|lower_intensity|alternate_effect)$")
+    action: str = Field(default="preserve_composition", pattern="^(preserve_composition|strengthen_effect|lower_intensity|alternate_effect|compare_model)$")
 
 
 class ImageMotionExportRequest(BaseModel):
@@ -73,6 +73,8 @@ class ImageMotionWorkflow:
         provider_poll: Callable[[str], dict] | None = None,
         component_provider_submit: Callable[..., dict] | None = None,
         component_provider_poll: Callable[[str], dict] | None = None,
+        comparison_provider_submit: Callable[..., dict] | None = None,
+        comparison_provider_poll: Callable[[str], dict] | None = None,
     ):
         self.storage = storage
         self.script_tasks_loader = script_tasks_loader
@@ -80,6 +82,8 @@ class ImageMotionWorkflow:
         self.provider_poll = provider_poll
         self.component_provider_submit = component_provider_submit
         self.component_provider_poll = component_provider_poll
+        self.comparison_provider_submit = comparison_provider_submit
+        self.comparison_provider_poll = comparison_provider_poll
         self.lock = threading.Lock()
         self.enabled = os.getenv("IMAGE_MOTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
         self.generative_enabled = os.getenv("IMAGE_MOTION_GENERATIVE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -354,19 +358,19 @@ class ImageMotionWorkflow:
         if not job or not asset:
             raise RuntimeError("动效任务关联的素材不存在。")
         plan = validate_motion_plan(job.get("motion_plan") or {})
+        analysis = asset.get("analysis") or {}
         source_bytes = self.storage.read_file_bytes(self.working_image_key(asset))
-        prepared, prepared_meta = prepare_motion_source(
-            source_bytes,
-            asset.get("analysis") or {},
-            ratio=plan["aspect_ratio"],
-            text_policy=plan["text_policy"],
-            quality=plan["quality"],
-        )
+        prepared, prepared_meta = prepare_motion_source(source_bytes, analysis, ratio=plan["aspect_ratio"], text_policy=plan["text_policy"], quality=plan["quality"])
         prepared_key = f"image-motion/prepared/{job_id}.png"
         self.storage.write_file_bytes(prepared_key, prepared, content_type="image/png")
-        preset = plan["preset"]
-        if preset == "auto":
-            preset = str((asset.get("analysis") or {}).get("recommended_preset") or "camera")
+        preset = plan["preset"] if plan["preset"] != "auto" else str(analysis.get("recommended_preset") or "camera")
+        motion_region = analysis.get("motion_region")
+        if preset == "flow" and not motion_region:
+            motion_region = {"x": 0.08, "y": 0.24, "width": 0.84, "height": 0.62}
+        if preset == "steam" and not motion_region:
+            motion_region = {"x": 0.08, "y": 0.14, "width": 0.84, "height": 0.62}
+        if preset == "liquid" and not motion_region:
+            motion_region = {"x": 0.08, "y": 0.22, "width": 0.84, "height": 0.68}
         video = render_stable_motion_video(
             prepared,
             preset=preset,
@@ -374,19 +378,31 @@ class ImageMotionWorkflow:
             text_policy=plan["text_policy"],
             duration_seconds=5,
             fps=24,
-            protected_regions=(asset.get("analysis") or {}).get("protected_regions") or [],
+            protected_regions=analysis.get("protected_regions") or [],
+            effect_region=motion_region,
             metadata={"AssetId": asset["id"], "JobId": job_id, "Version": job.get("version")},
         )
-        motion_qa = None
-        if preset == "flow":
-            motion_qa = assess_component_motion(
-                video,
-                target_region={"x": 0.10, "y": 0.16, "width": 0.80, "height": 0.72},
-                motion_name="\u70ed\u6d41",
-            )
-            if motion_qa.get("status") != "passed":
-                self.fail_job(job_id, f"\u70ed\u6d41\u52a8\u6548\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{motion_qa.get('message')}", qa_result=motion_qa)
+        fidelity_qa = assess_video_fidelity(prepared, video, allowed_motion_region=motion_region)
+        qa_result = fidelity_qa
+        if preset in {"flow", "steam", "liquid"}:
+            motion_label = "热流" if preset == "flow" else "蒸汽" if preset == "steam" else "液体"
+            motion_key = "flow_motion" if preset == "flow" else "steam_motion" if preset == "steam" else "liquid_motion"
+            minimum_coverage = 0.10 if preset == "flow" else 0.06 if preset == "steam" else 0.08
+            motion_qa = assess_component_motion(video, target_region=motion_region, motion_name=motion_label, minimum_motion_coverage=minimum_coverage)
+            passed = fidelity_qa.get("status") == "passed" and motion_qa.get("status") == "passed"
+            qa_result = {
+                "status": "passed" if passed else "failed",
+                "score": min(int(fidelity_qa.get("score") or 0), int(motion_qa.get("score") or 0)),
+                "message": motion_qa.get("message") if fidelity_qa.get("status") == "passed" else fidelity_qa.get("message"),
+                "fidelity": fidelity_qa,
+                motion_key: motion_qa,
+            }
+            if not passed:
+                self.fail_job(job_id, f"{motion_label}局部合成质检未通过：{qa_result.get('message')}", qa_result=qa_result)
                 return
+        elif fidelity_qa.get("status") == "failed":
+            self.fail_job(job_id, f"局部合成保真质检未通过：{fidelity_qa.get('message')}", qa_result=fidelity_qa)
+            return
         video_key = f"image-motion/videos/{job_id}_v{job.get('version', 1)}.mp4"
         self.storage.write_file_bytes(video_key, video, content_type="video/mp4")
         self.update_job(
@@ -395,15 +411,14 @@ class ImageMotionWorkflow:
             progress=100,
             current_step="生成完成",
             completed_at=self.now(),
-            generation_mode="stable_flow_overlay" if preset == "flow" else "stable_template",
+            generation_mode=f"fidelity_composite_{preset}",
             fallback_reason=reason,
             prepared_image_key=prepared_key,
             prepared_metadata=prepared_meta,
             video_key=video_key,
             qa_status="passed",
-            qa_result={"status": "passed", "score": 100, "message": "原图像素合成模板已通过保真检查。"},
+            qa_result=qa_result,
         )
-
     def run_job(self, job_id: str) -> None:
         preset = ""
         try:
@@ -416,23 +431,27 @@ class ImageMotionWorkflow:
                 raise RuntimeError("素材未通过生成前检查。")
             plan = validate_motion_plan(job.get("motion_plan") or {})
             preset = plan["preset"] if plan["preset"] != "auto" else analysis.get("recommended_preset") or "camera"
-            is_component = preset == "component"
-            is_ray2 = preset in RAY2_PRESETS
-            if is_ray2 and plan["text_policy"] != "visual_only":
-                raise RuntimeError("\u751f\u6210\u5f0f\u76ee\u6807\u52a8\u6548\u6682\u4e0d\u652f\u6301\u201c\u4fdd\u7559\u6807\u9898\u4e0eLogo\u201d\uff1b\u8bf7\u4f7f\u7528\u7eaf\u753b\u9762\u52a8\u6548\u4ee5\u907f\u514d\u6a21\u578b\u91cd\u753b\u54c1\u724c\u6587\u5b57\u3002")
+            is_target_motion = preset in RAY2_PRESETS
+            if is_target_motion and plan.get("generation_strategy") == "hybrid_composite":
+                self.update_job(job_id, progress=34, current_step="正在合成局部真实动效并锁定原图像素")
+                self.render_fallback(job_id, reason="原图冻结的局部体积特效合成")
+                return
+            if is_target_motion and plan["text_policy"] != "visual_only":
+                raise RuntimeError("生成式目标动效暂不支持“保留标题与Logo”；请使用纯画面动效或局部保真合成。")
 
-            provider_submit = self.component_provider_submit if is_ray2 else self.provider_submit
-            provider_poll = self.component_provider_poll if is_ray2 else self.provider_poll
-            use_provider = (
-                self.generative_enabled
-                and plan["text_policy"] == "visual_only"
-                and is_ray2
-                and provider_submit is not None
-                and provider_poll is not None
-            )
+            requested_provider = str(plan.get("provider_preference") or "luma_ray2")
+            if requested_provider == "nova_reel":
+                provider_submit = self.comparison_provider_submit
+                provider_poll = self.comparison_provider_poll
+                provider_name = "nova_reel"
+            else:
+                provider_submit = self.component_provider_submit if is_target_motion else self.provider_submit
+                provider_poll = self.component_provider_poll if is_target_motion else self.provider_poll
+                provider_name = "luma_ray2" if is_target_motion else "default"
+            use_provider = self.generative_enabled and plan["text_policy"] == "visual_only" and is_target_motion and provider_submit is not None and provider_poll is not None
             if not use_provider:
-                if is_ray2:
-                    raise RuntimeError("Bedrock Luma Ray 2 \u76ee\u6807\u52a8\u6548\u8def\u5f84\u4e0d\u53ef\u7528\uff0c\u4efb\u52a1\u672a\u964d\u7ea7\u4e3a\u626b\u5149\u6216\u63a8\u955c\u6a21\u677f\u3002")
+                if is_target_motion:
+                    raise RuntimeError(f"Bedrock {provider_name} 目标动效路径不可用，任务未降级为低质量线条或扫光模板。")
                 self.render_fallback(job_id)
                 return
 
@@ -440,17 +459,12 @@ class ImageMotionWorkflow:
             prepared, prepared_meta = prepare_motion_source(
                 source_bytes,
                 analysis,
-                ratio=plan["aspect_ratio"],
+                ratio="16:9" if provider_name == "nova_reel" else plan["aspect_ratio"],
                 text_policy=plan["text_policy"],
-                quality="720p" if is_ray2 else plan["quality"],
-                max_dimension=1552 if is_ray2 else None,
+                quality="720p",
+                max_dimension=1552,
             )
-            export_width, export_height = output_dimensions(
-                prepared_meta["aspect_ratio"],
-                plan["quality"],
-                prepared_meta["width"],
-                prepared_meta["height"],
-            )
+            export_width, export_height = output_dimensions(prepared_meta["aspect_ratio"], plan["quality"], prepared_meta["width"], prepared_meta["height"])
             prepared_meta["export_width"] = export_width
             prepared_meta["export_height"] = export_height
             prepared_key = f"image-motion/prepared/{job_id}.png"
@@ -461,14 +475,15 @@ class ImageMotionWorkflow:
                 prompt=prompt,
                 aspect_ratio=prepared_meta["provider_aspect_ratio"],
                 client_business_id=f"image_motion_{job_id}",
+                lock_end_frame=provider_name == "luma_ray2" and preset in {"flow", "steam", "liquid"},
             )
             self.update_job(
                 job_id,
                 status="processing",
                 progress=42,
-                current_step="生成式自然动效处理中",
-                generation_mode=f"luma_ray2_{preset}" if is_ray2 else "generative_video",
-                provider_name="luma_ray2" if is_ray2 else str(provider_result.get("provider") or "default"),
+                current_step=f"{provider_name} 生成式自然动效处理中",
+                generation_mode=f"{provider_name}_{preset}",
+                provider_name=provider_name,
                 prepared_image_key=prepared_key,
                 prepared_metadata=prepared_meta,
                 external_task_id=provider_result["task_id"],
@@ -481,15 +496,7 @@ class ImageMotionWorkflow:
             try:
                 self.render_fallback(job_id, reason=f"生成式路径不可用，已自动降级：{exc}")
             except Exception as fallback_exc:
-                self.update_job(
-                    job_id,
-                    status="failed",
-                    progress=100,
-                    current_step="生成失败",
-                    completed_at=self.now(),
-                    qa_status="failed",
-                    failure_message=str(fallback_exc),
-                )
+                self.update_job(job_id, status="failed", progress=100, current_step="生成失败", completed_at=self.now(), qa_status="failed", failure_message=str(fallback_exc))
     def refresh_provider_jobs(self) -> list[dict]:
         active = [item for item in self.jobs() if item.get("status") == "processing" and item.get("external_task_id")]
         for job in active:
@@ -501,20 +508,21 @@ class ImageMotionWorkflow:
             is_flow = preset == "flow"
             is_steam = preset == "steam"
             is_liquid = preset == "liquid"
-            is_ray2 = job.get("provider_name") == "luma_ray2" or preset in RAY2_PRESETS
-            provider_poll = self.component_provider_poll if is_ray2 else self.provider_poll
+            provider_name = str(job.get("provider_name") or "luma_ray2")
+            is_target_provider = provider_name in {"luma_ray2", "nova_reel"} or preset in RAY2_PRESETS
+            provider_poll = self.comparison_provider_poll if provider_name == "nova_reel" else self.component_provider_poll if is_target_provider else self.provider_poll
             try:
                 result = provider_poll(str(job["external_task_id"])) if provider_poll else {"status": "failed"}
                 if result.get("status") == "processing":
-                    self.update_job(job["id"], progress=65, current_step="供应商生成中")
+                    self.update_job(job["id"], progress=65, current_step=f"{provider_name} 供应商生成中")
                     continue
-                if is_ray2 and (result.get("status") != "succeeded" or not result.get("video_bytes")):
-                    self.fail_job(job["id"], f"Ray 2 \u76ee\u6807\u52a8\u6548\u751f\u6210\u5931\u8d25\uff1a{result.get('message') or 'no video returned'}")
+                if is_target_provider and (result.get("status") != "succeeded" or not result.get("video_bytes")):
+                    self.fail_job(job["id"], f"{provider_name} 目标动效生成失败：{result.get('message') or 'no video returned'}")
                     continue
-
                 if result.get("status") != "succeeded" or not result.get("video_bytes"):
                     self.render_fallback(job["id"], reason=f"供应商失败，已自动降级：{result.get('message') or '未返回视频'}")
                     continue
+
                 prepared = self.storage.read_file_bytes(job["prepared_image_key"])
                 normalized = normalize_generated_video(
                     result["video_bytes"],
@@ -525,62 +533,52 @@ class ImageMotionWorkflow:
                         int(job["prepared_metadata"].get("export_height") or job["prepared_metadata"]["height"]),
                     ),
                 )
-                qa = assess_video_fidelity(prepared, normalized)
+                motion_region = ((asset or {}).get("analysis") or {}).get("motion_region")
+                if is_component and not motion_region:
+                    motion_region = {"x": 0.15, "y": 0.28, "width": 0.70, "height": 0.62}
+                if is_flow and not motion_region:
+                    motion_region = {"x": 0.08, "y": 0.24, "width": 0.84, "height": 0.62}
+                if is_steam and not motion_region:
+                    motion_region = {"x": 0.08, "y": 0.14, "width": 0.84, "height": 0.62}
+                if is_liquid and not motion_region:
+                    motion_region = {"x": 0.08, "y": 0.22, "width": 0.84, "height": 0.68}
+                qa = assess_video_fidelity(prepared, normalized, allowed_motion_region=motion_region)
                 if is_component or is_flow or is_steam or is_liquid:
-                    motion_region = ((asset or {}).get("analysis") or {}).get("motion_region")
-                    if is_flow and not motion_region:
-                        motion_region = {"x": 0.08, "y": 0.24, "width": 0.84, "height": 0.70}
-                    if is_steam and not motion_region:
-                        motion_region = {"x": 0.08, "y": 0.10, "width": 0.84, "height": 0.72}
-                    if is_liquid and not motion_region:
-                        motion_region = {"x": 0.08, "y": 0.22, "width": 0.84, "height": 0.68}
-                    motion_label = "\u70ed\u6d41" if is_flow else "\u84b8\u6c7d" if is_steam else "\u6db2\u4f53" if is_liquid else "\u90e8\u4ef6"
+                    motion_label = "热流" if is_flow else "蒸汽" if is_steam else "液体" if is_liquid else "部件"
                     motion_qa_key = "flow_motion" if is_flow else "steam_motion" if is_steam else "liquid_motion" if is_liquid else "component_motion"
                     minimum_coverage = 0.22 if is_flow else 0.12 if is_steam else 0.14 if is_liquid else 0.0
-                    motion_qa = assess_component_motion(
-                        normalized,
-                        target_region=motion_region,
-                        motion_name=motion_label,
-                        minimum_motion_coverage=minimum_coverage,
-                    )
-                    passed = qa.get("status") == "passed" and motion_qa.get("status") == "passed"
+                    motion_qa = assess_component_motion(normalized, target_region=motion_region, motion_name=motion_label, minimum_motion_coverage=minimum_coverage)
+                    fidelity_qa = qa
+                    passed = fidelity_qa.get("status") == "passed" and motion_qa.get("status") == "passed"
                     qa = {
                         "status": "passed" if passed else "failed",
-                        "score": min(int(qa.get("score") or 0), int(motion_qa.get("score") or 0)),
-                        "message": motion_qa.get("message") if qa.get("status") == "passed" else qa.get("message"),
-                        "fidelity": qa,
+                        "score": min(int(fidelity_qa.get("score") or 0), int(motion_qa.get("score") or 0)),
+                        "message": motion_qa.get("message") if fidelity_qa.get("status") == "passed" else fidelity_qa.get("message"),
+                        "fidelity": fidelity_qa,
                         motion_qa_key: motion_qa,
                     }
                     if not passed:
-                        self.fail_job(job["id"], f"{motion_label}\u52a8\u6548\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{qa.get('message')}", qa_result=qa)
+                        self.fail_job(job["id"], f"{motion_label}动效质检未通过：{qa.get('message')}", qa_result=qa)
                         continue
                 if qa.get("status") != "passed":
-                    if is_ray2:
-                        self.fail_job(job["id"], f"Ray 2 \u4fdd\u771f\u8d28\u68c0\u672a\u901a\u8fc7\uff1a{qa.get('message')}", qa_result=qa)
+                    if is_target_provider:
+                        self.fail_job(job["id"], f"{provider_name} 保真质检未通过：{qa.get('message')}", qa_result=qa)
                         continue
-                    self.render_fallback(job["id"], reason=f"AI 保真检查未通过，已自动降级：{qa.get('message')}")
+                    self.render_fallback(job["id"], reason=f"AI保真检查未通过，已自动降级：{qa.get('message')}")
                     continue
                 video_key = f"image-motion/videos/{job['id']}_v{job.get('version', 1)}.mp4"
                 self.storage.write_file_bytes(video_key, normalized, content_type="video/mp4")
-                self.update_job(
-                    job["id"],
-                    status="succeeded",
-                    progress=100,
-                    current_step="生成完成",
-                    completed_at=self.now(),
-                    video_key=video_key,
-                    qa_status="passed",
-                    qa_result=qa,
-                )
+                self.update_job(job["id"], status="succeeded", progress=100, current_step="生成完成", completed_at=self.now(), video_key=video_key, qa_status="passed", qa_result=qa)
             except Exception as exc:
-                if is_ray2:
-                    self.fail_job(job["id"], f"\u5237\u65b0 Ray 2 \u7ed3\u679c\u5931\u8d25\uff1a{exc}")
+                if is_target_provider:
+                    self.fail_job(job["id"], f"刷新 {provider_name} 结果失败：{exc}")
                     continue
                 try:
                     self.render_fallback(job["id"], reason=f"刷新供应商结果失败，已自动降级：{exc}")
                 except Exception as fallback_exc:
                     self.update_job(job["id"], status="failed", progress=100, qa_status="failed", failure_message=str(fallback_exc))
         return self.jobs()
+
 def _safe_name(value: str, fallback: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "")).strip("_")
     return name[:80] or fallback
@@ -596,6 +594,8 @@ def register_image_motion_routes(
     provider_poll: Callable[[str], dict] | None = None,
     component_provider_submit: Callable[..., dict] | None = None,
     component_provider_poll: Callable[[str], dict] | None = None,
+    comparison_provider_submit: Callable[..., dict] | None = None,
+    comparison_provider_poll: Callable[[str], dict] | None = None,
 ):
     workflow = ImageMotionWorkflow(
         storage,
@@ -604,6 +604,8 @@ def register_image_motion_routes(
         provider_poll,
         component_provider_submit,
         component_provider_poll,
+        comparison_provider_submit,
+        comparison_provider_poll,
     )
     protected = [Depends(verify_access)]
 
@@ -726,8 +728,15 @@ def register_image_motion_routes(
             raise HTTPException(status_code=404, detail="动效任务不存在。")
         asset_id = str(job.get("creative_asset_id") or "")
         plan = dict(job.get("motion_plan") or workflow.plan(asset_id) or {})
+        preset = str(plan.get("preset") or "camera")
+        qa_result = job.get("qa_result") or {}
+        fidelity_result = qa_result.get("fidelity") if isinstance(qa_result.get("fidelity"), dict) else qa_result
+        fidelity_message = str((fidelity_result or {}).get("message") or job.get("failure_message") or "").lower()
+        fidelity_failed = (fidelity_result or {}).get("status") == "failed" or any(token in fidelity_message for token in ("相似", "保真", "重绘", "fidelity"))
+        natural_preset = preset in {"flow", "steam", "liquid"}
         if request.action == "strengthen_effect":
-            preset = str(plan.get("preset") or "camera")
+            if fidelity_failed:
+                raise HTTPException(status_code=409, detail="当前版本失败原因是产品或构图重绘，继续强化会扩大漂移。请使用保留构图重试或换模型对照。")
             target_label = {
                 "flow": "directional airflow or heat-flow",
                 "steam": "volumetric steam",
@@ -735,6 +744,8 @@ def register_image_motion_routes(
                 "component": "localized articulated component motion",
                 "glow": "localized functional illumination",
             }.get(preset, "requested target motion")
+            plan["generation_strategy"] = "generative"
+            plan["provider_preference"] = "luma_ray2"
             plan["intensity"] = {"subtle": "standard", "standard": "strong", "strong": "strong"}.get(plan.get("intensity"), "strong")
             reinforcement = (
                 f"Previous attempt failed motion QA. Keep the same composition and {preset} effect. "
@@ -742,17 +753,33 @@ def register_image_motion_routes(
                 "Do not substitute camera zoom, global drift, brightness sweep or static line graphics for the requested motion."
             )
             existing_instruction = str(plan.get("custom_instruction") or "").strip()
-            plan["custom_instruction"] = (
-                existing_instruction
-                if "Previous attempt failed motion QA" in existing_instruction
-                else f"{existing_instruction} {reinforcement}".strip()
-            )[:1000]
+            plan["custom_instruction"] = existing_instruction if "Previous attempt failed motion QA" in existing_instruction else f"{existing_instruction} {reinforcement}".strip()[:1000]
+        elif request.action == "preserve_composition":
+            plan["generation_strategy"] = "hybrid_composite" if natural_preset else "generative"
+            plan["provider_preference"] = "" if natural_preset else "luma_ray2"
+            plan["intensity"] = "standard" if plan.get("intensity") == "strong" else plan.get("intensity") or "standard"
+            plan["custom_instruction"] = "" if natural_preset else "Keep the original product geometry, framing and background fixed. Animate only the requested real component."
         elif request.action == "lower_intensity":
+            plan["generation_strategy"] = "hybrid_composite" if natural_preset else "generative"
+            plan["provider_preference"] = "" if natural_preset else str(plan.get("provider_preference") or "luma_ray2")
             plan["intensity"] = {"strong": "standard", "standard": "subtle", "subtle": "subtle"}.get(plan.get("intensity"), "subtle")
+            plan["custom_instruction"] = ""
+        elif request.action == "compare_model":
+            if preset not in RAY2_PRESETS:
+                raise HTTPException(status_code=400, detail="当前动效类型不支持Nova Reel对照生成。")
+            plan["generation_strategy"] = "generative"
+            plan["provider_preference"] = "nova_reel"
+            plan["aspect_ratio"] = "16:9"
+            plan["intensity"] = "standard"
+            plan["custom_instruction"] = "Keep the camera locked and preserve the source product while animating only the requested effect."
         elif request.action == "alternate_effect":
             current = plan.get("preset") or "camera"
             choices = ["flow", "steam", "liquid", "glow", "component", "camera"]
-            plan["preset"] = choices[(choices.index(current) + 1) % len(choices)] if current in choices else "flow"
+            next_preset = choices[(choices.index(current) + 1) % len(choices)] if current in choices else "flow"
+            plan["preset"] = next_preset
+            plan["generation_strategy"] = "hybrid_composite" if next_preset in {"flow", "steam", "liquid"} else "generative"
+            plan["provider_preference"] = ""
+            plan["custom_instruction"] = ""
         saved_plan = workflow.save_plan(asset_id, plan)
         asset = workflow.asset(asset_id)
         new_job, _ = workflow.create_job(asset, saved_plan, f"retry:{job_id}:{request.action}:{uuid.uuid4().hex}", parent_job_id=job_id)

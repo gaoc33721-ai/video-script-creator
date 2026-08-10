@@ -435,6 +435,8 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
     ratio = str(plan.get("aspect_ratio") or "source").strip().lower()
     duration = max(1.0, min(5.0, float(plan.get("duration_seconds") or 5.0)))
     normalized_preset = preset if preset in ALLOWED_PRESETS else "auto"
+    default_strategy = "hybrid_composite" if normalized_preset in {"flow", "steam", "liquid"} else "generative"
+    generation_strategy = str(plan.get("generation_strategy") or default_strategy).strip().lower()
     return {
         **plan,
         "preset": normalized_preset,
@@ -445,6 +447,7 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds": duration,
         "fps": 24,
         "quality": "1080p",
+        "generation_strategy": generation_strategy if generation_strategy in {"generative", "hybrid_composite"} else default_strategy,
         "camera_motion": "locked" if normalized_preset in {"component", "flow", "steam", "liquid"} else "gentle_push_in",
     }
 
@@ -468,67 +471,92 @@ def _motion_overlay(
     preset: str,
     intensity: str,
     warm_mask=None,
+    effect_region: dict[str, Any] | None = None,
 ):
     from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
     width, height = size
     layer = Image.new("RGBA", size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    alpha = {"subtle": 55, "standard": 90, "strong": 135}.get(intensity, 90)
+    alpha = {"subtle": 48, "standard": 76, "strong": 104}.get(intensity, 76)
     phase = frame / max(1, frame_count)
-    pulse = 0.55 + 0.45 * math.sin(phase * math.pi)
-    if preset == "flow":
-        if warm_mask is not None and warm_mask.getbbox():
-            gradient = Image.linear_gradient("L").resize(size).rotate(-18, resample=Image.Resampling.BICUBIC)
-            shift = int(phase * 510)
-            sweep = gradient.point(
-                [
-                    int(28 + 227 * max(0.0, 1.0 - abs(((item + shift) % 256) - 128) / 42.0))
-                    for item in range(256)
-                ]
-            )
-            moving_alpha = ImageChops.multiply(warm_mask, sweep).point(
-                [min(255, int(item * alpha / 90.0)) for item in range(256)]
-            )
-            glow_alpha = moving_alpha.filter(ImageFilter.GaussianBlur(max(4, width // 120)))
-            glow = Image.new("RGBA", size, (255, 112, 18, 0))
-            glow.putalpha(glow_alpha.point([int(item * 0.48) for item in range(256)]))
-            layer = Image.alpha_composite(layer, glow)
-            highlight = Image.new("RGBA", size, (255, 226, 92, 0))
-            highlight.putalpha(moving_alpha)
-            layer = Image.alpha_composite(layer, highlight)
+    region = effect_region or {"x": 0.08, "y": 0.16, "width": 0.84, "height": 0.68}
+    left = max(0, min(width - 1, int(float(region.get("x", 0.08)) * width)))
+    top = max(0, min(height - 1, int(float(region.get("y", 0.16)) * height)))
+    right = max(left + 1, min(width, int((float(region.get("x", 0.08)) + float(region.get("width", 0.84))) * width)))
+    bottom = max(top + 1, min(height, int((float(region.get("y", 0.16)) + float(region.get("height", 0.68))) * height)))
+    region_width = right - left
+    region_height = bottom - top
+    clip = Image.new("L", size, 0)
+    ImageDraw.Draw(clip).rectangle((left, top, right, bottom), fill=255)
 
-        draw = ImageDraw.Draw(layer)
-        line_width = max(5, width // 150)
-        color = (255, 190, 70, alpha)
-        box = (int(width * 0.18), int(height * 0.12), int(width * 0.82), int(height * 0.70))
-        angle = int(phase * 360)
-        for offset in (0, 180):
-            start = angle + offset
-            draw.arc(box, start, start + 68, fill=color, width=line_width)
-    elif preset in {"steam", "liquid"}:
-        color = (235, 245, 255, int(alpha * pulse)) if preset == "steam" else (90, 190, 255, int(alpha * pulse))
-        line_width = max(5, width // 150)
-        for index in range(5):
-            x = int(width * (0.22 + index * 0.14))
-            offset = int(((phase + index * 0.13) % 1.0) * height * 0.30)
-            if preset == "steam":
-                points = []
-                for step in range(26):
-                    y = int(height * 0.82 - step * height * 0.022 - offset * 0.35)
-                    px = int(x + math.sin(step * 0.55 + phase * 8) * width * 0.018)
-                    points.append((px, y))
-                draw.line(points, fill=color, width=line_width)
-            else:
-                y1 = int(height * 0.20 + offset)
-                y2 = min(int(height * 0.82), y1 + int(height * 0.22))
-                draw.line((x, y1, x, y2), fill=color, width=line_width)
+    if preset == "steam":
+        broad_mask = Image.new("L", size, 0)
+        detail_mask = Image.new("L", size, 0)
+        broad_draw = ImageDraw.Draw(broad_mask)
+        detail_draw = ImageDraw.Draw(detail_mask)
+        centers = (0.32, 0.68)
+        for index in range(28):
+            life = (phase * 1.18 + index * 0.089) % 1.0
+            center = centers[index % len(centers)]
+            turbulence = math.sin(life * math.tau * 1.7 + index * 1.91) + 0.45 * math.sin(life * math.tau * 3.2 + index)
+            x = left + int(region_width * (center + turbulence * (0.018 + life * 0.028)))
+            y = bottom - int(region_height * (0.10 + life * 0.86))
+            fade = max(0.0, math.sin(math.pi * life)) ** 0.78
+            rx = max(5, int(region_width * (0.024 + life * 0.050)))
+            ry = max(8, int(region_height * (0.032 + life * 0.085)))
+            opacity = min(245, int(alpha * 3.30 * fade * (0.58 + 0.34 * ((index * 37) % 11) / 10.0)))
+            broad_draw.ellipse((x - rx, y - ry, x + rx, y + ry), fill=max(0, min(255, opacity)))
+            detail_draw.ellipse((x - max(3, rx // 3), y - ry, x + max(3, rx // 3), y + ry), fill=max(0, min(255, int(opacity * 0.88))))
+        broad_mask = broad_mask.filter(ImageFilter.GaussianBlur(max(6, width // 90)))
+        detail_mask = detail_mask.filter(ImageFilter.GaussianBlur(max(2, width // 220)))
+        steam_alpha = ImageChops.multiply(ImageChops.lighter(broad_mask, detail_mask), clip)
+        steam = Image.new("RGBA", size, (247, 249, 246, 0))
+        steam.putalpha(steam_alpha)
+        layer = Image.alpha_composite(layer, steam)
+    elif preset == "flow":
+        flow_mask = Image.new("L", size, 0)
+        flow_draw = ImageDraw.Draw(flow_mask)
+        centers = (0.31, 0.69)
+        for index in range(12):
+            orbit = (phase * 0.95 + index * 0.137) % 1.0
+            angle = orbit * math.tau + (index % 2) * math.pi
+            center_x = left + region_width * centers[index % len(centers)]
+            center_y = top + region_height * 0.58
+            x = int(center_x + math.cos(angle) * region_width * 0.115)
+            y = int(center_y + math.sin(angle) * region_height * 0.22)
+            radius_x = max(5, int(region_width * (0.034 + 0.022 * (0.5 + 0.5 * math.sin(angle)))))
+            radius_y = max(5, int(region_height * 0.058))
+            opacity = min(235, int(alpha * 2.70 * (0.55 + 0.45 * math.sin(math.pi * orbit))))
+            flow_draw.ellipse((x - radius_x, y - radius_y, x + radius_x, y + radius_y), fill=max(0, min(255, opacity)))
+        flow_mask = flow_mask.filter(ImageFilter.GaussianBlur(max(2, width // 220)))
+        if warm_mask is not None and warm_mask.getbbox():
+            warm_glow = warm_mask.filter(ImageFilter.GaussianBlur(max(5, width // 120))).point(lambda value: int(value * 0.12))
+            flow_mask = ImageChops.lighter(flow_mask, warm_glow)
+        flow_mask = ImageChops.multiply(flow_mask, clip)
+        heat = Image.new("RGBA", size, (255, 142, 28, 0))
+        heat.putalpha(flow_mask)
+        layer = Image.alpha_composite(layer, heat)
+    elif preset == "liquid":
+        liquid_mask = Image.new("L", size, 0)
+        liquid_draw = ImageDraw.Draw(liquid_mask)
+        for index in range(24):
+            life = (phase * 1.25 + index * 0.073) % 1.0
+            x = left + int(region_width * (0.18 + ((index * 29) % 64) / 100.0))
+            y = top + int(region_height * life)
+            radius = max(3, int(region_width * (0.006 + 0.008 * (1.0 - life))))
+            opacity = int(alpha * math.sin(math.pi * life))
+            liquid_draw.ellipse((x - radius, y - radius * 2, x + radius, y + radius * 2), fill=max(0, min(255, opacity)))
+        liquid_mask = ImageChops.multiply(liquid_mask.filter(ImageFilter.GaussianBlur(max(2, width // 280))), clip)
+        liquid = Image.new("RGBA", size, (112, 205, 255, 0))
+        liquid.putalpha(liquid_mask)
+        layer = Image.alpha_composite(layer, liquid)
     elif preset in {"glow", "component"}:
+        draw = ImageDraw.Draw(layer)
+        pulse = 0.55 + 0.45 * math.sin(phase * math.pi)
         margin = int(min(width, height) * (0.18 - 0.03 * pulse))
         color = (75, 225, 255, int(alpha * pulse))
         draw.rounded_rectangle((margin, margin, width - margin, height - margin), radius=max(12, margin // 4), outline=color, width=max(6, width // 120))
-    return layer.filter(ImageFilter.GaussianBlur(max(2, width // 360)))
-
+    return layer
 
 def render_stable_motion_video(
     prepared_image_bytes: bytes,
@@ -540,6 +568,7 @@ def render_stable_motion_video(
     fps: int = 24,
     metadata: dict[str, Any] | None = None,
     protected_regions: list[dict[str, Any]] | None = None,
+    effect_region: dict[str, Any] | None = None,
 ) -> bytes:
     """Render a deterministic fallback MP4 using original pixels plus overlays."""
     from PIL import Image, ImageOps
@@ -555,7 +584,7 @@ def render_stable_motion_video(
     with tempfile.TemporaryDirectory() as tmpdir:
         for frame_index in range(frame_count):
             progress = frame_index / max(1, frame_count - 1)
-            max_zoom = 1.0 if chosen_preset == "flow" else 1.02 if text_policy == "preserve_title_logo" else {"subtle": 1.04, "standard": 1.075, "strong": 1.11}.get(chosen_intensity, 1.075)
+            max_zoom = 1.0 if chosen_preset in {"flow", "steam", "liquid"} else 1.02 if text_policy == "preserve_title_logo" else {"subtle": 1.04, "standard": 1.075, "strong": 1.11}.get(chosen_intensity, 1.075)
             zoom = 1.0 + (max_zoom - 1.0) * progress
             if max_zoom > 1.0201:
                 resized = base.resize((int(base.width * zoom), int(base.height * zoom)), Image.Resampling.LANCZOS)
@@ -567,7 +596,7 @@ def render_stable_motion_video(
             if chosen_preset != "camera":
                 frame_image = Image.alpha_composite(
                     frame_image,
-                    _motion_overlay(base.size, frame_index, frame_count, chosen_preset, chosen_intensity, warm_mask),
+                    _motion_overlay(base.size, frame_index, frame_count, chosen_preset, chosen_intensity, warm_mask, effect_region),
                 )
             if text_policy == "preserve_title_logo":
                 for region in protected_regions or []:
@@ -625,17 +654,21 @@ def normalize_generated_video(video_bytes: bytes, *, duration_seconds: float = 5
             return handle.read()
 
 
-def assess_video_fidelity(source_image_bytes: bytes, video_bytes: bytes) -> dict[str, Any]:
-    """Compare the source with first/middle video frames using a small perceptual hash."""
-    from PIL import Image, ImageOps
+def assess_video_fidelity(
+    source_image_bytes: bytes,
+    video_bytes: bytes,
+    *,
+    allowed_motion_region: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Check global similarity and pixel stability outside the allowed effect region."""
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageStat
 
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return {"status": "unavailable", "score": None, "message": "FFmpeg 不可用，无法执行抽帧保真检查。"}
 
-    def average_hash(data: bytes) -> int:
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("L").resize((8, 8))
-        values = list(image.getdata())
+    def average_hash(image) -> int:
+        values = list(image.convert("L").resize((8, 8)).getdata())
         average = sum(values) / max(1, len(values))
         bits = 0
         for value in values:
@@ -645,29 +678,59 @@ def assess_video_fidelity(source_image_bytes: bytes, video_bytes: bytes) -> dict
     def similarity(left: int, right: int) -> float:
         return 1.0 - int(left ^ right).bit_count() / 64.0
 
+    reference = ImageOps.exif_transpose(Image.open(io.BytesIO(source_image_bytes))).convert("RGB").resize((320, 180), Image.Resampling.LANCZOS)
+    reference_hash = average_hash(reference)
+    region = allowed_motion_region or {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+    left = max(0, min(reference.width - 1, int(float(region.get("x", 0.0)) * reference.width)))
+    top = max(0, min(reference.height - 1, int(float(region.get("y", 0.0)) * reference.height)))
+    right = max(left + 1, min(reference.width, int((float(region.get("x", 0.0)) + float(region.get("width", 1.0))) * reference.width)))
+    bottom = max(top + 1, min(reference.height, int((float(region.get("y", 0.0)) + float(region.get("height", 1.0))) * reference.height)))
+    outside_mask = Image.new("L", reference.size, 255)
+    ImageDraw.Draw(outside_mask).rectangle((left, top, right, bottom), fill=0)
+    inside_mask = Image.new("L", reference.size, 0)
+    ImageDraw.Draw(inside_mask).rectangle((left, top, right, bottom), fill=255)
+    reference_edges = reference.convert("L").filter(ImageFilter.FIND_EDGES)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "input.mp4")
         with open(video_path, "wb") as handle:
             handle.write(video_bytes)
-        scores = []
-        reference_hash = average_hash(source_image_bytes)
+        perceptual_scores = []
+        outside_differences = []
+        inside_edge_differences = []
         for index, seek in enumerate(("0.10", "2.50")):
-            frame_path = os.path.join(tmpdir, f"qa_{index}.jpg")
-            command = [ffmpeg, "-y", "-ss", seek, "-i", video_path, "-frames:v", "1", "-q:v", "3", frame_path]
+            frame_path = os.path.join(tmpdir, f"qa_{index}.png")
+            command = [ffmpeg, "-y", "-ss", seek, "-i", video_path, "-frames:v", "1", frame_path]
             completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
-            if completed.returncode == 0 and os.path.exists(frame_path):
-                with open(frame_path, "rb") as handle:
-                    scores.append(similarity(reference_hash, average_hash(handle.read())))
-        if not scores:
+            if completed.returncode != 0 or not os.path.exists(frame_path):
+                continue
+            frame = ImageOps.exif_transpose(Image.open(frame_path)).convert("RGB").resize(reference.size, Image.Resampling.LANCZOS)
+            perceptual_scores.append(similarity(reference_hash, average_hash(frame)) * 100.0)
+            difference = ImageChops.difference(reference.convert("L"), frame.convert("L"))
+            outside_differences.append(float(ImageStat.Stat(difference, mask=outside_mask).mean[0]))
+            frame_edges = frame.convert("L").filter(ImageFilter.FIND_EDGES)
+            edge_difference = ImageChops.difference(reference_edges, frame_edges)
+            inside_edge_differences.append(float(ImageStat.Stat(edge_difference, mask=inside_mask).mean[0]))
+        if not perceptual_scores:
             return {"status": "unavailable", "score": None, "message": "未能从生成结果抽取质检帧。"}
-        score = round(min(scores) * 100)
+        perceptual_score = round(min(perceptual_scores))
+        outside_difference = round(max(outside_differences or [0.0]), 2)
+        effect_edge_difference = round(max(inside_edge_differences or [0.0]), 2)
+        outside_score = max(0.0, 100.0 - outside_difference * 5.0)
+        score = round(min(perceptual_score, outside_score))
+        passed = perceptual_score >= 55 and outside_difference <= 8.0
         return {
-            "status": "passed" if score >= 68 else "failed",
+            "status": "passed" if passed else "failed",
             "score": score,
-            "message": f"首帧/中帧与原图感知相似度约 {score}%。",
+            "perceptual_similarity": perceptual_score,
+            "outside_effect_difference": outside_difference,
+            "effect_region_edge_difference": effect_edge_difference,
+            "message": (
+                f"产品与背景保护区稳定，整帧相似度约 {perceptual_score}%，保护区差异 {outside_difference}。"
+                if passed
+                else f"产品或背景发生重绘：整帧相似度约 {perceptual_score}%，保护区差异 {outside_difference}。"
+            ),
         }
-
-
 
 def assess_component_motion(
     video_bytes: bytes,

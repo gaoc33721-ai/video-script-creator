@@ -96,6 +96,7 @@ def natural_job(status="queued", preset="flow"):
             "intensity": "standard",
             "aspect_ratio": "source",
             "duration_seconds": 5,
+            "generation_strategy": "generative",
         },
     }
 
@@ -165,6 +166,7 @@ class ImageMotionRoutingTests(unittest.TestCase):
         self.assertEqual("ray-flow-1", job["external_task_id"])
         self.assertIn("Both visible cooking zones", submitted["prompt"])
         self.assertIn("not be a static glow, horizontal highlight sweep", submitted["prompt"])
+        self.assertTrue(submitted["lock_end_frame"])
         submitted_size = Image.open(io.BytesIO(submitted["image_bytes"])).size
         self.assertEqual((1280, 720), submitted_size)
         self.assertLessEqual(max(submitted_size), 1552)
@@ -198,6 +200,7 @@ class ImageMotionRoutingTests(unittest.TestCase):
                 self.assertEqual("luma_ray2", job["provider_name"])
                 self.assertIn(required_text, submitted["prompt"])
                 self.assertIn("absolutely no zoom", submitted["prompt"])
+                self.assertTrue(submitted["lock_end_frame"])
 
     def test_steam_and_liquid_submit_failures_are_not_downgraded(self):
         for preset in ("steam", "liquid"):

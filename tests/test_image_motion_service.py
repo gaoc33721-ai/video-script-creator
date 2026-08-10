@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 from image_motion_service import (
     analyze_creative_image,
     assess_component_motion,
+    assess_video_fidelity,
     build_motion_prompt,
     enhance_image_resolution,
     prepare_motion_source,
@@ -168,6 +169,36 @@ class ImageMotionServiceTests(unittest.TestCase):
 
 
 
+
+    def test_steam_composite_preserves_pixels_outside_effect_region(self):
+        plan = validate_motion_plan({"preset": "steam", "focus": "effect", "intensity": "standard"})
+        self.assertEqual("hybrid_composite", plan["generation_strategy"])
+        source = Image.new("RGB", (320, 180), (10, 34, 42))
+        draw = ImageDraw.Draw(source)
+        draw.rounded_rectangle((45, 45, 275, 165), radius=18, fill=(25, 25, 28), outline=(150, 155, 160), width=3)
+        draw.rectangle((75, 95, 155, 155), fill=(190, 95, 25))
+        draw.rectangle((165, 95, 245, 155), fill=(220, 160, 55))
+        region = {"x": 0.10, "y": 0.12, "width": 0.80, "height": 0.72}
+        prepared = image_bytes(source)
+        video = render_stable_motion_video(
+            prepared,
+            preset="steam",
+            intensity="standard",
+            duration_seconds=5,
+            fps=24,
+            effect_region=region,
+        )
+        fidelity = assess_video_fidelity(prepared, video, allowed_motion_region=region)
+        self.assertEqual("passed", fidelity["status"], fidelity)
+        self.assertLessEqual(fidelity["outside_effect_difference"], 8.0)
+        motion = assess_component_motion(
+            video,
+            target_region=region,
+            motion_name="蒸汽",
+            minimum_motion_coverage=0.06,
+        )
+        self.assertEqual("passed", motion["status"], motion)
+        self.assertFalse(motion["global_zoom_explains_motion"])
 
     def test_source_ratio_is_preserved(self):
         source = image_bytes(Image.new("RGB", (800, 1000), (30, 40, 50)))

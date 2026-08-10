@@ -5235,7 +5235,11 @@ def _video_job_output_uri(category, model):
 
 
 def _nova_reel_job_output_uri(category, model):
-    return _video_job_output_uri(category, model)
+    base_uri = NOVA_REEL_OUTPUT_S3_URI
+    if not base_uri:
+        return ""
+    stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return f"{base_uri.rstrip('/')}/nova_reel/{stamp}_{_safe_ascii_slug(category)}_{_safe_ascii_slug(model)}_{uuid.uuid4().hex[:8]}/"
 
 
 def _ray2_duration_seconds(duration_seconds=6) -> int:
@@ -5343,7 +5347,13 @@ def _single_frame_from_ninegrid_image(image):
     return crop.resize((target_w, target_h))
 
 
-def _build_luma_ray2_model_input(prompt: str, duration_seconds=6, image_payload: dict | None = None, aspect_ratio: str = "") -> dict:
+def _build_luma_ray2_model_input(
+    prompt: str,
+    duration_seconds=6,
+    image_payload: dict | None = None,
+    aspect_ratio: str = "",
+    end_image_payload: dict | None = None,
+) -> dict:
     model_input = {
         "prompt": str(prompt or "premium product video").strip()[:4000],
         "aspect_ratio": aspect_ratio if aspect_ratio in {"1:1", "9:16", "16:9"} else LUMA_RAY2_ASPECT_RATIO,
@@ -5353,15 +5363,19 @@ def _build_luma_ray2_model_input(prompt: str, duration_seconds=6, image_payload:
     }
     if image_payload:
         model_input["keyframes"] = {"frame0": image_payload}
+        if end_image_payload:
+            model_input["keyframes"]["frame1"] = end_image_payload
     return model_input
 
-
-def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
-    output_s3_uri = _video_job_output_uri(category, model)
+def _start_nova_reel_job(category, model, prompt, duration_seconds=6, image_payload: dict | None = None):
+    output_s3_uri = _nova_reel_job_output_uri(category, model)
     if not output_s3_uri:
-        raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 STORAGE_BACKEND=s3/S3_BUCKET，或设置 NOVA_REEL_OUTPUT_S3_URI。")
+        raise RuntimeError("未配置 Nova Reel 输出 S3。请设置 NOVA_REEL_OUTPUT_S3_URI，且 bucket 需位于 us-east-1。")
     from botocore.config import Config
 
+    text_to_video = {"text": str(prompt or "premium product video").strip()[:512]}
+    if image_payload:
+        text_to_video["images"] = [image_payload]
     client = boto3.client(
         "bedrock-runtime",
         region_name=NOVA_REEL_AWS_REGION,
@@ -5371,9 +5385,9 @@ def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
         modelId=NOVA_REEL_MODEL_ID,
         modelInput={
             "taskType": "TEXT_VIDEO",
-            "textToVideoParams": {"text": prompt},
+            "textToVideoParams": text_to_video,
             "videoGenerationConfig": {
-                "durationSeconds": int(duration_seconds),
+                "durationSeconds": 6,
                 "fps": 24,
                 "dimension": "1280x720",
                 "seed": random.randint(0, 2147483646),
@@ -5384,8 +5398,7 @@ def _start_nova_reel_job(category, model, prompt, duration_seconds=6):
     )
     return response["invocationArn"], output_s3_uri
 
-
-def _start_luma_ray2_job(category, model, prompt, duration_seconds=6, image_payload: dict | None = None, aspect_ratio: str = ""):
+def _start_luma_ray2_job(category, model, prompt, duration_seconds=6, image_payload: dict | None = None, aspect_ratio: str = "", end_image_payload: dict | None = None):
     output_s3_uri = _video_job_output_uri(category, model)
     if not output_s3_uri:
         raise RuntimeError("未配置 Ray2 输出 S3。请设置 VIDEO_OUTPUT_S3_URI，且 bucket 需位于 us-west-2。")
@@ -5398,7 +5411,7 @@ def _start_luma_ray2_job(category, model, prompt, duration_seconds=6, image_payl
     )
     response = client.start_async_invoke(
         modelId=LUMA_RAY2_MODEL_ID,
-        modelInput=_build_luma_ray2_model_input(prompt, duration_seconds=duration_seconds, image_payload=image_payload, aspect_ratio=aspect_ratio),
+        modelInput=_build_luma_ray2_model_input(prompt, duration_seconds=duration_seconds, image_payload=image_payload, aspect_ratio=aspect_ratio, end_image_payload=end_image_payload),
         outputDataConfig={"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
         clientRequestToken=str(uuid.uuid4()),
     )
@@ -5872,7 +5885,7 @@ def _poll_image_motion_toapis(task_id: str) -> dict:
 
 
 
-def _submit_image_motion_luma_ray2(*, image_bytes: bytes, prompt: str, aspect_ratio: str, client_business_id: str) -> dict:
+def _submit_image_motion_luma_ray2(*, image_bytes: bytes, prompt: str, aspect_ratio: str, client_business_id: str, lock_end_frame: bool = False) -> dict:
     image_payload = {
         "type": "image",
         "source": {
@@ -5888,6 +5901,7 @@ def _submit_image_motion_luma_ray2(*, image_bytes: bytes, prompt: str, aspect_ra
         duration_seconds=5,
         image_payload=image_payload,
         aspect_ratio=aspect_ratio,
+        end_image_payload=image_payload if lock_end_frame else None,
     )
     return {
         "task_id": str(task_id),
@@ -5898,6 +5912,7 @@ def _submit_image_motion_luma_ray2(*, image_bytes: bytes, prompt: str, aspect_ra
             "region": LUMA_RAY2_AWS_REGION,
             "output_s3_uri": output_s3_uri,
             "aspect_ratio": aspect_ratio,
+            "end_frame_locked": bool(lock_end_frame),
         },
     }
 
@@ -5917,6 +5932,54 @@ def _poll_image_motion_luma_ray2(task_id: str) -> dict:
         return {"status": "failed", "message": f"Unable to read Ray 2 output: {exc}"}
     if len(video_bytes) < 1024:
         return {"status": "failed", "message": "Ray 2 returned an empty or invalid video."}
+    return {"status": "succeeded", "video_bytes": video_bytes, "message": ""}
+
+
+def _submit_image_motion_nova_reel(*, image_bytes: bytes, prompt: str, aspect_ratio: str, client_business_id: str, lock_end_frame: bool = False) -> dict:
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes))
+    if image.size != (1280, 720):
+        raise RuntimeError(f"Nova Reel图生视频输入必须为1280x720，当前为{image.width}x{image.height}。")
+    image_payload = {
+        "format": "png",
+        "source": {"bytes": base64.b64encode(image_bytes).decode("ascii")},
+    }
+    task_id, output_s3_uri = _start_nova_reel_job(
+        "image-motion",
+        client_business_id,
+        prompt,
+        duration_seconds=6,
+        image_payload=image_payload,
+    )
+    return {
+        "task_id": str(task_id),
+        "provider": "nova_reel",
+        "metadata": {
+            "provider": "nova_reel",
+            "model_id": NOVA_REEL_MODEL_ID,
+            "region": NOVA_REEL_AWS_REGION,
+            "output_s3_uri": output_s3_uri,
+            "aspect_ratio": "16:9",
+        },
+    }
+
+
+def _poll_image_motion_nova_reel(task_id: str) -> dict:
+    result = _query_video_job(task_id, provider="nova_reel", region=NOVA_REEL_AWS_REGION)
+    status = str(result.get("status") or "").lower()
+    if status in {"inprogress", "in_progress", "processing", "queued"}:
+        return {"status": "processing", "message": ""}
+    if status not in {"completed", "succeeded", "success"}:
+        return {"status": "failed", "message": str(result.get("failureMessage") or result.get("failure_message") or "Nova Reel generation failed.")}
+    video_s3_uri = _video_uri_from_bedrock_job(result, invocation_arn=task_id)
+    resolved_s3_uri = _resolve_video_s3_uri({"video_s3_uri": video_s3_uri}) or video_s3_uri
+    try:
+        video_bytes = _read_s3_uri_bytes(resolved_s3_uri)
+    except Exception as exc:
+        return {"status": "failed", "message": f"Unable to read Nova Reel output: {exc}"}
+    if len(video_bytes) < 1024:
+        return {"status": "failed", "message": "Nova Reel returned an empty or invalid video."}
     return {"status": "succeeded", "video_bytes": video_bytes, "message": ""}
 
 def _store_toapis_video(video_job_id: str, video_url: str) -> str:
@@ -8927,4 +8990,6 @@ IMAGE_MOTION_WORKFLOW = register_image_motion_routes(
     else None,
     component_provider_submit=_submit_image_motion_luma_ray2,
     component_provider_poll=_poll_image_motion_luma_ray2,
+    comparison_provider_submit=_submit_image_motion_nova_reel,
+    comparison_provider_poll=_poll_image_motion_nova_reel,
 )

@@ -2,6 +2,7 @@ import io
 import os
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -108,6 +109,7 @@ class ImageMotionApiTests(unittest.TestCase):
         )
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual("subtle", response.json()["motion_plan"]["intensity"])
+        self.assertEqual("hybrid_composite", response.json()["motion_plan"]["generation_strategy"])
 
         payload = {"creative_asset_ids": [item["id"] for item in assets]}
         first = self.client.post("/api/image-motion/jobs", json=payload)
@@ -160,9 +162,44 @@ class ImageMotionApiTests(unittest.TestCase):
         self.assertIn("Previous attempt failed motion QA", retry_job["motion_plan"]["custom_instruction"])
         self.assertIn("Do not substitute camera zoom", retry_job["motion_plan"]["custom_instruction"])
 
+        api_app.IMAGE_MOTION_WORKFLOW.update_job(
+            failed_job_id,
+            status="failed",
+            failure_message="产品或背景发生重绘：整帧相似度约45%。",
+            qa_result={
+                "status": "failed",
+                "fidelity": {"status": "failed", "message": "产品或背景发生重绘：整帧相似度约45%。"},
+            },
+        )
+        blocked = self.client.post(
+            f"/api/image-motion/jobs/{failed_job_id}/regenerate",
+            json={"action": "strengthen_effect"},
+        )
+        self.assertEqual(409, blocked.status_code, blocked.text)
+
+        preserved = self.client.post(
+            f"/api/image-motion/jobs/{failed_job_id}/regenerate",
+            json={"action": "preserve_composition"},
+        )
+        self.assertEqual(200, preserved.status_code, preserved.text)
+        preserved_job = preserved.json()["job"]
+        self.assertEqual(5, preserved_job["version"])
+        self.assertEqual("hybrid_composite", preserved_job["motion_plan"]["generation_strategy"])
+        self.assertEqual("", preserved_job["motion_plan"]["custom_instruction"])
+
+        compared = self.client.post(
+            f"/api/image-motion/jobs/{failed_job_id}/regenerate",
+            json={"action": "compare_model"},
+        )
+        self.assertEqual(200, compared.status_code, compared.text)
+        compared_job = compared.json()["job"]
+        self.assertEqual(6, compared_job["version"])
+        self.assertEqual("generative", compared_job["motion_plan"]["generation_strategy"])
+        self.assertEqual("nova_reel", compared_job["motion_plan"]["provider_preference"])
+        self.assertEqual("16:9", compared_job["motion_plan"]["aspect_ratio"])
         tasks = self.client.get("/api/tasks?task_type=image_motion")
         self.assertEqual(200, tasks.status_code, tasks.text)
-        self.assertEqual(7, len(tasks.json()["tasks"]))
+        self.assertEqual(9, len(tasks.json()["tasks"]))
         self.assertTrue(all(item["task_type"] == "image_motion" for item in tasks.json()["tasks"]))
 
         legacy_jobs = self.client.get("/api/jobs")
@@ -188,7 +225,36 @@ class ImageMotionApiTests(unittest.TestCase):
         self.assertEqual("5s", payload["duration"])
         self.assertEqual("720p", payload["resolution"])
         self.assertEqual(image_payload, payload["keyframes"]["frame0"])
+        self.assertNotIn("frame1", payload["keyframes"])
 
+        locked_payload = api_app._build_luma_ray2_model_input(
+            "locked steam motion",
+            duration_seconds=5,
+            image_payload=image_payload,
+            end_image_payload=image_payload,
+            aspect_ratio="16:9",
+        )
+        self.assertEqual(image_payload, locked_payload["keyframes"]["frame1"])
+
+    def test_nova_reel_job_submits_image_to_video_payload(self):
+        image_payload = {"format": "png", "source": {"bytes": "abc"}}
+        client = Mock()
+        client.start_async_invoke.return_value = {"invocationArn": "arn:aws:bedrock:job/test"}
+
+        with patch.object(api_app, "_nova_reel_job_output_uri", return_value="s3://nova-output/runtime/test"), patch.object(
+            api_app.boto3, "client", return_value=client
+        ):
+            invocation_arn, output_uri = api_app._start_nova_reel_job(
+                "Airfryer", "HAFA11BDW", "localized realistic steam", image_payload=image_payload
+            )
+
+        self.assertEqual("arn:aws:bedrock:job/test", invocation_arn)
+        self.assertEqual("s3://nova-output/runtime/test", output_uri)
+        request = client.start_async_invoke.call_args.kwargs
+        self.assertEqual("amazon.nova-reel-v1:1", request["modelId"])
+        self.assertEqual([image_payload], request["modelInput"]["textToVideoParams"]["images"])
+        self.assertEqual(6, request["modelInput"]["videoGenerationConfig"]["durationSeconds"])
+        self.assertEqual("1280x720", request["modelInput"]["videoGenerationConfig"]["dimension"])
 
 if __name__ == "__main__":
     unittest.main()

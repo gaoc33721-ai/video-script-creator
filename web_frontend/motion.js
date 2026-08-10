@@ -137,29 +137,34 @@ function activeMotionJob(assetId) {
 }
 
 function motionGenerationLabel(job) {
-  if (job?.generation_mode === "luma_ray2_flow") return "\u00b7 Ray2 \u6c14\u6d41\u751f\u6210";
-  if (job?.generation_mode === "luma_ray2_component") return "\u00b7 Ray2 \u90e8\u4ef6\u751f\u6210";
-  if (job?.generation_mode === "luma_ray2_steam") return "\u00b7 Ray2 \u4f53\u79ef\u84b8\u6c7d";
-  if (job?.generation_mode === "luma_ray2_liquid") return "\u00b7 Ray2 \u6db2\u4f53\u751f\u6210";
-  if (job?.generation_mode === "stable_flow_overlay") return "\u00b7 \u65e7\u7248\u626b\u5149\u5408\u6210";
-  if (job?.generation_mode === "stable_template") return "\u00b7 \u65e7\u7248\u7ebf\u6761\u6a21\u677f";
+  const mode = String(job?.generation_mode || "");
+  if (mode.startsWith("fidelity_composite_")) return "· 原图冻结局部特效";
+  if (mode.startsWith("nova_reel_")) return "· Nova Reel 对照生成";
+  if (mode.startsWith("luma_ray2_")) return "· Ray2 生成";
+  if (mode === "stable_flow_overlay") return "· 旧版扫光合成";
+  if (mode === "stable_template") return "· 旧版线条模板";
   return "";
 }
 
+function motionFidelityFailed(job) {
+  const qa = job?.qa_result || {};
+  const fidelity = qa?.fidelity && typeof qa.fidelity === "object" ? qa.fidelity : qa;
+  const raw = String(fidelity?.message || job?.failure_message || "").toLowerCase();
+  return fidelity?.status === "failed" || ["相似", "保真", "重绘", "fidelity"].some((token) => raw.includes(token));
+}
 function motionFailureGuidance(job) {
   const raw = String(job?.qa_result?.message || job?.failure_message || job?.current_step || "").toLowerCase();
-  if (raw.includes("\u72ec\u7acb") || raw.includes("\u76ee\u6807\u52a8\u6548") || raw.includes("global") || raw.includes("\u63a8\u955c") || raw.includes("\u6f02\u79fb")) {
-    return "\u76ee\u6807\u52a8\u6548\u4e0d\u591f\u660e\u786e\uff0c\u6216\u88ab\u6574\u4f53\u63a8\u955c\u4ee3\u66ff\u3002\u5efa\u8bae\u9996\u9009\u201c\u5f3a\u5316\u76ee\u6807\u52a8\u6548\u91cd\u8bd5\u201d\uff0c\u4fdd\u6301\u5f53\u524d\u84b8\u6c7d\u3001\u6c14\u6d41\u6216\u90e8\u4ef6\u7c7b\u578b\u4e0d\u53d8\u3002";
+  if (motionFidelityFailed(job)) {
+    return "产品结构或背景已被生成模型重绘，不能继续强化。请优先使用“局部保真合成重试”；如需比较模型能力，可单独提交一次Nova Reel对照。";
   }
-  if (raw.includes("\u4fdd\u771f") || raw.includes("\u7ed3\u6784") || raw.includes("\u76f8\u4f3c") || raw.includes("fidelity")) {
-    return "\u4ea7\u54c1\u7ed3\u6784\u6216\u6784\u56fe\u504f\u79bb\u539f\u56fe\u3002\u5efa\u8bae\u4f7f\u7528\u201c\u4fdd\u7559\u6784\u56fe\u91cd\u8bd5\u201d\uff1b\u82e5\u4ecd\u6709\u6f02\u79fb\uff0c\u518d\u9009\u62e9\u201c\u964d\u4f4e\u5f3a\u5ea6\u201d\u3002";
+  if (raw.includes("独立") || raw.includes("目标动效") || raw.includes("global") || raw.includes("推镜") || raw.includes("漂移")) {
+    return "原图保真尚可，但目标动效不够明确。可强化一次Ray2目标动效；若仍失败，改用局部保真合成。";
   }
-  if (raw.includes("\u670d\u52a1") || raw.includes("\u4f9b\u5e94\u5546") || raw.includes("ray 2") || raw.includes("provider")) {
-    return "\u6a21\u578b\u670d\u52a1\u672a\u8fd4\u56de\u53ef\u7528\u7ed3\u679c\u3002\u5efa\u8bae\u4fdd\u6301\u5f53\u524d\u65b9\u6848\u91cd\u8bd5\uff0c\u65e0\u9700\u6539\u53d8\u4e1a\u52a1\u9700\u6c42\u3002";
+  if (raw.includes("服务") || raw.includes("供应商") || raw.includes("ray 2") || raw.includes("provider")) {
+    return "模型服务未返回可用结果。可使用局部保真合成立即生成，或稍后提交Nova Reel对照。";
   }
-  return "\u672c\u7248\u672c\u672a\u901a\u8fc7\u8d28\u68c0\uff0c\u5df2\u7981\u6b62\u4e0b\u8f7d\u3002\u53ef\u4f18\u5148\u5f3a\u5316\u539f\u76ee\u6807\u52a8\u6548\uff0c\u6216\u6839\u636e\u6784\u56fe\u504f\u79fb\u60c5\u51b5\u964d\u4f4e\u5f3a\u5ea6\u3002";
+  return "本版本未通过质检，已禁止下载。建议优先使用局部保真合成，避免再次重绘产品。";
 }
-
 function motionResultHtml(asset) {
   const versions = jobsForMotionAsset(asset.id);
   const job = activeMotionJob(asset.id);
@@ -174,16 +179,19 @@ function motionResultHtml(asset) {
     .join("");
   const status = job?.current_step || job?.status || "";
   const qa = job?.qa_result?.message || job?.fallback_reason || job?.failure_message || "";
+  const fidelityFailed = motionFidelityFailed(job);
   const failedRecovery = job?.status === "failed"
     ? '<div class="motion-recovery">' +
-      '<strong>\u672c\u7248\u672c\u672a\u901a\u8fc7\u8d28\u68c0\uff0c\u4e0d\u4f1a\u4f5c\u4e3a\u6b63\u5f0f\u7ed3\u679c\u4e0b\u8f7d\u3002</strong>' +
+      '<strong>本版本未通过质检，不会作为正式结果下载。</strong>' +
       '<span>' + escapeHtml(motionFailureGuidance(job)) + '</span>' +
       '<div class="motion-result-actions">' +
-        '<button type="button" data-motion-retry="strengthen_effect" data-job-id="' + escapeAttr(job.id) + '">\u5f3a\u5316\u76ee\u6807\u52a8\u6548\u91cd\u8bd5</button>' +
-        '<button type="button" class="secondary" data-motion-retry="preserve_composition" data-job-id="' + escapeAttr(job.id) + '">\u4fdd\u7559\u6784\u56fe\u91cd\u8bd5</button>' +
-        '<button type="button" class="secondary" data-motion-retry="lower_intensity" data-job-id="' + escapeAttr(job.id) + '">\u964d\u4f4e\u5f3a\u5ea6</button>' +
-        '<button type="button" class="secondary" data-motion-retry="alternate_effect" data-job-id="' + escapeAttr(job.id) + '">\u6362\u4e00\u79cd\u52a8\u6548</button>' +
+        (fidelityFailed ? '' : '<button type="button" data-motion-retry="strengthen_effect" data-job-id="' + escapeAttr(job.id) + '">强化Ray2目标动效</button>') +
+        '<button type="button" data-motion-retry="preserve_composition" data-job-id="' + escapeAttr(job.id) + '">局部保真合成重试</button>' +
+        '<button type="button" class="secondary" data-motion-retry="lower_intensity" data-job-id="' + escapeAttr(job.id) + '">降低强度并保真合成</button>' +
+        '<button type="button" class="secondary" data-motion-retry="compare_model" data-job-id="' + escapeAttr(job.id) + '">Nova Reel模型对照</button>' +
+        '<button type="button" class="secondary" data-motion-retry="alternate_effect" data-job-id="' + escapeAttr(job.id) + '">换一种动效</button>' +
       '</div>' +
+      '<small>Nova Reel对照会额外提交一次模型任务并产生相应费用。</small>' +
     '</div>'
     : "";
   const video =
@@ -197,7 +205,7 @@ function motionResultHtml(asset) {
         <div class="motion-result-actions">
           <a class="download-link" href="${escapeAttr(job.download_url)}">\u4e0b\u8f7d\u89c6\u9891</a>
           <a class="download-link" href="${escapeAttr(job.muted_download_url)}">\u9759\u97f3\u4e0b\u8f7d</a>
-          <button type="button" class="secondary" data-motion-retry="preserve_composition" data-job-id="${escapeAttr(job.id)}">\u4fdd\u7559\u6784\u56fe\u91cd\u8bd5</button>
+          <button type="button" class="secondary" data-motion-retry="preserve_composition" data-job-id="${escapeAttr(job.id)}">局部保真合成重试</button>
           <button type="button" class="secondary" data-motion-retry="lower_intensity" data-job-id="${escapeAttr(job.id)}">\u964d\u4f4e\u5f3a\u5ea6</button>
           <button type="button" class="secondary" data-motion-retry="alternate_effect" data-job-id="${escapeAttr(job.id)}">\u6362\u4e00\u79cd\u52a8\u6548</button>
         </div>`
