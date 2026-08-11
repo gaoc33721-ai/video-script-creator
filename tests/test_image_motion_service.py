@@ -80,6 +80,10 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertIn("Both visible cooking zones", prompt)
         self.assertIn("continuous circulating hot-air currents", prompt)
         self.assertIn("not be a static glow, horizontal highlight sweep", prompt)
+        self.assertIn("subtle particle advection", prompt)
+        self.assertIn("heat shimmer", prompt)
+        self.assertIn("Premium technology-commercial finish", prompt)
+        self.assertIn("0.8-3.8 seconds", prompt)
         self.assertIn("absolutely no zoom", prompt)
 
     def test_steam_prompt_requires_volumetric_vapor_and_rejects_drawn_lines(self):
@@ -116,6 +120,32 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertIn("surface ripples", prompt)
         self.assertIn("No blue lines, vector ribbons", prompt)
         self.assertIn("absolutely no zoom", prompt)
+
+    def test_glow_prompt_locks_product_and_uses_layered_technology_choreography(self):
+        asset = {
+            "category": "Airfryer",
+            "model": "HAFA11BDW",
+            "feature": "Viewing Windows",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {"preset": "glow", "focus": "effect", "intensity": "standard", "direction": "feature illumination"}
+        )
+
+        prompt = build_motion_prompt(asset, plan)
+
+        self.assertEqual("locked", plan["camera_motion"])
+        self.assertIn("immutable product reference", prompt)
+        self.assertIn("existing viewing window", prompt)
+        self.assertIn("inner emissive depth", prompt)
+        self.assertIn("material-aware micro-reflections", prompt)
+        self.assertIn("0.0-0.8 seconds", prompt)
+        self.assertIn("3.8-5.0 seconds", prompt)
+        self.assertIn("must not travel as one flat horizontal sweep", prompt)
+        self.assertIn("localized illumination evolving inside", prompt)
+        self.assertNotIn("gentle forward motion", prompt)
+        self.assertIn("absolutely no zoom", prompt)
+        self.assertLessEqual(len(prompt), 3000)
 
     def test_airfryer_category_name_does_not_force_touch_panel_into_flow(self):
         result = analyze_creative_image(
@@ -199,6 +229,25 @@ class ImageMotionServiceTests(unittest.TestCase):
         )
         self.assertEqual("passed", motion["status"], motion)
         self.assertFalse(motion["global_zoom_explains_motion"])
+
+    def test_full_frame_motion_region_does_not_divide_by_zero(self):
+        prepared = image_bytes(Image.new("RGB", (320, 180), (22, 48, 58)))
+        video = render_stable_motion_video(
+            prepared,
+            preset="camera",
+            intensity="subtle",
+            duration_seconds=1,
+            fps=8,
+        )
+
+        qa = assess_video_fidelity(
+            prepared,
+            video,
+            allowed_motion_region={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+        )
+
+        self.assertIn(qa["status"], {"passed", "failed"})
+        self.assertEqual(0.0, qa["outside_effect_difference"])
 
     def test_source_ratio_is_preserved(self):
         source = image_bytes(Image.new("RGB", (800, 1000), (30, 40, 50)))

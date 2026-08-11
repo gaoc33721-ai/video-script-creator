@@ -526,8 +526,13 @@ class ImageMotionWorkflow:
                 or (
                     item.get("status") == "failed"
                     and str(item.get("provider_name") or "") == self.exclusive_provider_name
-                    and "LibTV CLI" in str(item.get("failure_message") or "")
-                    and "JSON" in str(item.get("failure_message") or "")
+                    and (
+                        (
+                            "LibTV CLI" in str(item.get("failure_message") or "")
+                            and "JSON" in str(item.get("failure_message") or "")
+                        )
+                        or "float division by zero" in str(item.get("failure_message") or "").lower()
+                    )
                 )
             )
         ]
@@ -540,6 +545,7 @@ class ImageMotionWorkflow:
             is_flow = preset == "flow"
             is_steam = preset == "steam"
             is_liquid = preset == "liquid"
+            is_glow = preset == "glow"
             provider_name = str(job.get("provider_name") or "luma_ray2")
             is_exclusive_provider = bool(self.exclusive_provider_name and provider_name == self.exclusive_provider_name)
             is_target_provider = is_exclusive_provider or provider_name in {"luma_ray2", "nova_reel"} or preset in RAY2_PRESETS
@@ -575,6 +581,8 @@ class ImageMotionWorkflow:
                     motion_region = {"x": 0.08, "y": 0.14, "width": 0.84, "height": 0.62}
                 if is_liquid and not motion_region:
                     motion_region = {"x": 0.08, "y": 0.22, "width": 0.84, "height": 0.68}
+                if is_glow and not motion_region:
+                    motion_region = {"x": 0.10, "y": 0.18, "width": 0.80, "height": 0.68}
                 qa = assess_video_fidelity(prepared, normalized, allowed_motion_region=motion_region)
                 if is_component or is_flow or is_steam or is_liquid:
                     motion_label = "热流" if is_flow else "蒸汽" if is_steam else "液体" if is_liquid else "部件"

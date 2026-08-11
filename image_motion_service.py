@@ -324,7 +324,18 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
     focus = str(plan.get("focus") or "effect")
     intensity = str(plan.get("intensity") or "standard")
     direction = str(plan.get("direction") or (asset.get("analysis") or {}).get("recommended_direction") or "gentle forward motion")
+    if preset == "glow":
+        direction = "localized illumination evolving inside the existing selling-point feature"
     custom = str(plan.get("custom_instruction") or "").strip()
+    premium_finish = (
+        "Premium technology-commercial finish: crisp product edges, controlled high dynamic range, realistic material-aware reflections, "
+        "subtle volumetric depth, clean contrast, physically plausible occlusion and refined micro-highlights; the result must look filmed, not like a cheap 2D overlay. "
+    )
+    temporal_sequence = (
+        "Temporal choreography: 0.0-0.8 seconds hold the exact source composition while the feature gently awakens; "
+        "0.8-3.8 seconds develop clear continuous feature motion with layered depth and evolving detail; "
+        "3.8-5.0 seconds reach a confident hero state and settle smoothly without a cut. "
+    )
     if preset == "steam":
         lowered_feature = feature.lower()
         dual_zone = any(token in lowered_feature for token in ("dual cooking", "cooking zone", "dual zone", "two zone", "2 zone"))
@@ -340,6 +351,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             f"Required volumetric steam motion: {steam_action} Selling point: {feature}. Direction note: {direction}. Intensity: {intensity}. "
             "Render translucent, semi-transparent vapor with layered density, fine wisps and broader soft plumes, buoyant upward drift, irregular turbulent curls, and natural expansion and dissipation. "
             "The steam shape, position and opacity must evolve continuously frame by frame and feel lively, warm and appetizing without hiding the product. "
+            f"{premium_finish}{temporal_sequence} "
             "No drawn white lines, vector curves, ribbons, outline strokes, repeated sine waves, sticker overlays, flat glow sweeps or artificial smoke-machine clouds. "
             "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
             "Keep the appliance shell, baskets, food, control panel, labels, logo and background stationary and structurally unchanged. "
@@ -355,6 +367,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
             f"Required physically coherent liquid motion: animate liquid only from a visible real source and along a plausible path in the product scene. Selling point: {feature}. Direction note: {direction}. Intensity: {intensity}. "
             "Show changing surface ripples, glossy refraction, small droplets and restrained splashes with continuous gravity-driven movement and natural variation frame by frame. "
+            f"{premium_finish}{temporal_sequence} "
             "No blue lines, vector ribbons, flat mask wipes, glow sweeps, sticker overlays or repeated identical streams. "
             "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
             "Keep the appliance structure, control panel, labels, logo and background stationary and unchanged. Do not add people, hands, rooms, extra products, text or logos. "
@@ -378,10 +391,35 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
             f"Required airflow motion: {flow_action} Selling point: {feature}. Direction note: {direction}. Intensity: {intensity}. "
             "The primary airflow motion must visibly change position frame by frame and persist throughout the shot. "
+            "Give the airflow premium spatial depth with warm translucent energy, subtle particle advection, heat shimmer and realistic occlusion behind product edges; follow existing arrows or heat cues instead of inventing unrelated paths. "
+            f"{premium_finish}{temporal_sequence} "
             "It must not be a static glow, horizontal highlight sweep, brightness pulse, mask wipe or camera motion. "
             "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
             "Keep the appliance shell, baskets, food, control panel, labels, logo and background stationary and structurally unchanged. "
             "Do not add people, hands, rooms, extra products, text or logos. Lighting stays bright, positive, clean and consistent. "
+        )
+        if custom:
+            prompt += f"Creator instruction: {custom}."
+        return prompt.strip()[:3000]
+    if preset == "glow":
+        lowered_feature = feature.lower()
+        if any(token in lowered_feature for token in ("window", "viewing", "glass")):
+            glow_target = "the existing viewing window and the real interior visible through it"
+        elif any(token in lowered_feature for token in ("touch", "panel", "display", "control")):
+            glow_target = "the existing touch-control panel and its original interface elements"
+        else:
+            glow_target = "the exact visible selling-point feature already present in the source image"
+        prompt = (
+            "Create one continuous five-second premium technology e-commerce product film from the supplied source image. "
+            f"Product lock: exactly one Hisense {category}, model {model or 'as shown in the source'}, and no other appliance. "
+            "Treat the supplied image as an immutable product reference: preserve the exact silhouette, geometry, seams, handles, baskets, glass, materials, colors, control layout, printed text, logo and background. "
+            f"Selling point: {feature}. Animate only {glow_target}. Direction note: {direction}. Intensity: {intensity}. "
+            "Build localized multilayer illumination with inner emissive depth, soft edge bloom, tiny drifting energy particles and restrained material-aware micro-reflections on nearby fixed surfaces. "
+            "The light must originate from the feature, breathe with refined irregular timing and reveal depth inside the feature; it must not travel as one flat horizontal sweep. "
+            f"{premium_finish}{temporal_sequence} "
+            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            "No flat mask wipe, one-pass scan line, global brightness pulse, neon outline around the whole appliance, sticker overlay or generic lens flare. "
+            "Do not redraw interface icons or text, change product geometry, open parts, add people, hands, rooms, extra products, words or logos. Keep the mood bright, clean, confident and futuristic. "
         )
         if custom:
             prompt += f"Creator instruction: {custom}."
@@ -404,6 +442,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
             f"Required articulated motion: {component_action}. Selling point: {feature}. Direction note: {direction}. "
             "The component motion must be obvious but restrained and mechanically connected to the product; do not move, translate, scale, bend or morph the whole appliance. "
+            f"{premium_finish}{temporal_sequence} "
             "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
             "Keep the background, outer shell, control panel, labels and logo stationary and unchanged. Do not add hands, people, rooms, extra products, text or logos. "
             "Lighting stays bright, clean, positive and consistent. "
@@ -417,6 +456,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
         "The source image is the absolute truth for product category, structure, proportions, materials, control layout and brand placement. "
         "Do not add, remove, replace, duplicate, redesign or morph the appliance. Do not invent people, hands, rooms or unrelated objects. "
         f"Selling point: {feature}. Animate only the visible {focus} using a {preset} effect, {direction}, at {intensity} intensity. "
+        f"{premium_finish}{temporal_sequence} "
         "Use a single shot with a stable or very gentle push-in, coherent cause-to-effect progression, no cuts, no transition and no camera shake. "
         "Keep the mood bright, positive, clean, confident and uplifting from the first frame to the last; never show failure, frustration, darkness, anxiety or a negative-to-positive reversal. "
         "No new text, subtitles, price labels, watermarks, competitor brands, extra logos or garbled lettering. "
@@ -448,7 +488,7 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "fps": 24,
         "quality": "1080p",
         "generation_strategy": generation_strategy if generation_strategy in {"generative", "hybrid_composite"} else default_strategy,
-        "camera_motion": "locked" if normalized_preset in {"component", "flow", "steam", "liquid"} else "gentle_push_in",
+        "camera_motion": "locked" if normalized_preset in {"component", "flow", "steam", "liquid", "glow"} else "gentle_push_in",
     }
 
 
@@ -678,6 +718,12 @@ def assess_video_fidelity(
     def similarity(left: int, right: int) -> float:
         return 1.0 - int(left ^ right).bit_count() / 64.0
 
+    def masked_mean(image, mask) -> float:
+        if mask.getbbox() is None:
+            return 0.0
+        values = ImageStat.Stat(image, mask=mask).mean
+        return float(values[0]) if values else 0.0
+
     reference = ImageOps.exif_transpose(Image.open(io.BytesIO(source_image_bytes))).convert("RGB").resize((320, 180), Image.Resampling.LANCZOS)
     reference_hash = average_hash(reference)
     region = allowed_motion_region or {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
@@ -707,10 +753,10 @@ def assess_video_fidelity(
             frame = ImageOps.exif_transpose(Image.open(frame_path)).convert("RGB").resize(reference.size, Image.Resampling.LANCZOS)
             perceptual_scores.append(similarity(reference_hash, average_hash(frame)) * 100.0)
             difference = ImageChops.difference(reference.convert("L"), frame.convert("L"))
-            outside_differences.append(float(ImageStat.Stat(difference, mask=outside_mask).mean[0]))
+            outside_differences.append(masked_mean(difference, outside_mask))
             frame_edges = frame.convert("L").filter(ImageFilter.FIND_EDGES)
             edge_difference = ImageChops.difference(reference_edges, frame_edges)
-            inside_edge_differences.append(float(ImageStat.Stat(edge_difference, mask=inside_mask).mean[0]))
+            inside_edge_differences.append(masked_mean(edge_difference, inside_mask))
         if not perceptual_scores:
             return {"status": "unavailable", "score": None, "message": "未能从生成结果抽取质检帧。"}
         perceptual_score = round(min(perceptual_scores))

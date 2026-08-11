@@ -170,34 +170,39 @@ class ImageMotionRoutingTests(unittest.TestCase):
         self.assertEqual("image_motion_job-flow", job["external_task_id"])
         self.assertEqual("image_motion_job-flow", submitted["client_business_id"])
 
-    def test_failed_libtv_json_parse_job_is_polled_without_resubmission(self):
-        storage = MemoryStorage()
-        asset = natural_asset("flow")
-        failed_job = natural_job(status="failed", preset="flow")
-        failed_job.update(
-            {
-                "external_task_id": "image_motion_job-flow",
-                "provider_name": "libtv_happy_horse_1_1",
-                "failure_message": "LibTV CLI 未返回可解析的 JSON。",
-            }
-        )
-        storage.json[CREATIVE_ASSETS_KEY] = [asset]
-        storage.json[IMAGE_MOTION_JOBS_KEY] = [failed_job]
-        polled = []
+    def test_recoverable_libtv_jobs_are_polled_without_resubmission(self):
+        for failure_message in (
+            "LibTV CLI download returned invalid JSON",
+            "refresh failed: float division by zero",
+        ):
+            with self.subTest(failure_message=failure_message):
+                storage = MemoryStorage()
+                asset = natural_asset("flow")
+                failed_job = natural_job(status="failed", preset="flow")
+                failed_job.update(
+                    {
+                        "external_task_id": "image_motion_job-flow",
+                        "provider_name": "libtv_happy_horse_1_1",
+                        "failure_message": failure_message,
+                    }
+                )
+                storage.json[CREATIVE_ASSETS_KEY] = [asset]
+                storage.json[IMAGE_MOTION_JOBS_KEY] = [failed_job]
+                polled = []
 
-        workflow = ImageMotionWorkflow(
-            storage,
-            lambda: [],
-            provider_submit=lambda **kwargs: self.fail("recovery must not resubmit or rerun"),
-            provider_poll=lambda task_id: polled.append(task_id) or {"status": "processing"},
-            exclusive_provider_name="libtv_happy_horse_1_1",
-        )
+                workflow = ImageMotionWorkflow(
+                    storage,
+                    lambda: [],
+                    provider_submit=lambda **kwargs: self.fail("recovery must not resubmit or rerun"),
+                    provider_poll=lambda task_id: polled.append(task_id) or {"status": "processing"},
+                    exclusive_provider_name="libtv_happy_horse_1_1",
+                )
 
-        workflow.refresh_provider_jobs()
+                workflow.refresh_provider_jobs()
 
-        refreshed = storage.json[IMAGE_MOTION_JOBS_KEY][0]
-        self.assertEqual(["image_motion_job-flow"], polled)
-        self.assertEqual("processing", refreshed["status"])
+                refreshed = storage.json[IMAGE_MOTION_JOBS_KEY][0]
+                self.assertEqual(["image_motion_job-flow"], polled)
+                self.assertEqual("processing", refreshed["status"])
 
     def test_component_submit_failure_is_not_downgraded(self):
         def submit(**kwargs):
