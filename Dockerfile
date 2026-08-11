@@ -16,14 +16,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg unzip \
     && rm -rf /var/lib/apt/lists/*
+
+ARG LIBTV_CLI_ZIP_URL
+ARG LIBTV_CLI_SHA256
+RUN test -n "${LIBTV_CLI_ZIP_URL}" \
+    && test -n "${LIBTV_CLI_SHA256}" \
+    && curl -fL "${LIBTV_CLI_ZIP_URL}" -o /tmp/libtv.zip \
+    && echo "${LIBTV_CLI_SHA256}  /tmp/libtv.zip" | sha256sum -c - \
+    && unzip -q /tmp/libtv.zip -d /tmp/libtv-cli \
+    && install -m 0755 "$(find /tmp/libtv-cli -type f -name libtv -print -quit)" /usr/local/bin/libtv
 
 COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-COPY app.py api_app.py start_server.py healthcheck.py storage_adapters.py product_feature_store.py product_catalog_client.py liblibai_provider.py image_motion_service.py image_motion_routes.py ./
+COPY app.py api_app.py start_server.py healthcheck.py storage_adapters.py product_feature_store.py product_catalog_client.py liblibai_provider.py libtv_provider.py image_motion_service.py image_motion_routes.py ./
 COPY fridge_assistant.py rainforest_competitor.py social_competitor.py ./
 COPY seed_competitor_assets.json ./
 COPY web_frontend ./web_frontend

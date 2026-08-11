@@ -30,6 +30,14 @@ class ImageMotionApiTests(unittest.TestCase):
         Image.new("RGB", size, color).save(output, format="PNG")
         return output.getvalue()
 
+    def test_all_video_tasks_are_locked_to_libtv_happy_horse(self):
+        self.assertEqual("libtv_happy_horse_1_1", api_app._video_provider_name())
+        self.assertEqual("happy-horse-1.1", api_app._video_model_id())
+        response = self.client.post(
+            "/api/nova-reel/submit",
+            json={"script_job_id": "unused", "variant_index": 0},
+        )
+        self.assertEqual(409, response.status_code, response.text)
     def test_existing_low_resolution_asset_is_migrated_on_workspace_load(self):
         workflow = api_app.IMAGE_MOTION_WORKFLOW
         original = self.png((30, 80, 100), (690, 388))
@@ -184,22 +192,18 @@ class ImageMotionApiTests(unittest.TestCase):
         self.assertEqual(200, preserved.status_code, preserved.text)
         preserved_job = preserved.json()["job"]
         self.assertEqual(5, preserved_job["version"])
-        self.assertEqual("hybrid_composite", preserved_job["motion_plan"]["generation_strategy"])
+        self.assertEqual("generative", preserved_job["motion_plan"]["generation_strategy"])
+        self.assertEqual("libtv_happy_horse_1_1", preserved_job["motion_plan"]["provider_preference"])
         self.assertEqual("", preserved_job["motion_plan"]["custom_instruction"])
 
         compared = self.client.post(
             f"/api/image-motion/jobs/{failed_job_id}/regenerate",
             json={"action": "compare_model"},
         )
-        self.assertEqual(200, compared.status_code, compared.text)
-        compared_job = compared.json()["job"]
-        self.assertEqual(6, compared_job["version"])
-        self.assertEqual("generative", compared_job["motion_plan"]["generation_strategy"])
-        self.assertEqual("nova_reel", compared_job["motion_plan"]["provider_preference"])
-        self.assertEqual("16:9", compared_job["motion_plan"]["aspect_ratio"])
+        self.assertEqual(409, compared.status_code, compared.text)
         tasks = self.client.get("/api/tasks?task_type=image_motion")
         self.assertEqual(200, tasks.status_code, tasks.text)
-        self.assertEqual(9, len(tasks.json()["tasks"]))
+        self.assertEqual(8, len(tasks.json()["tasks"]))
         self.assertTrue(all(item["task_type"] == "image_motion" for item in tasks.json()["tasks"]))
 
         legacy_jobs = self.client.get("/api/jobs")

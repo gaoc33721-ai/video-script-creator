@@ -137,6 +137,39 @@ class ImageMotionRoutingTests(unittest.TestCase):
         self.assertEqual("1:1", submitted["aspect_ratio"])
         self.assertIn("absolutely no zoom", submitted["prompt"])
 
+    def test_exclusive_libtv_provider_overrides_all_legacy_providers(self):
+        storage = MemoryStorage()
+        asset = natural_asset("flow")
+        storage.json[CREATIVE_ASSETS_KEY] = [asset]
+        storage.json[IMAGE_MOTION_JOBS_KEY] = [natural_job(preset="flow")]
+        storage.files[asset["original_key"]] = png_bytes((690, 388))
+        submitted = {}
+
+        def submit(**kwargs):
+            submitted.update(kwargs)
+            return {"task_id": kwargs["client_business_id"], "provider": "libtv_happy_horse_1_1"}
+
+        workflow = ImageMotionWorkflow(
+            storage,
+            lambda: [],
+            provider_submit=submit,
+            provider_poll=lambda task_id: {"status": "processing"},
+            component_provider_submit=lambda **kwargs: self.fail("legacy provider must not be called"),
+            component_provider_poll=lambda task_id: self.fail("legacy provider must not be polled"),
+            comparison_provider_submit=lambda **kwargs: self.fail("comparison provider must not be called"),
+            comparison_provider_poll=lambda task_id: self.fail("comparison provider must not be polled"),
+            exclusive_provider_name="libtv_happy_horse_1_1",
+        )
+
+        workflow.run_job("job-flow")
+
+        job = storage.json[IMAGE_MOTION_JOBS_KEY][0]
+        self.assertEqual("processing", job["status"])
+        self.assertEqual("libtv_happy_horse_1_1", job["provider_name"])
+        self.assertEqual("libtv_happy_horse_1_1_flow", job["generation_mode"])
+        self.assertEqual("image_motion_job-flow", job["external_task_id"])
+        self.assertEqual("image_motion_job-flow", submitted["client_business_id"])
+
     def test_component_submit_failure_is_not_downgraded(self):
         def submit(**kwargs):
             raise RuntimeError("Ray 2 unavailable")

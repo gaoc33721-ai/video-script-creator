@@ -75,6 +75,7 @@ class ImageMotionWorkflow:
         component_provider_poll: Callable[[str], dict] | None = None,
         comparison_provider_submit: Callable[..., dict] | None = None,
         comparison_provider_poll: Callable[[str], dict] | None = None,
+        exclusive_provider_name: str = "",
     ):
         self.storage = storage
         self.script_tasks_loader = script_tasks_loader
@@ -84,6 +85,7 @@ class ImageMotionWorkflow:
         self.component_provider_poll = component_provider_poll
         self.comparison_provider_submit = comparison_provider_submit
         self.comparison_provider_poll = comparison_provider_poll
+        self.exclusive_provider_name = str(exclusive_provider_name or "").strip()
         self.lock = threading.Lock()
         self.enabled = os.getenv("IMAGE_MOTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
         self.generative_enabled = os.getenv("IMAGE_MOTION_GENERATIVE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -440,7 +442,11 @@ class ImageMotionWorkflow:
                 raise RuntimeError("生成式目标动效暂不支持“保留标题与Logo”；请使用纯画面动效或局部保真合成。")
 
             requested_provider = str(plan.get("provider_preference") or "luma_ray2")
-            if requested_provider == "nova_reel":
+            if self.exclusive_provider_name:
+                provider_submit = self.provider_submit
+                provider_poll = self.provider_poll
+                provider_name = self.exclusive_provider_name
+            elif requested_provider == "nova_reel":
                 provider_submit = self.comparison_provider_submit
                 provider_poll = self.comparison_provider_poll
                 provider_name = "nova_reel"
@@ -448,7 +454,7 @@ class ImageMotionWorkflow:
                 provider_submit = self.component_provider_submit if is_target_motion else self.provider_submit
                 provider_poll = self.component_provider_poll if is_target_motion else self.provider_poll
                 provider_name = "luma_ray2" if is_target_motion else "default"
-            use_provider = self.generative_enabled and plan["text_policy"] == "visual_only" and is_target_motion and provider_submit is not None and provider_poll is not None
+            use_provider = self.generative_enabled and plan["text_policy"] == "visual_only" and (is_target_motion or bool(self.exclusive_provider_name)) and provider_submit is not None and provider_poll is not None
             if not use_provider:
                 if is_target_motion:
                     raise RuntimeError(f"Bedrock {provider_name} 目标动效路径不可用，任务未降级为低质量线条或扫光模板。")
@@ -470,11 +476,24 @@ class ImageMotionWorkflow:
             prepared_key = f"image-motion/prepared/{job_id}.png"
             self.storage.write_file_bytes(prepared_key, prepared, content_type="image/png")
             prompt = build_motion_prompt(asset, {**plan, "preset": preset})
+            client_business_id = f"image_motion_{job_id}"
+            if self.exclusive_provider_name:
+                self.update_job(
+                    job_id,
+                    status="processing",
+                    progress=36,
+                    current_step=f"{provider_name} \u5df2\u53d7\u7406\uff0c\u7b49\u5f85\u751f\u6210",
+                    generation_mode=f"{provider_name}_{preset}",
+                    provider_name=provider_name,
+                    prepared_image_key=prepared_key,
+                    prepared_metadata=prepared_meta,
+                    external_task_id=client_business_id,
+                )
             provider_result = provider_submit(
                 image_bytes=prepared,
                 prompt=prompt,
                 aspect_ratio=prepared_meta["provider_aspect_ratio"],
-                client_business_id=f"image_motion_{job_id}",
+                client_business_id=client_business_id,
                 lock_end_frame=provider_name == "luma_ray2" and preset in {"flow", "steam", "liquid"},
             )
             self.update_job(
@@ -490,7 +509,7 @@ class ImageMotionWorkflow:
                 provider_metadata=provider_result.get("metadata") or {},
             )
         except Exception as exc:
-            if preset in RAY2_PRESETS:
+            if self.exclusive_provider_name or preset in RAY2_PRESETS:
                 self.fail_job(job_id, str(exc))
                 return
             try:
@@ -509,8 +528,9 @@ class ImageMotionWorkflow:
             is_steam = preset == "steam"
             is_liquid = preset == "liquid"
             provider_name = str(job.get("provider_name") or "luma_ray2")
-            is_target_provider = provider_name in {"luma_ray2", "nova_reel"} or preset in RAY2_PRESETS
-            provider_poll = self.comparison_provider_poll if provider_name == "nova_reel" else self.component_provider_poll if is_target_provider else self.provider_poll
+            is_exclusive_provider = bool(self.exclusive_provider_name and provider_name == self.exclusive_provider_name)
+            is_target_provider = is_exclusive_provider or provider_name in {"luma_ray2", "nova_reel"} or preset in RAY2_PRESETS
+            provider_poll = self.provider_poll if is_exclusive_provider else self.comparison_provider_poll if provider_name == "nova_reel" else self.component_provider_poll if is_target_provider else self.provider_poll
             try:
                 result = provider_poll(str(job["external_task_id"])) if provider_poll else {"status": "failed"}
                 if result.get("status") == "processing":
@@ -596,6 +616,7 @@ def register_image_motion_routes(
     component_provider_poll: Callable[[str], dict] | None = None,
     comparison_provider_submit: Callable[..., dict] | None = None,
     comparison_provider_poll: Callable[[str], dict] | None = None,
+    exclusive_provider_name: str = "",
 ):
     workflow = ImageMotionWorkflow(
         storage,
@@ -606,6 +627,7 @@ def register_image_motion_routes(
         component_provider_poll,
         comparison_provider_submit,
         comparison_provider_poll,
+        exclusive_provider_name,
     )
     protected = [Depends(verify_access)]
 
@@ -765,6 +787,8 @@ def register_image_motion_routes(
             plan["intensity"] = {"strong": "standard", "standard": "subtle", "subtle": "subtle"}.get(plan.get("intensity"), "subtle")
             plan["custom_instruction"] = ""
         elif request.action == "compare_model":
+            if workflow.exclusive_provider_name:
+                raise HTTPException(status_code=409, detail="\u5df2\u9650\u5b9a\u53ea\u4f7f\u7528 LibTV Happy Horse 1.1\uff0c\u4e0d\u5141\u8bb8\u5207\u6362\u5176\u4ed6\u89c6\u9891\u6a21\u578b\u3002")
             if preset not in RAY2_PRESETS:
                 raise HTTPException(status_code=400, detail="当前动效类型不支持Nova Reel对照生成。")
             plan["generation_strategy"] = "generative"
@@ -780,6 +804,9 @@ def register_image_motion_routes(
             plan["generation_strategy"] = "hybrid_composite" if next_preset in {"flow", "steam", "liquid"} else "generative"
             plan["provider_preference"] = ""
             plan["custom_instruction"] = ""
+        if workflow.exclusive_provider_name:
+            plan["generation_strategy"] = "generative"
+            plan["provider_preference"] = workflow.exclusive_provider_name
         saved_plan = workflow.save_plan(asset_id, plan)
         asset = workflow.asset(asset_id)
         new_job, _ = workflow.create_job(asset, saved_plan, f"retry:{job_id}:{request.action}:{uuid.uuid4().hex}", parent_job_id=job_id)

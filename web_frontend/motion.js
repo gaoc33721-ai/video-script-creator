@@ -138,6 +138,7 @@ function activeMotionJob(assetId) {
 
 function motionGenerationLabel(job) {
   const mode = String(job?.generation_mode || "");
+  if (mode.startsWith("libtv_happy_horse_1_1_")) return "\u00b7 LibTV \u5feb\u4e50\u9a6c 1.1";
   if (mode.startsWith("fidelity_composite_")) return "· 原图冻结局部特效";
   if (mode.startsWith("nova_reel_")) return "· Nova Reel 对照生成";
   if (mode.startsWith("luma_ray2_")) return "· Ray2 生成";

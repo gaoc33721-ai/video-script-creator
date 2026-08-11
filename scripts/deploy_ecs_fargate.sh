@@ -19,8 +19,17 @@ NOVA_REEL_MODEL_ID="${NOVA_REEL_MODEL_ID:-amazon.nova-reel-v1:1}"
 NOVA_REEL_OUTPUT_S3_URI="${NOVA_REEL_OUTPUT_S3_URI:-}"
 NOVA_REEL_ESTIMATED_USD_PER_SECOND="${NOVA_REEL_ESTIMATED_USD_PER_SECOND:-0.08}"
 NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK="${NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK:-2}"
-VIDEO_PROVIDER="${VIDEO_PROVIDER:-toapis_grok_video_3}"
+VIDEO_PROVIDER="libtv_happy_horse_1_1"
 VIDEO_OUTPUT_S3_URI="${VIDEO_OUTPUT_S3_URI:-$NOVA_REEL_OUTPUT_S3_URI}"
+LIBTV_CLI_ZIP_URL="${LIBTV_CLI_ZIP_URL:-}"
+LIBTV_CLI_SHA256="${LIBTV_CLI_SHA256:-}"
+LIBTV_PROJECT_UUID="${LIBTV_PROJECT_UUID:-}"
+LIBTV_CREDENTIALS_SECRET_ARN="${LIBTV_CREDENTIALS_SECRET_ARN:-}"
+LIBTV_CREDENTIALS_JSON="${LIBTV_CREDENTIALS_JSON:-}"
+LIBTV_CREDENTIALS_SECRET_NAME="${LIBTV_CREDENTIALS_SECRET_NAME:-${APP_NAME}/libtv-credentials}"
+LIBTV_CONFIG_DIR="${LIBTV_CONFIG_DIR:-/app/data/libtv}"
+LIBTV_HAPPY_HORSE_RESOLUTION="${LIBTV_HAPPY_HORSE_RESOLUTION:-1080P}"
+LIBTV_HAPPY_HORSE_DURATION="${LIBTV_HAPPY_HORSE_DURATION:-5}"
 LUMA_RAY2_AWS_REGION="${LUMA_RAY2_AWS_REGION:-us-west-2}"
 LUMA_RAY2_MODEL_ID="${LUMA_RAY2_MODEL_ID:-luma.ray-v2:0}"
 LUMA_RAY2_RESOLUTION="${LUMA_RAY2_RESOLUTION:-720p}"
@@ -104,6 +113,11 @@ fi
 HEALTH_CHECK_PATH="${HEALTH_CHECK_PATH:-$DEFAULT_HEALTH_CHECK_PATH}"
 
 export AWS_PAGER=""
+if [[ -z "$LIBTV_CLI_ZIP_URL" || -z "$LIBTV_CLI_SHA256" || -z "$LIBTV_PROJECT_UUID" || ( -z "$LIBTV_CREDENTIALS_JSON" && -z "$LIBTV_CREDENTIALS_SECRET_ARN" ) ]]; then
+  echo "LIBTV_CLI_ZIP_URL, LIBTV_CLI_SHA256, LIBTV_PROJECT_UUID and LibTV credentials JSON or secret ARN are required." >&2
+  exit 1
+fi
+
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 ECR_REPO="${ECR_REPO:-$APP_NAME}"
@@ -132,7 +146,10 @@ aws ecr describe-repositories --repository-names "$ECR_REPO" --region "$AWS_REGI
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-docker build -t "${APP_NAME}:${IMAGE_TAG}" .
+docker build \
+  --build-arg "LIBTV_CLI_ZIP_URL=${LIBTV_CLI_ZIP_URL}" \
+  --build-arg "LIBTV_CLI_SHA256=${LIBTV_CLI_SHA256}" \
+  -t "${APP_NAME}:${IMAGE_TAG}" .
 docker tag "${APP_NAME}:${IMAGE_TAG}" "$IMAGE_URI"
 docker push "$IMAGE_URI"
 
@@ -562,6 +579,39 @@ if [[ -z "$TOAPIS_API_KEY" && -z "$TOAPIS_API_KEY_SECRET_ARN" ]]; then
   fi
 fi
 
+if [[ -n "$LIBTV_CREDENTIALS_JSON" && -z "$LIBTV_CREDENTIALS_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBTV_CREDENTIALS_SECRET_NAME" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value \
+      --region "$AWS_REGION" \
+      --secret-id "$LIBTV_CREDENTIALS_SECRET_NAME" \
+      --secret-string "$LIBTV_CREDENTIALS_JSON" >/dev/null
+  else
+    aws secretsmanager create-secret \
+      --region "$AWS_REGION" \
+      --name "$LIBTV_CREDENTIALS_SECRET_NAME" \
+      --secret-string "$LIBTV_CREDENTIALS_JSON" >/dev/null
+  fi
+  LIBTV_CREDENTIALS_SECRET_ARN="$(aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBTV_CREDENTIALS_SECRET_NAME" \
+    --query ARN \
+    --output text)"
+fi
+
+if [[ -z "$LIBTV_CREDENTIALS_JSON" && -z "$LIBTV_CREDENTIALS_SECRET_ARN" ]]; then
+  if aws secretsmanager describe-secret \
+    --region "$AWS_REGION" \
+    --secret-id "$LIBTV_CREDENTIALS_SECRET_NAME" >/dev/null 2>&1; then
+    LIBTV_CREDENTIALS_SECRET_ARN="$(aws secretsmanager describe-secret \
+      --region "$AWS_REGION" \
+      --secret-id "$LIBTV_CREDENTIALS_SECRET_NAME" \
+      --query ARN \
+      --output text)"
+  fi
+fi
+
 if ! aws iam get-role --role-name "$TASK_ROLE" >/dev/null 2>&1; then
   aws iam create-role \
     --role-name "$TASK_ROLE" \
@@ -743,6 +793,9 @@ fi
 if [[ -n "$TOAPIS_API_KEY_SECRET_ARN" ]]; then
   SECRET_ARNS+=("$TOAPIS_API_KEY_SECRET_ARN")
 fi
+if [[ -n "$LIBTV_CREDENTIALS_SECRET_ARN" ]]; then
+  SECRET_ARNS+=("$LIBTV_CREDENTIALS_SECRET_ARN")
+fi
 
 if [[ ${#SECRET_ARNS[@]} -gt 0 ]]; then
   SECRET_POLICY_DOC="$(mktemp)"
@@ -787,6 +840,10 @@ env = [
     {"name": "NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK", "value": "${NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK}"},
     {"name": "VIDEO_PROVIDER", "value": "${VIDEO_PROVIDER}"},
     {"name": "VIDEO_OUTPUT_S3_URI", "value": "${VIDEO_OUTPUT_S3_URI}"},
+    {"name": "LIBTV_PROJECT_UUID", "value": "${LIBTV_PROJECT_UUID}"},
+    {"name": "LIBTV_CONFIG_DIR", "value": "${LIBTV_CONFIG_DIR}"},
+    {"name": "LIBTV_HAPPY_HORSE_RESOLUTION", "value": "${LIBTV_HAPPY_HORSE_RESOLUTION}"},
+    {"name": "LIBTV_HAPPY_HORSE_DURATION", "value": "${LIBTV_HAPPY_HORSE_DURATION}"},
     {"name": "LUMA_RAY2_AWS_REGION", "value": "${LUMA_RAY2_AWS_REGION}"},
     {"name": "LUMA_RAY2_MODEL_ID", "value": "${LUMA_RAY2_MODEL_ID}"},
     {"name": "LUMA_RAY2_RESOLUTION", "value": "${LUMA_RAY2_RESOLUTION}"},
@@ -875,6 +932,8 @@ if "${LIBLIBAI_SECRET_KEY_SECRET_ARN}":
     secrets.append({"name": "LIBLIBAI_SECRET_KEY", "valueFrom": "${LIBLIBAI_SECRET_KEY_SECRET_ARN}"})
 if "${TOAPIS_API_KEY_SECRET_ARN}":
     secrets.append({"name": "TOAPIS_API_KEY", "valueFrom": "${TOAPIS_API_KEY_SECRET_ARN}"})
+if "${LIBTV_CREDENTIALS_SECRET_ARN}":
+    secrets.append({"name": "LIBTV_CREDENTIALS_JSON", "valueFrom": "${LIBTV_CREDENTIALS_SECRET_ARN}"})
 
 doc = {
     "family": "${TASK_FAMILY}",

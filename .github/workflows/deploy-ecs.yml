@@ -40,8 +40,15 @@ jobs:
       NOVA_REEL_OUTPUT_S3_URI: ${{ vars.NOVA_REEL_OUTPUT_S3_URI || 's3://video-script-creator-prod-video-use1-625093290485/runtime/bedrock-video' }}
       NOVA_REEL_ESTIMATED_USD_PER_SECOND: ${{ vars.NOVA_REEL_ESTIMATED_USD_PER_SECOND || '0.08' }}
       NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK: ${{ vars.NOVA_REEL_MAX_SUBMISSIONS_PER_CLICK || '2' }}
-      VIDEO_PROVIDER: ${{ vars.VIDEO_PROVIDER || 'toapis_grok_video_3' }}
+      VIDEO_PROVIDER: libtv_happy_horse_1_1
       VIDEO_OUTPUT_S3_URI: ${{ vars.VIDEO_OUTPUT_S3_URI || 's3://video-script-creator-prod-video-usw2-625093290485/runtime/bedrock-video' }}
+      LIBTV_CLI_ZIP_URL: ${{ vars.LIBTV_CLI_ZIP_URL }}
+      LIBTV_CLI_SHA256: ${{ vars.LIBTV_CLI_SHA256 }}
+      LIBTV_PROJECT_UUID: ${{ vars.LIBTV_PROJECT_UUID || '60ba07b049e74d6da4ef25f89e5d01c8' }}
+      LIBTV_CREDENTIALS_SECRET_ARN: ${{ secrets.LIBTV_CREDENTIALS_SECRET_ARN }}
+      LIBTV_CREDENTIALS_JSON: ${{ secrets.LIBTV_CREDENTIALS_JSON }}
+      LIBTV_HAPPY_HORSE_RESOLUTION: '1080P'
+      LIBTV_HAPPY_HORSE_DURATION: '5'
       LUMA_RAY2_AWS_REGION: ${{ vars.LUMA_RAY2_AWS_REGION || 'us-west-2' }}
       LUMA_RAY2_MODEL_ID: ${{ vars.LUMA_RAY2_MODEL_ID || 'luma.ray-v2:0' }}
       LUMA_RAY2_RESOLUTION: ${{ vars.LUMA_RAY2_RESOLUTION || '720p' }}

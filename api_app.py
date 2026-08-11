@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
+import zipfile
 
 import boto3
 import pandas as pd
@@ -52,6 +53,7 @@ from social_competitor import (
 from storage_adapters import RuntimeStorage
 from liblibai_provider import LiblibAIClient, LiblibAIConfig, LiblibAIError
 from image_motion_routes import register_image_motion_routes
+from libtv_provider import LibTVHappyHorseProvider, PROVIDER_NAME as LIBTV_HAPPY_HORSE_PROVIDER_NAME
 
 
 APP_DATA_DIR = os.getenv("APP_DATA_DIR", ".")
@@ -5131,22 +5133,13 @@ def _s3_output_base_uri():
 
 
 def _video_provider_name() -> str:
-    provider = str(VIDEO_PROVIDER or "nova_reel").strip().lower().replace("-", "_")
-    if provider in {"luma", "luma_ray", "ray2", "luma_ray2"}:
-        return "luma_ray2"
-    if provider in {"liblib", "liblibai", "liblibai_star3", "star3", "star_3"}:
-        return "liblibai_star3"
-    if provider in {"toapis", "toapi", "grok", "grok_video", "grok_video_3", "grokvideo3", "toapis_grok_video_3"}:
-        return "toapis_grok_video_3"
-    if provider in {"seedance", "seedance2", "seedance_2", "toapis_seedance2", "toapis_video"}:
-        return "toapis_seedance2"
-    if provider in {"happyhorse", "toapis_happyhorse", "happy_horse"}:
-        return "toapis_happyhorse"
-    return "nova_reel"
+    return LIBTV_HAPPY_HORSE_PROVIDER_NAME
 
 
 def _video_model_id() -> str:
     provider = _video_provider_name()
+    if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        return "happy-horse-1.1"
     if provider == "luma_ray2":
         return LUMA_RAY2_MODEL_ID
     if provider == "liblibai_star3":
@@ -5158,6 +5151,8 @@ def _video_model_id() -> str:
 
 def _video_region() -> str:
     provider = _video_provider_name()
+    if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        return ""
     if provider == "luma_ray2":
         return LUMA_RAY2_AWS_REGION
     if provider == "liblibai_star3":
@@ -5169,6 +5164,8 @@ def _video_region() -> str:
 
 def _video_estimated_usd_per_second() -> float:
     provider = _video_provider_name()
+    if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        return 0.0
     if provider == "luma_ray2":
         return LUMA_RAY2_ESTIMATED_USD_PER_SECOND
     if provider == "liblibai_star3":
@@ -5916,7 +5913,6 @@ def _submit_image_motion_luma_ray2(*, image_bytes: bytes, prompt: str, aspect_ra
         },
     }
 
-
 def _poll_image_motion_luma_ray2(task_id: str) -> dict:
     result = _query_video_job(task_id, provider="luma_ray2", region=LUMA_RAY2_AWS_REGION)
     status = str(result.get("status") or "").lower()
@@ -6162,7 +6158,59 @@ def _build_storyboard_single_shot(script_job: dict, variant_index: int, shot_ind
     return [shot], 6, product_asset
 
 
+def _libtv_storyboard_task_id(video_job_id: str) -> str:
+    return f"storyboard_video_{video_job_id}"
+
+
+def _apply_libtv_storyboard_result(video_job_id: str, result: dict) -> None:
+    with job_lock:
+        jobs = _load_storyboard_video_jobs()
+        item = next((job for job in jobs if str(job.get("id") or "") == str(video_job_id)), None)
+        if not item:
+            return
+        status = str((result or {}).get("status") or "processing")
+        item["updated_at"] = _utc_now()
+        if status == "processing":
+            item["status"] = "InProgress"
+            item["qa_message"] = "LibTV Happy Horse 1.1 is generating."
+        elif status == "succeeded" and result.get("video_bytes"):
+            video_key = f"storyboard-videos/libtv/{video_job_id}.mp4"
+            video_uri = STORAGE.write_file_bytes(video_key, result["video_bytes"], content_type="video/mp4")
+            item["status"] = "Completed"
+            item["failure_message"] = ""
+            item["video_s3_uri"] = video_uri
+            item["qa_message"] = "LibTV Happy Horse 1.1 completed; checking frame fidelity."
+            _qa_storyboard_video_job(item)
+        else:
+            item["status"] = "Failed"
+            item["failure_message"] = str((result or {}).get("message") or "LibTV Happy Horse 1.1 failed.")
+            item["qa_status"] = "failed"
+            item["qa_message"] = item["failure_message"]
+        _save_storyboard_video_jobs(jobs)
+
+
+def _run_libtv_storyboard_video_job(video_job_id: str, manual_shots: list[dict]) -> None:
+    task_id = _libtv_storyboard_task_id(video_job_id)
+    try:
+        source_key = _first_video_source_image_key(manual_shots)
+        image_bytes = _reference_frame0_bytes(source_key)
+        if not image_bytes:
+            raise RuntimeError("No approved storyboard frame is available for Happy Horse 1.1.")
+        prompt = " ".join(str(item.get("text") or "").strip() for item in manual_shots if item.get("text")).strip()
+        submitted = LIBTV_HAPPY_HORSE_PROVIDER.submit(
+            image_bytes=image_bytes,
+            prompt=prompt[:4000],
+            aspect_ratio="16:9",
+            client_business_id=task_id,
+        )
+        result = LIBTV_HAPPY_HORSE_PROVIDER.poll(str(submitted.get("task_id") or task_id))
+    except Exception as exc:
+        result = {"status": "failed", "message": str(exc)}
+    _apply_libtv_storyboard_result(video_job_id, result)
+
 def _start_storyboard_video_job(category, model, manual_shots: list[dict]):
+    if _video_provider_name() == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        raise RuntimeError("Happy Horse 1.1 storyboard jobs must be started asynchronously.")
     if _video_provider_name() in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
         return _start_toapis_video_job(category, model, manual_shots)
 
@@ -6234,6 +6282,8 @@ def _reference_source_image_bytes(source_image_key: str) -> bytes:
 
 def _storyboard_video_generation_mode(manual_shots: list[dict]) -> str:
     provider = _video_provider_name()
+    if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        return "libtv-happy-horse-1.1-frame0"
     if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
         return "toapis-image-to-video"
     if provider == "luma_ray2":
@@ -8660,6 +8710,11 @@ def review_nova_canvas_image(image_job_id: str, req: StoryboardImageReviewReques
 
 @app.post("/api/nova-reel/submit", dependencies=[Depends(_verify_access)])
 def submit_nova_reel(req: NovaReelSubmitRequest):
+    if _video_provider_name() == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        raise HTTPException(
+            status_code=409,
+            detail="\u5df2\u9650\u5b9a\u4f7f\u7528 LibTV \u5feb\u4e50\u9a6c1.1\uff1b\u8bf7\u5728\u5206\u955c\u53c2\u8003\u56fe\u786e\u8ba4\u540e\u6309\u5355\u955c\u5934\u751f\u6210\u3002",
+        )
     script_job = next((item for item in _load_jobs() if item.get("id") == req.script_job_id), None)
     if not script_job:
         raise HTTPException(status_code=404, detail="Script job not found.")
@@ -8819,11 +8874,19 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
             product_image_id=req.product_image_id,
         )
     provider = _video_provider_name()
-    actual_duration_seconds = _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if provider == "luma_ray2" else duration_seconds
+    if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME and len(manual_shots) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Happy Horse 1.1 supports a single storyboard shot here; generate each approved shot separately.",
+        )
+    video_job_id = uuid.uuid4().hex[:12]
+    actual_duration_seconds = LIBTV_HAPPY_HORSE_PROVIDER.config.duration_seconds if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME else _ray2_duration_seconds(9 if len(manual_shots) > 1 else 5) if provider == "luma_ray2" else duration_seconds
     frame0_source_image_key = _first_video_source_image_key(manual_shots)
     product_source_image_key = _first_video_product_image_key(manual_shots)
     start_metadata = {}
-    if provider == "liblibai_star3":
+    if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        invocation_arn, output_s3_uri = _libtv_storyboard_task_id(video_job_id), ""
+    elif provider == "liblibai_star3":
         invocation_arn, output_s3_uri = "", ""
     else:
         try:
@@ -8845,7 +8908,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
 
     now = _utc_now()
     video_job = {
-        "id": uuid.uuid4().hex[:12],
+        "id": video_job_id,
         "script_job_id": script_job.get("id"),
         "created_at": now,
         "updated_at": now,
@@ -8871,7 +8934,7 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         "status": "InProgress",
         "failure_message": "",
         "invocation_arn": invocation_arn,
-        "external_task_id": invocation_arn if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"} else "",
+        "external_task_id": invocation_arn if provider in {LIBTV_HAPPY_HORSE_PROVIDER_NAME, "toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"} else "",
         "output_s3_uri": output_s3_uri,
         "video_s3_uri": "",
         "provider": provider,
@@ -8898,6 +8961,8 @@ def submit_storyboard_video(req: StoryboardVideoSubmitRequest):
         _save_storyboard_video_jobs(jobs)
     if provider == "liblibai_star3":
         threading.Thread(target=_run_liblibai_star3_keyframe_job, args=(video_job["id"],), daemon=True).start()
+    elif provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+        threading.Thread(target=_run_libtv_storyboard_video_job, args=(video_job["id"], manual_shots), daemon=True).start()
     return {"job": _public_nova_reel_job(video_job)}
 
 
@@ -8919,7 +8984,24 @@ def refresh_storyboard_video_jobs(script_job_id: str = "", variant_index: int = 
         if not invocation_arn:
             continue
         try:
-            if provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
+            if provider == LIBTV_HAPPY_HORSE_PROVIDER_NAME:
+                result = LIBTV_HAPPY_HORSE_PROVIDER.poll(str(invocation_arn))
+                provider_status = str(result.get("status") or "processing")
+                item["updated_at"] = _utc_now()
+                if provider_status == "succeeded" and result.get("video_bytes"):
+                    video_key = f"storyboard-videos/libtv/{item.get('id')}.mp4"
+                    item["video_s3_uri"] = STORAGE.write_file_bytes(video_key, result["video_bytes"], content_type="video/mp4")
+                    item["status"] = "Completed"
+                    item["failure_message"] = ""
+                    item = _qa_storyboard_video_job(item)
+                elif provider_status == "failed":
+                    item["status"] = "Failed"
+                    item["failure_message"] = str(result.get("message") or "LibTV Happy Horse 1.1 failed.")
+                    item["qa_status"] = "failed"
+                    item["qa_message"] = item["failure_message"]
+                else:
+                    item["status"] = "InProgress"
+            elif provider in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}:
                 result = _query_toapis_video_job(invocation_arn)
                 status, video_url, failure = _toapis_status(result)
                 item["status"] = status
@@ -8977,19 +9059,17 @@ def download(job_id: str):
         headers={"Content-Disposition": f'attachment; filename="video_script_{model}.xlsx"'},
     )
 
+LIBTV_HAPPY_HORSE_PROVIDER = LibTVHappyHorseProvider(STORAGE)
 IMAGE_MOTION_WORKFLOW = register_image_motion_routes(
     app,
     verify_access=_verify_access,
     storage=STORAGE,
     script_tasks_loader=lambda: [_public_job_summary(item) for item in _load_jobs()],
-    provider_submit=_submit_image_motion_toapis
-    if _video_provider_name() in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}
-    else None,
-    provider_poll=_poll_image_motion_toapis
-    if _video_provider_name() in {"toapis_grok_video_3", "toapis_seedance2", "toapis_happyhorse"}
-    else None,
-    component_provider_submit=_submit_image_motion_luma_ray2,
-    component_provider_poll=_poll_image_motion_luma_ray2,
-    comparison_provider_submit=_submit_image_motion_nova_reel,
-    comparison_provider_poll=_poll_image_motion_nova_reel,
+    provider_submit=LIBTV_HAPPY_HORSE_PROVIDER.submit,
+    provider_poll=LIBTV_HAPPY_HORSE_PROVIDER.poll,
+    component_provider_submit=None,
+    component_provider_poll=None,
+    comparison_provider_submit=None,
+    comparison_provider_poll=None,
+    exclusive_provider_name=LIBTV_HAPPY_HORSE_PROVIDER_NAME,
 )
