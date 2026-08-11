@@ -62,6 +62,19 @@ class FakeLibTVRunner:
         return subprocess.CompletedProcess(command, 1, "", "unexpected command")
 
 
+class TextDownloadLibTVRunner(FakeLibTVRunner):
+    def __call__(self, command, env):
+        args = command[1:]
+        if args and args[0] == "download":
+            self.commands.append(list(command))
+            output_dir = Path(args[args.index("-o") + 1])
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / "result.mp4"
+            output_path.write_bytes(b"0" * 2048)
+            return subprocess.CompletedProcess(command, 0, str(output_path), "")
+        return super().__call__(command, env)
+
+
 class LibTVHappyHorseProviderTests(unittest.TestCase):
     def config(self, directory):
         return LibTVConfig(project_uuid="project-1", config_dir=directory)
@@ -99,6 +112,22 @@ class LibTVHappyHorseProviderTests(unittest.TestCase):
         result = provider.poll(first["task_id"])
         self.assertEqual("succeeded", result["status"])
         self.assertEqual(2048, len(result["video_bytes"]))
+
+    def test_download_accepts_cli_plain_text_output_path(self):
+        storage = MemoryStorage()
+        runner = TextDownloadLibTVRunner()
+        with tempfile.TemporaryDirectory() as directory:
+            provider = LibTVHappyHorseProvider(storage, self.config(directory), runner)
+            result = provider.submit(
+                image_bytes=b"image",
+                prompt="Animate the airflow.",
+                aspect_ratio="16:9",
+                client_business_id="image_motion_job-text-download",
+            )
+
+        self.assertEqual(PROVIDER_NAME, result["provider"])
+        self.assertIn("image-motion/libtv-provider/image_motion_job-text-download.mp4", storage.files)
+        self.assertEqual(1, len([command for command in runner.commands if "--run" in command]))
 
     def test_restart_recovery_downloads_existing_node_without_rerun(self):
         storage = MemoryStorage()

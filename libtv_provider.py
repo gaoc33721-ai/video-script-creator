@@ -138,7 +138,7 @@ class LibTVHappyHorseProvider:
             check=False,
         )
 
-    def _command(self, *args: str) -> dict[str, Any]:
+    def _command(self, *args: str, allow_text_output: bool = False) -> dict[str, Any]:
         env = self._prepare_credentials()
         command = [self.config.cli_path, *args]
         result = self.command_runner(command, env)
@@ -159,7 +159,10 @@ class LibTVHappyHorseProvider:
                 except json.JSONDecodeError:
                     continue
                 return parsed if isinstance(parsed, dict) else {"result": parsed}
-        raise LibTVProviderError("LibTV CLI 未返回可解析的 JSON。")
+        if allow_text_output:
+            return {"output": output}
+        command_name = str(args[0] if args else "command")
+        raise LibTVProviderError(f"LibTV CLI {command_name} 未返回可解析的 JSON。")
 
     @staticmethod
     def _node_key(payload: dict[str, Any]) -> str:
@@ -202,6 +205,7 @@ class LibTVHappyHorseProvider:
             output_dir,
             "--without-ai-watermark",
             "--vip",
+            allow_text_output=True,
         )
         candidates = sorted(Path(output_dir).rglob("*.mp4"), key=lambda item: item.stat().st_mtime, reverse=True)
         if not candidates:

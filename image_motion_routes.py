@@ -517,7 +517,20 @@ class ImageMotionWorkflow:
             except Exception as fallback_exc:
                 self.update_job(job_id, status="failed", progress=100, current_step="生成失败", completed_at=self.now(), qa_status="failed", failure_message=str(fallback_exc))
     def refresh_provider_jobs(self) -> list[dict]:
-        active = [item for item in self.jobs() if item.get("status") == "processing" and item.get("external_task_id")]
+        active = [
+            item
+            for item in self.jobs()
+            if item.get("external_task_id")
+            and (
+                item.get("status") == "processing"
+                or (
+                    item.get("status") == "failed"
+                    and str(item.get("provider_name") or "") == self.exclusive_provider_name
+                    and "LibTV CLI" in str(item.get("failure_message") or "")
+                    and "JSON" in str(item.get("failure_message") or "")
+                )
+            )
+        ]
         for job in active:
             plan = validate_motion_plan(job.get("motion_plan") or {})
             asset = self.asset(str(job.get("creative_asset_id") or ""))
@@ -534,7 +547,7 @@ class ImageMotionWorkflow:
             try:
                 result = provider_poll(str(job["external_task_id"])) if provider_poll else {"status": "failed"}
                 if result.get("status") == "processing":
-                    self.update_job(job["id"], progress=65, current_step=f"{provider_name} 供应商生成中")
+                    self.update_job(job["id"], status="processing", progress=65, current_step=f"{provider_name} 供应商生成中")
                     continue
                 if is_target_provider and (result.get("status") != "succeeded" or not result.get("video_bytes")):
                     self.fail_job(job["id"], f"{provider_name} 目标动效生成失败：{result.get('message') or 'no video returned'}")
