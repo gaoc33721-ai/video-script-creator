@@ -332,9 +332,20 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
         "subtle volumetric depth, clean contrast, physically plausible occlusion and refined micro-highlights; the result must look filmed, not like a cheap 2D overlay. "
     )
     temporal_sequence = (
-        "Temporal choreography: 0.0-0.8 seconds hold the exact source composition while the feature gently awakens; "
-        "0.8-3.8 seconds develop clear continuous feature motion with layered depth and evolving detail; "
-        "3.8-5.0 seconds reach a confident hero state and settle smoothly without a cut. "
+        "Temporal choreography: 0.0-0.6 seconds hold the exact source composition while the feature gently awakens; "
+        "0.6-4.4 seconds develop clear continuous feature motion with layered depth and evolving detail; "
+        "4.4-5.0 seconds reach a confident hero state and settle smoothly without a cut. "
+    )
+    camera_profile = {
+        "subtle": ("1.5%", "0.5%"),
+        "standard": ("3%", "1%"),
+        "strong": ("4.5%", "1.5%"),
+    }.get(intensity, ("3%", "1%"))
+    camera_choreography = (
+        "Camera choreography: keep the exact source framing for the opening 0.6 seconds, then use one smooth cinematic dolly-in "
+        f"of about {camera_profile[0]} total with a tiny {camera_profile[1]} lateral arc toward the selling-point feature, easing into a stable hero frame. "
+        "Keep the complete appliance inside frame with straight geometry and stable perspective; no abrupt zoom, reframing, orbit, shake, cuts or transitions. "
+        "The camera move is secondary and must never replace the required independent selling-point motion. "
     )
     if preset == "steam":
         lowered_feature = feature.lower()
@@ -353,7 +364,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "The steam shape, position and opacity must evolve continuously frame by frame and feel lively, warm and appetizing without hiding the product. "
             f"{premium_finish}{temporal_sequence} "
             "No drawn white lines, vector curves, ribbons, outline strokes, repeated sine waves, sticker overlays, flat glow sweeps or artificial smoke-machine clouds. "
-            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            f"{camera_choreography} "
             "Keep the appliance shell, baskets, food, control panel, labels, logo and background stationary and structurally unchanged. "
             "Do not add people, hands, rooms, extra products, text or logos. Lighting stays bright, positive, clean and consistent. "
         )
@@ -369,7 +380,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "Show changing surface ripples, glossy refraction, small droplets and restrained splashes with continuous gravity-driven movement and natural variation frame by frame. "
             f"{premium_finish}{temporal_sequence} "
             "No blue lines, vector ribbons, flat mask wipes, glow sweeps, sticker overlays or repeated identical streams. "
-            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            f"{camera_choreography} "
             "Keep the appliance structure, control panel, labels, logo and background stationary and unchanged. Do not add people, hands, rooms, extra products, text or logos. "
             "Lighting stays bright, clean, positive and consistent. "
         )
@@ -394,7 +405,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "Give the airflow premium spatial depth with warm translucent energy, subtle particle advection, heat shimmer and realistic occlusion behind product edges; follow existing arrows or heat cues instead of inventing unrelated paths. "
             f"{premium_finish}{temporal_sequence} "
             "It must not be a static glow, horizontal highlight sweep, brightness pulse, mask wipe or camera motion. "
-            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            f"{camera_choreography} "
             "Keep the appliance shell, baskets, food, control panel, labels, logo and background stationary and structurally unchanged. "
             "Do not add people, hands, rooms, extra products, text or logos. Lighting stays bright, positive, clean and consistent. "
         )
@@ -417,7 +428,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "Build localized multilayer illumination with inner emissive depth, soft edge bloom, tiny drifting energy particles and restrained material-aware micro-reflections on nearby fixed surfaces. "
             "The light must originate from the feature, breathe with refined irregular timing and reveal depth inside the feature; it must not travel as one flat horizontal sweep. "
             f"{premium_finish}{temporal_sequence} "
-            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            f"{camera_choreography} "
             "No flat mask wipe, one-pass scan line, global brightness pulse, neon outline around the whole appliance, sticker overlay or generic lens flare. "
             "Do not redraw interface icons or text, change product geometry, open parts, add people, hands, rooms, extra products, words or logos. Keep the mood bright, clean, confident and futuristic. "
         )
@@ -443,7 +454,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             f"Required articulated motion: {component_action}. Selling point: {feature}. Direction note: {direction}. "
             "The component motion must be obvious but restrained and mechanically connected to the product; do not move, translate, scale, bend or morph the whole appliance. "
             f"{premium_finish}{temporal_sequence} "
-            "Use a locked-off camera: absolutely no zoom, dolly, pan, tilt, orbit, crop animation, camera shake, cuts or transitions. "
+            f"{camera_choreography} "
             "Keep the background, outer shell, control panel, labels and logo stationary and unchanged. Do not add hands, people, rooms, extra products, text or logos. "
             "Lighting stays bright, clean, positive and consistent. "
         )
@@ -457,7 +468,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
         "Do not add, remove, replace, duplicate, redesign or morph the appliance. Do not invent people, hands, rooms or unrelated objects. "
         f"Selling point: {feature}. Animate only the visible {focus} using a {preset} effect, {direction}, at {intensity} intensity. "
         f"{premium_finish}{temporal_sequence} "
-        "Use a single shot with a stable or very gentle push-in, coherent cause-to-effect progression, no cuts, no transition and no camera shake. "
+        f"{camera_choreography} "
         "Keep the mood bright, positive, clean, confident and uplifting from the first frame to the last; never show failure, frustration, darkness, anxiety or a negative-to-positive reversal. "
         "No new text, subtitles, price labels, watermarks, competitor brands, extra logos or garbled lettering. "
     )
@@ -488,7 +499,7 @@ def validate_motion_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "fps": 24,
         "quality": "1080p",
         "generation_strategy": generation_strategy if generation_strategy in {"generative", "hybrid_composite"} else default_strategy,
-        "camera_motion": "locked" if normalized_preset in {"component", "flow", "steam", "liquid", "glow"} else "gentle_push_in",
+        "camera_motion": "gentle_cinematic",
     }
 
 
@@ -624,11 +635,14 @@ def render_stable_motion_video(
     with tempfile.TemporaryDirectory() as tmpdir:
         for frame_index in range(frame_count):
             progress = frame_index / max(1, frame_count - 1)
-            max_zoom = 1.0 if chosen_preset in {"flow", "steam", "liquid"} else 1.02 if text_policy == "preserve_title_logo" else {"subtle": 1.04, "standard": 1.075, "strong": 1.11}.get(chosen_intensity, 1.075)
-            zoom = 1.0 + (max_zoom - 1.0) * progress
-            if max_zoom > 1.0201:
+            max_zoom = 1.0 if text_policy == "preserve_title_logo" else {"subtle": 1.015, "standard": 1.03, "strong": 1.045}.get(chosen_intensity, 1.03)
+            eased_progress = progress * progress * (3.0 - 2.0 * progress)
+            zoom = 1.0 + (max_zoom - 1.0) * eased_progress
+            if max_zoom > 1.0001:
                 resized = base.resize((int(base.width * zoom), int(base.height * zoom)), Image.Resampling.LANCZOS)
-                left = max(0, (resized.width - base.width) // 2)
+                lateral_ratio = {"subtle": 0.005, "standard": 0.01, "strong": 0.015}.get(chosen_intensity, 0.01)
+                lateral_offset = int(round(base.width * lateral_ratio * eased_progress))
+                left = max(0, min(resized.width - base.width, (resized.width - base.width) // 2 + lateral_offset))
                 top = max(0, (resized.height - base.height) // 2)
                 frame_image = resized.crop((left, top, left + base.width, top + base.height)).convert("RGBA")
             else:
@@ -699,6 +713,7 @@ def assess_video_fidelity(
     video_bytes: bytes,
     *,
     allowed_motion_region: dict[str, Any] | None = None,
+    allow_gentle_camera_motion: bool = False,
 ) -> dict[str, Any]:
     """Check global similarity and pixel stability outside the allowed effect region."""
     from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageStat
@@ -762,15 +777,18 @@ def assess_video_fidelity(
         perceptual_score = round(min(perceptual_scores))
         outside_difference = round(max(outside_differences or [0.0]), 2)
         effect_edge_difference = round(max(inside_edge_differences or [0.0]), 2)
-        outside_score = max(0.0, 100.0 - outside_difference * 5.0)
+        outside_limit = 12.0 if allow_gentle_camera_motion else 8.0
+        perceptual_limit = 50 if allow_gentle_camera_motion else 55
+        outside_score = max(0.0, 100.0 - outside_difference * (100.0 / outside_limit))
         score = round(min(perceptual_score, outside_score))
-        passed = perceptual_score >= 55 and outside_difference <= 8.0
+        passed = perceptual_score >= perceptual_limit and outside_difference <= outside_limit
         return {
             "status": "passed" if passed else "failed",
             "score": score,
             "perceptual_similarity": perceptual_score,
             "outside_effect_difference": outside_difference,
             "effect_region_edge_difference": effect_edge_difference,
+            "gentle_camera_motion_allowed": allow_gentle_camera_motion,
             "message": (
                 f"产品与背景保护区稳定，整帧相似度约 {perceptual_score}%，保护区差异 {outside_difference}。"
                 if passed
@@ -783,6 +801,7 @@ def assess_component_motion(
     target_region: dict[str, Any] | None = None,
     motion_name: str = "\u90e8\u4ef6",
     minimum_motion_coverage: float = 0.0,
+    allow_gentle_camera_motion: bool = False,
 ) -> dict[str, Any]:
     """Reject static/global-camera results when articulated local motion was requested."""
     from PIL import Image, ImageChops, ImageOps, ImageStat
@@ -803,21 +822,29 @@ def assess_component_motion(
     def mean_difference(image) -> float:
         return float(ImageStat.Stat(image).mean[0])
 
-    def zoom_alignment(reference, frame) -> tuple[float, float, float]:
+    def camera_alignment(reference, frame):
         width, height = reference.size
         identity_error = mean_difference(ImageChops.difference(reference, frame))
         best_scale = 1.0
+        best_shift = (0, 0)
         best_error = identity_error
-        for step in range(1, 13):
+        best_aligned = reference
+        maximum_step = 6 if allow_gentle_camera_motion else 12
+        maximum_shift = 3 if allow_gentle_camera_motion else 0
+        for step in range(0, maximum_step + 1):
             scale = 1.0 + step * 0.01
             resized = reference.resize((int(round(width * scale)), int(round(height * scale))), Image.Resampling.LANCZOS)
-            left = max(0, (resized.width - width) // 2)
-            top = max(0, (resized.height - height) // 2)
-            aligned = resized.crop((left, top, left + width, top + height))
-            error = mean_difference(ImageChops.difference(aligned, frame))
-            if error < best_error:
-                best_scale, best_error = scale, error
-        return best_scale, best_error, identity_error
+            center_left = max(0, (resized.width - width) // 2)
+            center_top = max(0, (resized.height - height) // 2)
+            for shift_x in range(-maximum_shift, maximum_shift + 1):
+                for shift_y in range(-maximum_shift, maximum_shift + 1):
+                    left = max(0, min(resized.width - width, center_left + shift_x))
+                    top = max(0, min(resized.height - height, center_top + shift_y))
+                    aligned = resized.crop((left, top, left + width, top + height))
+                    error = mean_difference(ImageChops.difference(aligned, frame))
+                    if error < best_error:
+                        best_scale, best_shift, best_error, best_aligned = scale, (shift_x, shift_y), error, aligned
+        return best_scale, best_shift, best_error, identity_error, best_aligned
 
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "input.mp4")
@@ -836,7 +863,8 @@ def assess_component_motion(
         left, top, right, bottom = region_box(*frames[0].size)
         candidates = []
         for frame in frames[1:]:
-            difference = ImageChops.difference(frames[0], frame)
+            best_scale, best_shift, best_camera_error, identity_error, aligned_reference = camera_alignment(frames[0], frame)
+            difference = ImageChops.difference(aligned_reference if allow_gentle_camera_motion else frames[0], frame)
             target_crop = difference.crop((left, top, right, bottom))
             target_difference = mean_difference(target_crop)
             target_values = list(target_crop.getdata())
@@ -857,17 +885,16 @@ def assess_component_motion(
             background_difference = weighted_total / max(1, weighted_pixels)
             local_difference = max(0.0, target_difference - background_difference)
             ratio = target_difference / max(1.0, background_difference)
-            best_scale, best_zoom_error, identity_error = zoom_alignment(frames[0], frame)
-            zoom_explains_motion = best_scale >= 1.02 and best_zoom_error <= identity_error * 0.82
-            candidates.append((local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion, motion_coverage))
+            zoom_explains_motion = (best_scale >= 1.02 or best_shift != (0, 0)) and best_camera_error <= identity_error * 0.82
+            candidates.append((local_difference, target_difference, background_difference, ratio, best_scale, best_shift, zoom_explains_motion, motion_coverage))
 
-        local_difference, target_difference, background_difference, ratio, best_scale, zoom_explains_motion, motion_coverage = max(candidates, key=lambda item: item[0])
+        local_difference, target_difference, background_difference, ratio, best_scale, best_shift, zoom_explains_motion, motion_coverage = max(candidates, key=lambda item: item[0])
         passed = (
             target_difference >= 4.5
             and local_difference >= 1.5
             and ratio >= 1.18
             and background_difference <= 16.0
-            and not zoom_explains_motion
+            and (allow_gentle_camera_motion or not zoom_explains_motion)
             and motion_coverage >= max(0.0, float(minimum_motion_coverage))
         )
         score = round(max(0.0, min(100.0, local_difference * 12.0 + (ratio - 1.0) * 40.0 + motion_coverage * 80.0)))
@@ -881,6 +908,8 @@ def assess_component_motion(
             "local_difference": round(local_difference, 2),
             "local_to_background_ratio": round(ratio, 2),
             "best_global_zoom_scale": round(best_scale, 3),
+            "best_camera_shift": best_shift,
+            "gentle_camera_motion_allowed": allow_gentle_camera_motion,
             "global_zoom_explains_motion": zoom_explains_motion,
             "message": (
                 f"\u68c0\u6d4b\u5230\u76ee\u6807\u533a\u57df\u5b58\u5728\u72ec\u7acb{motion_name}\u8fd0\u52a8\uff0c\u4e14\u955c\u5934\u6574\u4f53\u8fd0\u52a8\u53d7\u63a7\u3002"

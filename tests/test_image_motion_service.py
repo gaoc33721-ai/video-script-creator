@@ -47,9 +47,11 @@ class ImageMotionServiceTests(unittest.TestCase):
         prompt = build_motion_prompt(asset, {"preset": "flow", "focus": "effect", "intensity": "standard"})
         self.assertIn("exactly one Hisense oven", prompt)
         self.assertIn("bright, positive", prompt)
+        self.assertIn("about 3% total", prompt)
+        self.assertIn("tiny 1% lateral arc", prompt)
         self.assertNotIn("Creator instruction", prompt)
 
-    def test_component_prompt_requires_real_part_motion_and_locked_camera(self):
+    def test_component_prompt_requires_real_part_motion_and_controlled_camera(self):
         asset = {
             "category": "Airfryer",
             "model": "HAFA11BDW",
@@ -60,9 +62,9 @@ class ImageMotionServiceTests(unittest.TestCase):
             {"preset": "component", "focus": "product", "intensity": "standard", "direction": "drawer motion"}
         )
         prompt = build_motion_prompt(asset, plan)
-        self.assertEqual("locked", plan["camera_motion"])
+        self.assertEqual("gentle_cinematic", plan["camera_motion"])
         self.assertIn("cooking basket or front drawer slides outward", prompt)
-        self.assertIn("absolutely no zoom", prompt)
+        self.assertIn("smooth cinematic dolly-in", prompt)
         self.assertIn("outer cabinet remain fixed", prompt)
 
     def test_flow_prompt_requires_real_currents_and_rejects_highlight_sweep(self):
@@ -76,15 +78,15 @@ class ImageMotionServiceTests(unittest.TestCase):
             {"preset": "flow", "focus": "effect", "intensity": "standard", "direction": "circulating hot air"}
         )
         prompt = build_motion_prompt(asset, plan)
-        self.assertEqual("locked", plan["camera_motion"])
+        self.assertEqual("gentle_cinematic", plan["camera_motion"])
         self.assertIn("Both visible cooking zones", prompt)
         self.assertIn("continuous circulating hot-air currents", prompt)
         self.assertIn("not be a static glow, horizontal highlight sweep", prompt)
         self.assertIn("subtle particle advection", prompt)
         self.assertIn("heat shimmer", prompt)
         self.assertIn("Premium technology-commercial finish", prompt)
-        self.assertIn("0.8-3.8 seconds", prompt)
-        self.assertIn("absolutely no zoom", prompt)
+        self.assertIn("0.6-4.4 seconds", prompt)
+        self.assertIn("smooth cinematic dolly-in", prompt)
 
     def test_steam_prompt_requires_volumetric_vapor_and_rejects_drawn_lines(self):
         asset = {
@@ -97,12 +99,12 @@ class ImageMotionServiceTests(unittest.TestCase):
             {"preset": "steam", "focus": "effect", "intensity": "standard", "direction": "rising from hot food"}
         )
         prompt = build_motion_prompt(asset, plan)
-        self.assertEqual("locked", plan["camera_motion"])
+        self.assertEqual("gentle_cinematic", plan["camera_motion"])
         self.assertIn("Required volumetric steam motion", prompt)
         self.assertIn("both visible cooking baskets", prompt)
         self.assertIn("irregular turbulent curls", prompt)
         self.assertIn("No drawn white lines", prompt)
-        self.assertIn("absolutely no zoom", prompt)
+        self.assertIn("smooth cinematic dolly-in", prompt)
 
     def test_liquid_prompt_requires_physical_flow_and_rejects_vector_ribbons(self):
         asset = {
@@ -115,11 +117,11 @@ class ImageMotionServiceTests(unittest.TestCase):
             {"preset": "liquid", "focus": "effect", "intensity": "standard", "direction": "downward rinse"}
         )
         prompt = build_motion_prompt(asset, plan)
-        self.assertEqual("locked", plan["camera_motion"])
+        self.assertEqual("gentle_cinematic", plan["camera_motion"])
         self.assertIn("physically coherent liquid motion", prompt)
         self.assertIn("surface ripples", prompt)
         self.assertIn("No blue lines, vector ribbons", prompt)
-        self.assertIn("absolutely no zoom", prompt)
+        self.assertIn("smooth cinematic dolly-in", prompt)
 
     def test_glow_prompt_locks_product_and_uses_layered_technology_choreography(self):
         asset = {
@@ -134,17 +136,17 @@ class ImageMotionServiceTests(unittest.TestCase):
 
         prompt = build_motion_prompt(asset, plan)
 
-        self.assertEqual("locked", plan["camera_motion"])
+        self.assertEqual("gentle_cinematic", plan["camera_motion"])
         self.assertIn("immutable product reference", prompt)
         self.assertIn("existing viewing window", prompt)
         self.assertIn("inner emissive depth", prompt)
         self.assertIn("material-aware micro-reflections", prompt)
-        self.assertIn("0.0-0.8 seconds", prompt)
-        self.assertIn("3.8-5.0 seconds", prompt)
+        self.assertIn("0.0-0.6 seconds", prompt)
+        self.assertIn("4.4-5.0 seconds", prompt)
         self.assertIn("must not travel as one flat horizontal sweep", prompt)
         self.assertIn("localized illumination evolving inside", prompt)
         self.assertNotIn("gentle forward motion", prompt)
-        self.assertIn("absolutely no zoom", prompt)
+        self.assertIn("smooth cinematic dolly-in", prompt)
         self.assertLessEqual(len(prompt), 3000)
 
     def test_airfryer_category_name_does_not_force_touch_panel_into_flow(self):
@@ -167,9 +169,9 @@ class ImageMotionServiceTests(unittest.TestCase):
         )
         self.assertEqual("flow", result["recommended_preset"])
 
-    def test_flow_plan_locks_camera_and_renders_localized_hot_air_motion(self):
+    def test_flow_plan_uses_controlled_camera_and_renders_localized_hot_air_motion(self):
         plan = validate_motion_plan({"preset": "flow", "focus": "effect", "intensity": "standard"})
-        self.assertEqual("locked", plan["camera_motion"])
+        self.assertEqual("gentle_cinematic", plan["camera_motion"])
         source = Image.new("RGB", (320, 180), (12, 32, 38))
         draw = ImageDraw.Draw(source)
         draw.arc((70, 35, 250, 155), 20, 340, fill=(255, 135, 20), width=10)
@@ -186,16 +188,18 @@ class ImageMotionServiceTests(unittest.TestCase):
             video,
             target_region={"x": 0.10, "y": 0.10, "width": 0.80, "height": 0.80},
             motion_name="\u70ed\u6d41",
+            allow_gentle_camera_motion=True,
         )
         self.assertEqual("passed", qa["status"], qa)
-        self.assertFalse(qa["global_zoom_explains_motion"])
+        self.assertTrue(qa["global_zoom_explains_motion"])
         strict_qa = assess_component_motion(
             video,
             target_region={"x": 0.10, "y": 0.10, "width": 0.80, "height": 0.80},
             motion_name="\u70ed\u6d41",
+            allow_gentle_camera_motion=True,
             minimum_motion_coverage=0.22,
         )
-        self.assertEqual("failed", strict_qa["status"], strict_qa)
+        self.assertEqual("passed", strict_qa["status"], strict_qa)
 
 
 
@@ -218,7 +222,7 @@ class ImageMotionServiceTests(unittest.TestCase):
             fps=24,
             effect_region=region,
         )
-        fidelity = assess_video_fidelity(prepared, video, allowed_motion_region=region)
+        fidelity = assess_video_fidelity(prepared, video, allowed_motion_region=region, allow_gentle_camera_motion=True)
         self.assertEqual("passed", fidelity["status"], fidelity)
         self.assertLessEqual(fidelity["outside_effect_difference"], 8.0)
         motion = assess_component_motion(
@@ -226,9 +230,33 @@ class ImageMotionServiceTests(unittest.TestCase):
             target_region=region,
             motion_name="蒸汽",
             minimum_motion_coverage=0.06,
+            allow_gentle_camera_motion=True,
         )
         self.assertEqual("passed", motion["status"], motion)
-        self.assertFalse(motion["global_zoom_explains_motion"])
+        self.assertTrue(motion["global_zoom_explains_motion"])
+
+    def test_camera_only_motion_cannot_pass_as_selling_point_motion(self):
+        source = Image.new("RGB", (320, 180), (18, 42, 52))
+        draw = ImageDraw.Draw(source)
+        draw.rectangle((35, 30, 285, 155), outline=(210, 220, 225), width=5)
+        draw.ellipse((105, 55, 215, 150), fill=(230, 125, 35))
+        video = render_stable_motion_video(
+            image_bytes(source),
+            preset="camera",
+            intensity="standard",
+            duration_seconds=5,
+            fps=12,
+        )
+
+        qa = assess_component_motion(
+            video,
+            target_region={"x": 0.25, "y": 0.20, "width": 0.50, "height": 0.65},
+            motion_name="卖点",
+            allow_gentle_camera_motion=True,
+        )
+
+        self.assertEqual("failed", qa["status"], qa)
+        self.assertTrue(qa["gentle_camera_motion_allowed"])
 
     def test_full_frame_motion_region_does_not_divide_by_zero(self):
         prepared = image_bytes(Image.new("RGB", (320, 180), (22, 48, 58)))

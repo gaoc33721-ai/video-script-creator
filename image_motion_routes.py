@@ -384,13 +384,24 @@ class ImageMotionWorkflow:
             effect_region=motion_region,
             metadata={"AssetId": asset["id"], "JobId": job_id, "Version": job.get("version")},
         )
-        fidelity_qa = assess_video_fidelity(prepared, video, allowed_motion_region=motion_region)
+        fidelity_qa = assess_video_fidelity(
+            prepared,
+            video,
+            allowed_motion_region=motion_region,
+            allow_gentle_camera_motion=plan.get("camera_motion") == "gentle_cinematic",
+        )
         qa_result = fidelity_qa
         if preset in {"flow", "steam", "liquid"}:
             motion_label = "热流" if preset == "flow" else "蒸汽" if preset == "steam" else "液体"
             motion_key = "flow_motion" if preset == "flow" else "steam_motion" if preset == "steam" else "liquid_motion"
             minimum_coverage = 0.10 if preset == "flow" else 0.06 if preset == "steam" else 0.08
-            motion_qa = assess_component_motion(video, target_region=motion_region, motion_name=motion_label, minimum_motion_coverage=minimum_coverage)
+            motion_qa = assess_component_motion(
+                video,
+                target_region=motion_region,
+                motion_name=motion_label,
+                minimum_motion_coverage=minimum_coverage,
+                allow_gentle_camera_motion=plan.get("camera_motion") == "gentle_cinematic",
+            )
             passed = fidelity_qa.get("status") == "passed" and motion_qa.get("status") == "passed"
             qa_result = {
                 "status": "passed" if passed else "failed",
@@ -583,12 +594,23 @@ class ImageMotionWorkflow:
                     motion_region = {"x": 0.08, "y": 0.22, "width": 0.84, "height": 0.68}
                 if is_glow and not motion_region:
                     motion_region = {"x": 0.10, "y": 0.18, "width": 0.80, "height": 0.68}
-                qa = assess_video_fidelity(prepared, normalized, allowed_motion_region=motion_region)
+                qa = assess_video_fidelity(
+                    prepared,
+                    normalized,
+                    allowed_motion_region=motion_region,
+                    allow_gentle_camera_motion=plan.get("camera_motion") == "gentle_cinematic",
+                )
                 if is_component or is_flow or is_steam or is_liquid:
                     motion_label = "热流" if is_flow else "蒸汽" if is_steam else "液体" if is_liquid else "部件"
                     motion_qa_key = "flow_motion" if is_flow else "steam_motion" if is_steam else "liquid_motion" if is_liquid else "component_motion"
                     minimum_coverage = 0.22 if is_flow else 0.12 if is_steam else 0.14 if is_liquid else 0.0
-                    motion_qa = assess_component_motion(normalized, target_region=motion_region, motion_name=motion_label, minimum_motion_coverage=minimum_coverage)
+                    motion_qa = assess_component_motion(
+                        normalized,
+                        target_region=motion_region,
+                        motion_name=motion_label,
+                        minimum_motion_coverage=minimum_coverage,
+                        allow_gentle_camera_motion=plan.get("camera_motion") == "gentle_cinematic",
+                    )
                     fidelity_qa = qa
                     passed = fidelity_qa.get("status") == "passed" and motion_qa.get("status") == "passed"
                     qa = {

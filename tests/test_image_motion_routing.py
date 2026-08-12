@@ -135,7 +135,7 @@ class ImageMotionRoutingTests(unittest.TestCase):
         self.assertEqual("luma_ray2", job["provider_name"])
         self.assertEqual("ray-task-1", job["external_task_id"])
         self.assertEqual("1:1", submitted["aspect_ratio"])
-        self.assertIn("absolutely no zoom", submitted["prompt"])
+        self.assertIn("smooth cinematic dolly-in", submitted["prompt"])
 
     def test_exclusive_libtv_provider_overrides_all_legacy_providers(self):
         storage = MemoryStorage()
@@ -266,7 +266,7 @@ class ImageMotionRoutingTests(unittest.TestCase):
                 self.assertEqual(f"luma_ray2_{preset}", job["generation_mode"])
                 self.assertEqual("luma_ray2", job["provider_name"])
                 self.assertIn(required_text, submitted["prompt"])
-                self.assertIn("absolutely no zoom", submitted["prompt"])
+                self.assertIn("smooth cinematic dolly-in", submitted["prompt"])
                 self.assertTrue(submitted["lock_end_frame"])
 
     def test_steam_and_liquid_submit_failures_are_not_downgraded(self):
