@@ -7578,16 +7578,21 @@ def product_image_preview(image_id: str):
     return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
 
 
+def _catalog_match_key(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
 @app.get("/api/options", dependencies=[Depends(_verify_access)])
 def options():
     df = _load_products()
     if df.empty:
         return {"categories": [], "models_by_category": {}}
-    categories = sorted(str(x) for x in df["Category"].dropna().unique().tolist())
+    categories = sorted({str(value).strip() for value in df["Category"].dropna() if str(value).strip()})
+    category_keys = df["Category"].map(_catalog_match_key)
     models_by_category = {}
     for category in categories:
-        rows = df[df["Category"].astype(str) == category]
-        models_by_category[category] = sorted(str(x) for x in rows["model"].dropna().unique().tolist())
+        rows = df[category_keys == _catalog_match_key(category)]
+        models_by_category[category] = sorted({str(value).strip() for value in rows["model"].dropna() if str(value).strip()})
     return {"categories": categories, "models_by_category": models_by_category}
 
 
@@ -7596,7 +7601,9 @@ def features(category: str, model: str):
     df = _load_products()
     if df.empty:
         return {"features": []}
-    rows = df[(df["Category"].astype(str) == category) & (df["model"].astype(str) == model)]
+    category_key = _catalog_match_key(category)
+    model_key = _catalog_match_key(model)
+    rows = df[(df["Category"].map(_catalog_match_key) == category_key) & (df["model"].map(_catalog_match_key) == model_key)]
     names = []
     for value in rows["Feature Name"].dropna().astype(str).tolist():
         value = value.strip()

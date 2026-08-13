@@ -149,6 +149,72 @@ class ImageMotionServiceTests(unittest.TestCase):
         self.assertIn("smooth cinematic dolly-in", prompt)
         self.assertLessEqual(len(prompt), 3000)
 
+    def test_component_prompt_uses_visible_travel_and_holds_final_position(self):
+        asset = {
+            "category": "Airfryer",
+            "model": "HAFA11BDW",
+            "feature": "Dual Cooking Zone",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {"preset": "component", "focus": "product", "intensity": "standard", "direction": "drawer motion"}
+        )
+
+        prompt = build_motion_prompt(asset, plan)
+
+        self.assertIn("15-22% of its visible depth", prompt)
+        self.assertIn("holds open long enough", prompt)
+        self.assertIn("1.2-3.8 seconds complete one smooth", prompt)
+        self.assertIn("Do not return to the start", prompt)
+        self.assertIn("Do not substitute camera motion", prompt)
+
+    def test_creator_directed_component_action_has_priority_over_default_action(self):
+        asset = {
+            "category": "Airfryer",
+            "model": "HAFA11BDW",
+            "feature": "Large Capacity",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {
+                "preset": "component",
+                "focus": "product",
+                "intensity": "strong",
+                "custom_instruction": "Pull the left drawer outward along its rails by 30% and hold it open",
+            }
+        )
+
+        prompt = build_motion_prompt(asset, plan)
+
+        self.assertIn("execute this creator-directed action exactly", prompt)
+        self.assertIn("Pull the left drawer outward along its rails by 30% and hold it open", prompt)
+        self.assertNotIn("one clearly visible cooking basket", prompt)
+        self.assertIn("spatially separated from the fixed cabinet", prompt)
+        self.assertLessEqual(len(prompt), 3000)
+
+    def test_creator_directed_natural_effect_rejects_overlay_substitution(self):
+        asset = {
+            "category": "Oven",
+            "model": "Speed Oven",
+            "feature": "60% Faster Cooking",
+            "analysis": {},
+        }
+        plan = validate_motion_plan(
+            {
+                "preset": "flow",
+                "focus": "effect",
+                "intensity": "strong",
+                "custom_instruction": "Develop heat from the food into a three-dimensional convection field",
+            }
+        )
+
+        prompt = build_motion_prompt(asset, plan)
+
+        self.assertIn("highest priority after product fidelity", prompt)
+        self.assertIn("visible travel and evolving depth", prompt)
+        self.assertIn("do not reduce it to a glow pulse", prompt)
+        self.assertIn("never loop one identical overlay", prompt)
+
     def test_airfryer_category_name_does_not_force_touch_panel_into_flow(self):
         result = analyze_creative_image(
             image_bytes(Image.new("RGB", (800, 800), (30, 40, 50))),

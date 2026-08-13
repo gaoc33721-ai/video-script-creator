@@ -278,6 +278,10 @@ function renderMotionAssets() {
                   </select>
                 </label>
               </div>
+              <label class="motion-director">\u52a8\u4f5c\u5bfc\u6f14\uff08\u53ef\u9009\uff09
+                <textarea data-motion-field="custom_instruction" maxlength="300" rows="2" placeholder="\u4f8b\uff1a\u5de6\u4fa7\u62bd\u5c49\u6cbf\u5bfc\u8f68\u62c9\u5f00\u7ea6 20% \u5e76\u4fdd\u6301\uff0c\u98df\u7269\u70ed\u6c14\u81ea\u7136\u5347\u8d77">${escapeHtml(plan.custom_instruction || "")}</textarea>
+                <small>\u9700\u8981\u62c9\u5f00\u62bd\u5c49\u3001\u5f00\u95e8\u3001\u65cb\u8f6c\u7b49\u660e\u663e\u52a8\u4f5c\u65f6\u518d\u586b\uff1b\u8bf7\u540c\u65f6\u9009\u62e9\u201c\u90e8\u4ef6\u8fd0\u52a8\u201d\u3002</small>
+              </label>
               ${analysis.ready ? `<div class="motion-generate-action">
                 <button type="button" data-motion-generate-asset="${escapeAttr(asset.id)}" ${motionSubmitBusy ? "disabled" : ""} ${isSubmitting ? 'aria-busy="true"' : ""}>${isSubmitting ? "\u6b63\u5728\u63d0\u4ea4\u2026" : "\u751f\u6210\u52a8\u6001\u77ed\u89c6\u9891"}</button>
                 <span>${isSubmitting ? "\u4efb\u52a1\u5df2\u53d7\u7406\uff0c\u6b63\u5728\u6392\u961f\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\u3002" : "\u9ed8\u8ba4 5 \u79d2\u30011080p\u3001\u5355\u955c\u5934\uff1b\u751f\u6210\u540e\u53ef\u9884\u89c8\u548c\u4e0b\u8f7d\u3002"}</span>
@@ -364,7 +368,7 @@ function motionPlanPayload(card) {
     preset: card.querySelector('[data-motion-field="preset"]')?.value || "camera",
     intensity: card.querySelector('[data-motion-field="intensity"]')?.value || "standard",
     direction: "",
-    custom_instruction: "",
+    custom_instruction: card.querySelector('[data-motion-field="custom_instruction"]')?.value?.trim() || "",
   };
 }
 
@@ -407,6 +411,9 @@ async function submitSelectedMotion(assetIds = null) {
     submitController.abort();
   }, 20000);
   try {
+    await Promise.all(
+      selected.map((assetId) => saveMotionPlan(document.querySelector('[data-motion-asset-id="' + assetId + '"]')))
+    );
     const data = await api("/api/image-motion/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -142,6 +142,8 @@ class ImageMotionRoutingTests(unittest.TestCase):
         asset = natural_asset("flow")
         storage.json[CREATIVE_ASSETS_KEY] = [asset]
         storage.json[IMAGE_MOTION_JOBS_KEY] = [natural_job(preset="flow")]
+        storage.json[IMAGE_MOTION_JOBS_KEY][0]["motion_plan"]["custom_instruction"] = "Pull the left drawer outward along its rails by 20% and hold it open"
+        storage.json[IMAGE_MOTION_JOBS_KEY][0]["motion_plan"]["preset"] = "component"
         storage.files[asset["original_key"]] = png_bytes((690, 388))
         submitted = {}
 
@@ -166,9 +168,11 @@ class ImageMotionRoutingTests(unittest.TestCase):
         job = storage.json[IMAGE_MOTION_JOBS_KEY][0]
         self.assertEqual("processing", job["status"])
         self.assertEqual("libtv_happy_horse_1_1", job["provider_name"])
-        self.assertEqual("libtv_happy_horse_1_1_flow", job["generation_mode"])
+        self.assertEqual("libtv_happy_horse_1_1_component", job["generation_mode"])
         self.assertEqual("image_motion_job-flow", job["external_task_id"])
         self.assertEqual("image_motion_job-flow", submitted["client_business_id"])
+        self.assertIn("execute this creator-directed action exactly", submitted["prompt"])
+        self.assertIn("Pull the left drawer outward along its rails by 20% and hold it open", submitted["prompt"])
 
     def test_recoverable_libtv_jobs_are_polled_without_resubmission(self):
         for failure_message in (

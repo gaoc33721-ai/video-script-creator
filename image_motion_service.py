@@ -327,6 +327,13 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
     if preset == "glow":
         direction = "localized illumination evolving inside the existing selling-point feature"
     custom = str(plan.get("custom_instruction") or "").strip()
+    action_brief = (
+        "Creator-directed action brief, highest priority after product fidelity: "
+        f"{custom}. Translate the requested verb into an obvious physical or volumetric change with visible travel and evolving depth; "
+        "do not reduce it to a glow pulse, line overlay, mask sweep or camera-only motion. "
+        if custom
+        else ""
+    )
     premium_finish = (
         "Premium technology-commercial finish: crisp product edges, controlled high dynamic range, realistic material-aware reflections, "
         "subtle volumetric depth, clean contrast, physically plausible occlusion and refined micro-highlights; the result must look filmed, not like a cheap 2D overlay. "
@@ -335,6 +342,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
         "Temporal choreography: 0.0-0.6 seconds hold the exact source composition while the feature gently awakens; "
         "0.6-4.4 seconds develop clear continuous feature motion with layered depth and evolving detail; "
         "4.4-5.0 seconds reach a confident hero state and settle smoothly without a cut. "
+        "The shot must visibly progress from activation through spatial development to a resolved result; never loop one identical overlay. "
     )
     camera_profile = {
         "subtle": ("1.5%", "0.5%"),
@@ -369,7 +377,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "Do not add people, hands, rooms, extra products, text or logos. Lighting stays bright, positive, clean and consistent. "
         )
         if custom:
-            prompt += f"Creator instruction: {custom}."
+            prompt += action_brief
         return prompt.strip()[:3000]
     if preset == "liquid":
         prompt = (
@@ -385,7 +393,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "Lighting stays bright, clean, positive and consistent. "
         )
         if custom:
-            prompt += f"Creator instruction: {custom}."
+            prompt += action_brief
         return prompt.strip()[:3000]
     if preset == "flow":
         lowered_feature = feature.lower()
@@ -410,7 +418,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "Do not add people, hands, rooms, extra products, text or logos. Lighting stays bright, positive, clean and consistent. "
         )
         if custom:
-            prompt += f"Creator instruction: {custom}."
+            prompt += action_brief
         return prompt.strip()[:3000]
     if preset == "glow":
         lowered_feature = feature.lower()
@@ -433,33 +441,41 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
             "Do not redraw interface icons or text, change product geometry, open parts, add people, hands, rooms, extra products, words or logos. Keep the mood bright, clean, confident and futuristic. "
         )
         if custom:
-            prompt += f"Creator instruction: {custom}."
+            prompt += action_brief
         return prompt.strip()[:3000]
     if preset == "component":
         category_hint = _category_hint(category)
-        if category_hint == "air fryer":
-            component_action = "one clearly visible cooking basket or front drawer slides outward slightly, then settles; the other basket and outer cabinet remain fixed"
+        travel = {"subtle": "8-12%", "standard": "15-22%", "strong": "25-35%"}.get(intensity, "15-22%")
+        hinge_angle = {"subtle": "10-15 degrees", "standard": "25-35 degrees", "strong": "40-55 degrees"}.get(intensity, "25-35 degrees")
+        if custom:
+            component_action = f"execute this creator-directed action exactly: {custom}"
+        elif category_hint == "air fryer":
+            component_action = f"one clearly visible cooking basket or front drawer slides outward along its real rails by roughly {travel} of its visible depth and holds open long enough to reveal the food or capacity; the other basket and outer cabinet remain fixed"
         elif category_hint in {"oven", "microwave", "dishwasher"}:
-            component_action = "the clearly visible appliance door opens slightly on its real hinge, then settles; the outer cabinet remains fixed"
+            component_action = f"the clearly visible appliance door opens by roughly {hinge_angle} on its real hinge and holds in the open position; the outer cabinet remains fixed"
         elif category_hint == "washing machine":
-            component_action = "the visible drum rotates smoothly inside the fixed outer cabinet"
+            component_action = "the visible drum completes one clearly readable partial rotation inside the fixed outer cabinet and then settles"
         elif category_hint == "refrigerator":
-            component_action = "one clearly visible door opens slightly on its real hinge; the cabinet and any other door remain fixed"
+            component_action = f"one clearly visible door opens by roughly {hinge_angle} on its real hinge and holds; the cabinet and any other door remain fixed"
         else:
-            component_action = "exactly one clearly visible movable product component performs a small mechanically plausible slide, rotation or hinge motion while the outer cabinet remains fixed"
+            component_action = f"exactly one clearly visible movable product component performs a mechanically plausible {travel} slide, rotation or hinge movement and then holds while the outer cabinet remains fixed"
+        component_sequence = (
+            "Articulated action timing: 0.0-0.6 seconds hold the source pose; 0.6-1.2 seconds show a subtle mechanical engagement cue; "
+            "1.2-3.8 seconds complete one smooth, clearly readable physical travel on the real rail, hinge or axis; "
+            "3.8-5.0 seconds hold the achieved position with restrained inertial settling. Do not return to the start unless the creator explicitly asks. "
+        )
         prompt = (
             "Create one continuous five-second premium e-commerce product demonstration based strictly on the supplied source image. "
             f"Product lock: exactly one Hisense {category}, model {model or 'as shown in the source'}, and no other appliance. "
             "The supplied image is the absolute truth for product structure, proportions, materials, control layout, text and brand placement. "
             f"Required articulated motion: {component_action}. Selling point: {feature}. Direction note: {direction}. "
-            "The component motion must be obvious but restrained and mechanically connected to the product; do not move, translate, scale, bend or morph the whole appliance. "
-            f"{premium_finish}{temporal_sequence} "
+            "The component motion must be unmistakable, mechanically connected and spatially separated from the fixed cabinet; preserve rigid materials, joints, rails and hinge alignment throughout. "
+            "Do not move, translate, scale, bend or morph the whole appliance. Do not substitute camera motion, glow, arrows or a highlight sweep for the requested part travel. "
+            f"{premium_finish}{component_sequence} "
             f"{camera_choreography} "
             "Keep the background, outer shell, control panel, labels and logo stationary and unchanged. Do not add hands, people, rooms, extra products, text or logos. "
             "Lighting stays bright, clean, positive and consistent. "
         )
-        if custom:
-            prompt += f"Creator instruction: {custom}."
         return prompt.strip()[:3000]
     prompt = (
         f"Create one continuous five-second premium e-commerce motion shot based strictly on the supplied source image. "
@@ -473,7 +489,7 @@ def build_motion_prompt(asset: dict[str, Any], plan: dict[str, Any]) -> str:
         "No new text, subtitles, price labels, watermarks, competitor brands, extra logos or garbled lettering. "
     )
     if custom:
-        prompt += f"Creator instruction: {custom}."
+        prompt += action_brief
     return prompt.strip()[:3000]
 
 

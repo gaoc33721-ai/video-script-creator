@@ -1658,6 +1658,22 @@ button.secondary {
   margin-top: 5px;
 }
 
+.motion-director {
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.motion-director textarea {
+  min-height: 70px;
+  resize: vertical;
+  background: #fff;
+}
+
+.motion-director small {
+  font-weight: 500;
+  line-height: 1.5;
+}
 .motion-blockers {
   margin: 0;
   padding: 10px 12px;

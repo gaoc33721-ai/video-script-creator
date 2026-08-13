@@ -322,30 +322,40 @@ async function loadFeatures(preferredFeatures = []) {
   const requestId = ++state.featuresRequestId;
   const category = $("categorySelect").value;
   const model = $("modelSelect").value;
+  state.features = [];
+  state.selectedFeatures = [];
   if (!category || !model) {
-    state.features = [];
-    state.selectedFeatures = [];
     renderFeaturePicker();
+    updateSelectionSummary();
     return;
   }
-  const data = await api(`/api/features?category=${encodeURIComponent(category)}&model=${encodeURIComponent(model)}`);
-  if (requestId !== state.featuresRequestId) return;
-  state.features = data.features;
-  const requestedFeatures = new Set((preferredFeatures || []).map((item) => String(item).trim()).filter(Boolean));
-  const matchingFeatures = data.features.filter((item) => requestedFeatures.has(item));
-  state.selectedFeatures = matchingFeatures.length ? matchingFeatures : data.features.slice(0, DEFAULT_FEATURE_COUNT);
-  renderFeaturePicker();
+  renderFeaturePicker("正在加载该机型的卖点…");
   updateSelectionSummary();
+  try {
+    const data = await api(`/api/features?category=${encodeURIComponent(category)}&model=${encodeURIComponent(model)}`);
+    if (requestId !== state.featuresRequestId) return;
+    state.features = Array.isArray(data.features) ? data.features : [];
+    const requestedFeatures = new Set((preferredFeatures || []).map((item) => String(item).trim()).filter(Boolean));
+    const matchingFeatures = state.features.filter((item) => requestedFeatures.has(item));
+    state.selectedFeatures = matchingFeatures.length ? matchingFeatures : state.features.slice(0, DEFAULT_FEATURE_COUNT);
+    renderFeaturePicker();
+    updateSelectionSummary();
+  } catch (error) {
+    if (requestId !== state.featuresRequestId) return;
+    renderFeaturePicker("卖点加载失败，请重试或检查卖点库。");
+    updateSelectionSummary();
+    setMessage("formMessage", `卖点加载失败：${error.message}`, "error");
+  }
 }
 
 function toggleValue(list, value) {
   return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 }
 
-function renderFeaturePicker() {
+function renderFeaturePicker(emptyMessage = "") {
   const picker = $("featurePicker");
   if (!state.features.length) {
-    picker.innerHTML = '<div class="check-empty">当前型号未匹配到卖点，请切换型号或更新卖点库</div>';
+    picker.innerHTML = `<div class="check-empty">${escapeHtml(emptyMessage || "当前型号未匹配到卖点，请切换型号或更新卖点库")}</div>`;
     return;
   }
   picker.innerHTML = state.features

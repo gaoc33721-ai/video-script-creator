@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+import pandas as pd
 from PIL import Image
 
 
@@ -30,6 +31,43 @@ class ImageMotionApiTests(unittest.TestCase):
         Image.new("RGB", size, color).save(output, format="PNG")
         return output.getvalue()
 
+    def test_features_match_selected_model_after_catalog_text_normalization(self):
+        catalog = pd.DataFrame(
+            [
+                {
+                    "Region": "US",
+                    "Brand": "Hisense",
+                    "Category": "  Microwave Oven  ",
+                    "model": " H20MOBS15 ",
+                    "language": "English",
+                    "Feature Name": "20L Capacity",
+                    "Tagline": "",
+                    "Feature Description": "Compact microwave capacity.",
+                },
+                {
+                    "Region": "US",
+                    "Brand": "Hisense",
+                    "Category": "Microwave Oven",
+                    "model": "H20MOBS15",
+                    "language": "English",
+                    "Feature Name": "Defrost Function",
+                    "Tagline": "",
+                    "Feature Description": "Defrost meals evenly.",
+                },
+            ]
+        )
+        with patch.object(api_app.PRODUCT_FEATURE_STORE, "load", return_value=catalog):
+            options = self.client.get("/api/options")
+            features = self.client.get(
+                "/api/features",
+                params={"category": "microwave oven", "model": "h20mobs15"},
+            )
+
+        self.assertEqual(200, options.status_code, options.text)
+        self.assertEqual(["Microwave Oven"], options.json()["categories"])
+        self.assertEqual(["H20MOBS15"], options.json()["models_by_category"]["Microwave Oven"])
+        self.assertEqual(200, features.status_code, features.text)
+        self.assertEqual(["20L Capacity", "Defrost Function"], features.json()["features"])
     def test_all_video_tasks_are_locked_to_libtv_happy_horse(self):
         self.assertEqual("libtv_happy_horse_1_1", api_app._video_provider_name())
         self.assertEqual("happy-horse-1.1", api_app._video_model_id())
