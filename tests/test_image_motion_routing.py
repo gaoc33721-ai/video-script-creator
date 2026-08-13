@@ -1,6 +1,7 @@
 import copy
 import io
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -174,6 +175,72 @@ class ImageMotionRoutingTests(unittest.TestCase):
         self.assertIn("execute this creator-directed action exactly", submitted["prompt"])
         self.assertIn("Pull the left drawer outward along its rails by 20% and hold it open", submitted["prompt"])
 
+    def test_libtv_connect_timeout_automatically_switches_to_ray2(self):
+        storage = MemoryStorage()
+        asset = natural_asset("flow")
+        source_job = natural_job(preset="flow")
+        storage.json[CREATIVE_ASSETS_KEY] = [asset]
+        storage.json[IMAGE_MOTION_JOBS_KEY] = [source_job]
+        storage.files[asset["original_key"]] = png_bytes((690, 388))
+        ray2_submissions = []
+
+        def libtv_submit(**kwargs):
+            raise RuntimeError("UND_ERR_CONNECT_TIMEOUT: ConnectTimeoutError: Connect Timeout Error")
+
+        def ray2_submit(**kwargs):
+            ray2_submissions.append(kwargs)
+            return {"task_id": "ray2-timeout-fallback", "provider": "luma_ray2"}
+
+        workflow = ImageMotionWorkflow(
+            storage,
+            lambda: [],
+            provider_submit=libtv_submit,
+            provider_poll=lambda task_id: {"status": "processing"},
+            component_provider_submit=ray2_submit,
+            component_provider_poll=lambda task_id: {"status": "processing"},
+            exclusive_provider_name="libtv_happy_horse_1_1",
+        )
+        with patch("image_motion_routes.threading.Thread") as thread:
+            workflow.run_job(source_job["id"])
+
+        jobs = storage.json[IMAGE_MOTION_JOBS_KEY]
+        failed_parent = next(item for item in jobs if item["id"] == source_job["id"])
+        fallback = next(item for item in jobs if item.get("parent_job_id") == source_job["id"])
+        self.assertEqual("failed", failed_parent["status"])
+        self.assertEqual(fallback["id"], failed_parent["automatic_fallback_job_id"])
+        self.assertTrue(fallback["motion_plan"]["automatic_libtv_timeout_fallback"])
+        self.assertEqual("luma_ray2", fallback["motion_plan"]["provider_preference"])
+        thread.assert_called_once()
+
+        workflow.run_job(fallback["id"])
+
+        ray2_job = next(item for item in storage.json[IMAGE_MOTION_JOBS_KEY] if item["id"] == fallback["id"])
+        self.assertEqual("processing", ray2_job["status"])
+        self.assertEqual("luma_ray2", ray2_job["provider_name"])
+        self.assertEqual("luma_ray2_flow", ray2_job["generation_mode"])
+        self.assertEqual(1, len(ray2_submissions))
+
+    def test_libtv_non_timeout_failure_does_not_switch_models(self):
+        storage = MemoryStorage()
+        asset = natural_asset("flow")
+        source_job = natural_job(preset="flow")
+        storage.json[CREATIVE_ASSETS_KEY] = [asset]
+        storage.json[IMAGE_MOTION_JOBS_KEY] = [source_job]
+        storage.files[asset["original_key"]] = png_bytes((690, 388))
+        workflow = ImageMotionWorkflow(
+            storage,
+            lambda: [],
+            provider_submit=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("LibTV authentication failed")),
+            provider_poll=lambda task_id: {"status": "processing"},
+            component_provider_submit=lambda **kwargs: self.fail("Ray2 must not be used"),
+            component_provider_poll=lambda task_id: {"status": "processing"},
+            exclusive_provider_name="libtv_happy_horse_1_1",
+        )
+
+        workflow.run_job(source_job["id"])
+
+        self.assertEqual(1, len(storage.json[IMAGE_MOTION_JOBS_KEY]))
+        self.assertEqual("failed", storage.json[IMAGE_MOTION_JOBS_KEY][0]["status"])
     def test_recoverable_libtv_jobs_are_polled_without_resubmission(self):
         for failure_message in (
             "LibTV CLI download returned invalid JSON",

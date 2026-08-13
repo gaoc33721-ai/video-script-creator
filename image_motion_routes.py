@@ -342,6 +342,38 @@ class ImageMotionWorkflow:
             return found
 
 
+    @staticmethod
+    def _is_libtv_connection_timeout(error: Exception | str) -> bool:
+        message = str(error or "").lower()
+        return "und_err_connect_timeout" in message or "connecttimeouterror" in message or "connect timeout" in message
+
+    def _fallback_to_ray2_after_libtv_timeout(self, job_id: str, error: Exception) -> None:
+        job = next((item for item in self.jobs() if item.get("id") == job_id), None)
+        asset = self.asset(str((job or {}).get("creative_asset_id") or ""))
+        if not job or not asset or not self.component_provider_submit or not self.component_provider_poll:
+            self.fail_job(job_id, str(error))
+            return
+        message = f"LibTV upstream connection timed out; Ray2 fallback was submitted automatically: {error}"
+        self.fail_job(job_id, message)
+        fallback_plan = dict(job.get("motion_plan") or {})
+        fallback_plan.update(
+            {
+                "generation_strategy": "generative",
+                "provider_preference": "luma_ray2",
+                "automatic_libtv_timeout_fallback": True,
+            }
+        )
+        fallback_job, _ = self.create_job(
+            asset,
+            fallback_plan,
+            f"libtv-timeout:{job_id}",
+            parent_job_id=job_id,
+        )
+        self.update_job(
+            job_id,
+            current_step="LibTV connection timed out; Ray2 fallback submitted automatically",
+            automatic_fallback_job_id=fallback_job["id"],
+        )
     def fail_job(self, job_id: str, message: str, qa_result: dict[str, Any] | None = None) -> None:
         self.update_job(
             job_id,
@@ -453,7 +485,11 @@ class ImageMotionWorkflow:
                 raise RuntimeError("生成式目标动效暂不支持“保留标题与Logo”；请使用纯画面动效或局部保真合成。")
 
             requested_provider = str(plan.get("provider_preference") or "luma_ray2")
-            if self.exclusive_provider_name:
+            if plan.get("automatic_libtv_timeout_fallback"):
+                provider_submit = self.component_provider_submit
+                provider_poll = self.component_provider_poll
+                provider_name = "luma_ray2"
+            elif self.exclusive_provider_name:
                 provider_submit = self.provider_submit
                 provider_poll = self.provider_poll
                 provider_name = self.exclusive_provider_name
@@ -488,7 +524,7 @@ class ImageMotionWorkflow:
             self.storage.write_file_bytes(prepared_key, prepared, content_type="image/png")
             prompt = build_motion_prompt(asset, {**plan, "preset": preset})
             client_business_id = f"image_motion_{job_id}"
-            if self.exclusive_provider_name:
+            if self.exclusive_provider_name and not plan.get("automatic_libtv_timeout_fallback"):
                 self.update_job(
                     job_id,
                     status="processing",
@@ -520,6 +556,9 @@ class ImageMotionWorkflow:
                 provider_metadata=provider_result.get("metadata") or {},
             )
         except Exception as exc:
+            if self.exclusive_provider_name and self._is_libtv_connection_timeout(exc):
+                self._fallback_to_ray2_after_libtv_timeout(job_id, exc)
+                return
             if self.exclusive_provider_name or preset in RAY2_PRESETS:
                 self.fail_job(job_id, str(exc))
                 return
