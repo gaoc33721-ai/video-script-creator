@@ -9,6 +9,7 @@ const state = {
   options: { categories: [], models_by_category: {} },
   features: [],
   featuresRequestId: 0,
+  featureSelectionKey: '',
   selectedFeatures: [],
   videoTypes: ["问题解决/痛点挖掘型", "产品展示/功能介绍型", "开箱体验型", "场景化/生活方式型", "测评/对比型"],
   selectedVideoTypes: ["问题解决/痛点挖掘型"],
@@ -322,6 +323,7 @@ async function loadFeatures(preferredFeatures = []) {
   const requestId = ++state.featuresRequestId;
   const category = $("categorySelect").value;
   const model = $("modelSelect").value;
+  state.featureSelectionKey = category && model ? `${category}\u0000${model}` : "";
   state.features = [];
   state.selectedFeatures = [];
   if (!category || !model) {
@@ -342,6 +344,7 @@ async function loadFeatures(preferredFeatures = []) {
     updateSelectionSummary();
   } catch (error) {
     if (requestId !== state.featuresRequestId) return;
+    state.featureSelectionKey = "";
     renderFeaturePicker("卖点加载失败，请重试或检查卖点库。");
     updateSelectionSummary();
     setMessage("formMessage", `卖点加载失败：${error.message}`, "error");
@@ -2324,7 +2327,18 @@ async function startApp() {
 $("authForm").addEventListener("submit", submitAuth);
 $("categorySelect").addEventListener("change", updateModels);
 $("modelSearch").addEventListener("input", filterModels);
-$("modelSelect").addEventListener("change", loadFeatures);
+function refreshFeaturesAfterModelSelection() {
+  window.setTimeout(() => {
+    const category = $("categorySelect").value;
+    const model = $("modelSelect").value;
+    const selectionKey = category && model ? `${category}\u0000${model}` : "";
+    if (selectionKey && selectionKey !== state.featureSelectionKey) loadFeatures();
+  }, 0);
+}
+
+$("modelSelect").addEventListener("input", refreshFeaturesAfterModelSelection);
+$("modelSelect").addEventListener("change", refreshFeaturesAfterModelSelection);
+$("modelSelect").addEventListener("click", refreshFeaturesAfterModelSelection);
 $("featurePicker").addEventListener("click", (event) => {
   const item = event.target.closest(".check-item");
   if (!item) return;
