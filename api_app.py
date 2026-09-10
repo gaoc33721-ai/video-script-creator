@@ -282,7 +282,12 @@ def _bedrock_max_tokens_for_model(model_id: str, requested: int) -> int:
         return requested
     return min(requested, BEDROCK_FALLBACK_MAX_TOKENS)
 
-app = FastAPI(title="海外爆款内容引擎 API")
+app = FastAPI(
+    title="海外爆款内容引擎 API",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 @app.middleware("http")
